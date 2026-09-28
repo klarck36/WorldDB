@@ -1,11 +1,14 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** PLANNED – noch keine Implementierung nach diesem Plan  
-**Nächste Task:** `M0-01`  
+**Gesamtstatus:** IN PROGRESS – Quelleninventar M0-01 abgeschlossen; Software-Implementierung hat noch nicht begonnen  
+
+**Nächste Task:** `M0-02`  
+
 **Letzter abgeschlossener Milestone:** keiner  
-**Offene Blocker:** keine für `M0-01`  
-**Letzter nachgewiesener Commit:** keiner; das Repository hat derzeit noch keinen Commit.
+**Offene Blocker:** keine im Arbeitsplan; GitHub-Zusatzauftrag wartet auf Browser-Anmeldung  
+
+**M0-01 Baseline-Commit:** `0bb3c85` (`chore: establish WorldDB source baseline`).
 
 Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausführbar ist die erste `READY`-Task des aktuellen Milestones im Taskregister. Nur nach belegter Abnahme darf die entsprechende Checkbox auf `[x]` wechseln. Jede `HARD`-Invariante braucht bis M10 mindestens einen wirksamen Negativnachweis in `WorldDB_1.0_Invariantenabdeckung.tsv`; spätere paarbezogene Nachweise stehen in `WorldDB_1.0_Folgebelege.tsv`.
 
@@ -15,7 +18,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 
 | Task | Status | Commit/Artefakt | Positiver Nachweis | Negativer/Fault-/Security-Nachweis | `cargo xtask verify` | Externer Lauf/letzte Prüfung/nächster Prüftermin | Nächster Schritt |
 |---|---|---|---|---|---|---|---|
-| M0-01 | RUNNING | – | – | – | Noch nicht eingerichtet | – | ZIP prüfen, Quellen spiegeln und Baseline vorbereiten |
+| M0-01 | DONE | `0bb3c85`; `docs/M0-01-verification.md` | ZIP-Test, 6 Bytevergleiche und Plancheck bestanden | Temporär veränderte Spiegeldatei mit Exitcode 1 abgewiesen | Nicht fällig (M0-01) | – | M0-02 READY |
 
 ## Entscheidungs- und Release-Gates
 
@@ -32,4 +35,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 
 ## Blocker
 
-Keine. Neue Blocker nur mit Task-ID, exaktem fehlendem Nachweis, bereits erledigter unabhängiger Arbeit und nächster erforderlicher Aktion eintragen. `BLOCKED` ist niemals `DONE`.
+Keine Plan-Task blockiert. Neue Plan-Blocker nur mit Task-ID, exaktem fehlendem Nachweis, bereits erledigter unabhängiger Arbeit und nächster erforderlicher Aktion eintragen. `BLOCKED` ist niemals `DONE`.
+
+## Zusatzauftrag GitHub
+
+Noch nicht verknüpft: der Codex-Browser zeigt die GitHub-Anmeldeseite. Nach manueller Anmeldung kann das private Remote `klarck36/WorldDB-1.0` angelegt und der Baseline-Commit veröffentlicht werden.

@@ -1,6 +1,6 @@
 task_id	milestone	title	depends_on	status	owner	external_run	last_check	next_check	evidence
-M0-01	M0	Quellen inventarisieren		RUNNING	Luna				
-M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	PLANNED	Luna				
+M0-01	M0	Quellen inventarisieren		DONE	Luna				artifact:docs/M0-01-verification.md;artifact:docs/source/source_manifest.json;artifact:WorldDB_1.0_Sourcecheck.py
+M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	READY	Luna				
 M0-02a	M0	Normative Quellenlücken entscheiden	M0-02	PLANNED	Produktverantwortung + Luna				
 M0-03	M0	First-Class-Register maschinenlesbar machen	M0-02	PLANNED	Luna				
 M0-04	M0	Entity-/Perspective-Vertrag schließen	M0-03	PLANNED	Luna				
@@ -10,7 +10,7 @@ M0-04c	M0	Security-Policy-Vertrag präzisieren	M0-04b	PLANNED	Luna
 M0-04d	M0	Query-/Transportvertrag präzisieren	M0-04c	PLANNED	Luna				
 M0-04e	M0	Assertion-Correct-Vertrag präzisieren	M0-04d	PLANNED	Luna				
 M0-05	M0	Produktabläufe festlegen	M0-04e	PLANNED	Luna				
-M0-06	M0	Git-/Lizenz-/Toolchain-Iststand erfassen	M0-01	PLANNED	Luna				
+M0-06	M0	Git-/Lizenz-/Toolchain-Iststand erfassen	M0-01	READY	Luna				
 M0-07	M0	ODE-001 Rust-MSRV entscheiden	M0-06	PLANNED	Luna				
 M0-08	M0	ODE-005 UUIDv7 entscheiden	M0-07	PLANNED	Luna				
 M0-09	M0	Minimalen Rust-Workspace aufbauen	M0-08	PLANNED	Luna				
