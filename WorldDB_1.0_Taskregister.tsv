@@ -1,0 +1,237 @@
+task_id	milestone	title	depends_on	status	owner	external_run	last_check	next_check	evidence
+M0-01	M0	Quellen inventarisieren		RUNNING	Luna				
+M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	PLANNED	Luna				
+M0-02a	M0	Normative Quellenlücken entscheiden	M0-02	PLANNED	Produktverantwortung + Luna				
+M0-03	M0	First-Class-Register maschinenlesbar machen	M0-02	PLANNED	Luna				
+M0-04	M0	Entity-/Perspective-Vertrag schließen	M0-03	PLANNED	Luna				
+M0-04a	M0	Archive und expliziten HistorySpace-Transfer spezifizieren	M0-04	PLANNED	Luna				
+M0-04b	M0	Constraints und Zeitrepräsentation präzisieren	M0-04a	PLANNED	Luna				
+M0-04c	M0	Security-Policy-Vertrag präzisieren	M0-04b	PLANNED	Luna				
+M0-04d	M0	Query-/Transportvertrag präzisieren	M0-04c	PLANNED	Luna				
+M0-04e	M0	Assertion-Correct-Vertrag präzisieren	M0-04d	PLANNED	Luna				
+M0-05	M0	Produktabläufe festlegen	M0-04e	PLANNED	Luna				
+M0-06	M0	Git-/Lizenz-/Toolchain-Iststand erfassen	M0-01	PLANNED	Luna				
+M0-07	M0	ODE-001 Rust-MSRV entscheiden	M0-06	PLANNED	Luna				
+M0-08	M0	ODE-005 UUIDv7 entscheiden	M0-07	PLANNED	Luna				
+M0-09	M0	Minimalen Rust-Workspace aufbauen	M0-08	PLANNED	Luna				
+M0-10	M0	Kanonischen Verify-Pfad bauen	M0-09	PLANNED	Luna				
+M0-11	M0	Format-, Lint-, Unsafe- und Ausnahme-Policy aktivieren	M0-10	PLANNED	Luna				
+M0-12	M0	Dependency- und Feature-Policy aktivieren	M0-11	PLANNED	Luna				
+M0-13	M0	Testkit-Grundlage bauen	M0-12	PLANNED	Luna				
+M0-14	M0	CI-Grundmatrix einrichten	M0-13	PLANNED	Luna				
+M0-15	M0	M0-Gate	M0-01,M0-02,M0-02a,M0-03,M0-04,M0-04a,M0-04b,M0-04c,M0-04d,M0-04e,M0-05,M0-06,M0-07,M0-08,M0-09,M0-10,M0-11,M0-12,M0-13,M0-14	PLANNED	Luna				
+M1-01	M1	Getypte IDs und Revisionen	M0-15	PLANNED	Luna				
+M1-02	M1	Zeittypen und Intervalle	M1-01	PLANNED	Luna				
+M1-03	M1	Integer/Decimal-Kanonik	M1-02	PLANNED	Luna				
+M1-04	M1	Geschlossenen Value-Katalog bauen	M1-03	PLANNED	Luna				
+M1-05	M1	Schema-Definitionstypen	M1-04	PLANNED	Luna				
+M1-06	M1	LayerDefinition und Auswahl	M1-05	PLANNED	Luna				
+M1-07	M1	HistorySpace, Entity und Perspective	M1-06	PLANNED	Luna				
+M1-08	M1	ContextKey und epistemische Partitionen	M1-07	PLANNED	Luna				
+M1-09	M1	Assertion und Lifecycle-Records	M1-08	PLANNED	Luna				
+M1-09a	M1	Archive-Typen	M1-09	PLANNED	Luna				
+M1-10	M1	Mask und ReplacementBoundary	M1-09a	PLANNED	Luna				
+M1-11	M1	Events und EventMask	M1-10	PLANNED	Luna				
+M1-12	M1	EventRelation-Kanonik	M1-11	PLANNED	Luna				
+M1-13	M1	Source, Evidence und Provenance	M1-12	PLANNED	Luna				
+M1-14	M1	Geschlossenen RecordRef vervollständigen	M1-13	PLANNED	Luna				
+M1-15	M1	Transaktions-, Migrations-, Job- und Audit-Datentypen	M1-14	PLANNED	Luna				
+M1-16	M1	TLV-Frame und Skalarkodierung	M1-15	PLANNED	Luna				
+M1-17a	M1	Schema-/Projektcodecs	M1-16	PLANNED	Luna				
+M1-17b	M1	Assertion-/Lifecycle-Codecs	M1-17a	PLANNED	Luna				
+M1-17c	M1	Eventcodecs	M1-17b	PLANNED	Luna				
+M1-17d	M1	Meta-/Auditcodecs	M1-17c	PLANNED	Luna				
+M1-18	M1	Decoderbudgets und Fuzzing	M1-17d	PLANNED	Luna				
+M1-19	M1	TypeScript-Transportpräzision	M1-17d	PLANNED	Luna				
+M1-20	M1	M1-Gate	M1-01,M1-02,M1-03,M1-04,M1-05,M1-06,M1-07,M1-08,M1-09,M1-09a,M1-10,M1-11,M1-12,M1-13,M1-14,M1-15,M1-16,M1-17a,M1-17b,M1-17c,M1-17d,M1-18,M1-19	PLANNED	Luna				
+M2-01	M2	In-Memory-Revisionen	M1-20	PLANNED	Luna				
+M2-02	M2	HistorySpace-Vererbung	M2-01	PLANNED	Luna				
+M2-02a	M2	Expliziten Inhaltstransfer/Merge modellieren	M2-02	PLANNED	Luna				
+M2-03	M2	SchemaAt und Schema-Snapshot	M2-02a	PLANNED	Luna				
+M2-04	M2	Layer-Overlay/Precedence	M2-03	PLANNED	Luna				
+M2-05	M2	Assertion-Validity/Lifecycle-Projektion	M2-04	PLANNED	Luna				
+M2-05a	M2	Archive-Projektion	M2-05	PLANNED	Luna				
+M2-06	M2	Candidate Full Scan	M2-05a	PLANNED	Luna				
+M2-07	M2	Masking	M2-06	PLANNED	Luna				
+M2-08	M2	SingleValueReplace	M2-07	PLANNED	Luna				
+M2-09	M2	MultiValueOverlay	M2-08	PLANNED	Luna				
+M2-10	M2	MultiValueReplace/Boundary	M2-09	PLANNED	Luna				
+M2-11	M2	Epistemik	M2-10	PLANNED	Luna				
+M2-12a	M2	Eventform und Zeit auswerten	M2-11	PLANNED	Luna				
+M2-12b	M2	EventMask/Retraction auswerten	M2-12a	PLANNED	Luna				
+M2-13a	M2	Eventrelationen kanonisieren	M2-12b	PLANNED	Luna				
+M2-13b	M2	Eventgraphen prüfen	M2-13a	PLANNED	Luna				
+M2-14	M2	Source/Evidence-Metahistorie	M2-13b	PLANNED	Luna				
+M2-15a	M2	Provenance-Endpunkte und Bedeutung	M2-14	PLANNED	Luna				
+M2-15b	M2	Gemeinsamen Provenance-Graphen prüfen	M2-15a	PLANNED	Luna				
+M2-15c	M2	Assertion-Correct-Aktion modellieren	M2-15b	PLANNED	Luna				
+M2-16	M2	Referenz-Query/Explain	M2-15c	PLANNED	Luna				
+M2-17	M2	Semantik-Orakel ausreizen	M2-16	PLANNED	Luna				
+M2-18	M2	M2-Gate	M2-01,M2-02,M2-02a,M2-03,M2-04,M2-05,M2-05a,M2-06,M2-07,M2-08,M2-09,M2-10,M2-11,M2-12a,M2-12b,M2-13a,M2-13b,M2-14,M2-15a,M2-15b,M2-15c,M2-16,M2-17	PLANNED	Luna				
+M3-01	M3	Konkrete Error-Domänen	M2-18	PLANNED	Luna				
+M3-02	M3	Leak-sicheres Error-Mapping	M3-01	PLANNED	Luna				
+M3-03	M3	Principal/Role/Capability-Modell	M3-02	PLANNED	Luna				
+M3-07	M3	QueryContext	M3-03	PLANNED	Luna				
+M3-04	M3	Authorisierung vor Candidate-Erzeugung	M3-07	PLANNED	Luna				
+M3-05	M3	Historische Security	M3-04	PLANNED	Luna				
+M3-08	M3	Streamvertrag	M3-05	PLANNED	Luna				
+M3-09	M3	Öffentliche Raw/Resolved/Explain-Ports	M3-08	PLANNED	Luna				
+M3-10a	M3	Cursorhandle und State-Store	M3-09	PLANNED	Luna				
+M3-10b	M3	Cursorbindung und Re-Autorisierung	M3-10a	PLANNED	Luna				
+M3-11	M3	Search/Graph/Aggregation-Ports	M3-10b	PLANNED	Luna				
+M3-06	M3	Non-Interference-Testkit	M3-11	PLANNED	Luna				
+M3-12	M3	Diagnostik-Port	M3-06	PLANNED	Luna				
+M3-13	M3	Audit-Port und Policy	M3-12	PLANNED	Luna				
+M3-13a	M3	Getrennten Admin-Raw-Port definieren	M3-13	PLANNED	Luna				
+M3-14	M3	Panic-/FFI-/IPC-Grenzen	M3-13a	PLANNED	Luna				
+M3-15	M3	API-/Security-Vertragstests	M3-14	PLANNED	Luna				
+M3-16	M3	M3-Gate	M3-01,M3-02,M3-03,M3-07,M3-04,M3-05,M3-08,M3-09,M3-10a,M3-10b,M3-11,M3-06,M3-12,M3-13,M3-13a,M3-14,M3-15	PLANNED	Luna				
+M4-01	M4	In-Memory-Backendvertrag	M3-16	PLANNED	Luna				
+M4-02	M4	Single-Writer-Koordinator	M4-01	PLANNED	Luna				
+M4-03	M4	Transaction-Typestate	M4-02	PLANNED	Luna				
+M4-04a	M4	Shape-/Schema-Validierung	M4-03	PLANNED	Luna				
+M4-04b	M4	Referenz-/Zeit-/Context-Validierung	M4-04a	PLANNED	Luna				
+M4-04c	M4	Security-/Cross-Record-Validierung	M4-04b	PLANNED	Luna				
+M4-05	M4	Atomare Mischtransaktionen	M4-04c	PLANNED	Luna				
+M4-05a	M4	Projektmetadaten schreiben	M4-05	PLANNED	Luna				
+M4-05b	M4	Archive und Inhaltstransfer committen	M4-05a	PLANNED	Luna				
+M4-05c	M4	Security-Policyänderungen committen	M4-05b	PLANNED	Luna				
+M4-05d	M4	Vollständige Domain-/Lifecycle-Schreibmatrix	M4-05c	PLANNED	Luna				
+M4-06	M4	OCC-Point-/Write-Dependencies	M4-05d	PLANNED	Luna				
+M4-07	M4	Range-/Predicate-/Schema-/Head-Dependencies	M4-06	PLANNED	Luna				
+M4-08	M4	Conflict/ReplaySafe-Retry	M4-07	PLANNED	Luna				
+M4-09	M4	OperationId-Dedup und Status	M4-08	PLANNED	Luna				
+M4-10	M4	SnapshotLease/Pinning	M4-09	PLANNED	Luna				
+M4-11	M4	JobSupervisor	M4-10	PLANNED	Luna				
+M4-12	M4	Cancellation/Commitpoint-Grenze	M4-11	PLANNED	Luna				
+M4-13	M4	Shutdown und Ownership	M4-12	PLANNED	Luna				
+M4-14	M4	Concurrency-Modelltests	M4-13	PLANNED	Luna				
+M4-15	M4	ODE-006 macOS-Durability-Spike	M4-14	PLANNED	Luna				
+M4-16	M4	M4-Gate	M4-01,M4-02,M4-03,M4-04a,M4-04b,M4-04c,M4-05,M4-05a,M4-05b,M4-05c,M4-05d,M4-06,M4-07,M4-08,M4-09,M4-10,M4-11,M4-12,M4-13,M4-14,M4-15	PLANNED	Luna				
+M5-01	M5	StorageBackend-Contract-Suite	M4-16	PLANNED	Luna				
+M5-02	M5	Dateilayout, Formatprobe und Writerlock	M5-01	PLANNED	Luna				
+M5-03	M5	WAL-Prepare	M5-02	PLANNED	Luna				
+M5-04	M5	Commitmarker/Commitpoint	M5-03	PLANNED	Luna				
+M5-05	M5	Persistente Idempotenz	M5-04	PLANNED	Luna				
+M5-06	M5	Immutable Historysegmente	M5-05	PLANNED	Luna				
+M5-06a	M5	Security-/Audit-Policyhistorie persistieren	M5-06	PLANNED	Luna				
+M5-07	M5	Manifestgenerationen und CURRENT	M5-06a	PLANNED	Luna				
+M5-08	M5	Linux/ext4-Adapter	M5-07	PLANNED	Luna				
+M5-09	M5	Windows/NTFS-Adapter	M5-08	PLANNED	Luna				
+M5-10	M5	macOS/APFS-Adapter	M5-09	PLANNED	Luna				
+M5-11	M5	Recovery-Scanner	M5-10	PLANNED	Luna				
+M5-12	M5	Idempotentes Replay und Journal	M5-11	PLANNED	Luna				
+M5-13	M5	Korruptionsmodus/read-only	M5-12	PLANNED	Luna				
+M5-14	M5	Salvage	M5-13	PLANNED	Luna				
+M5-15	M5	Compaction und Reclamation	M5-14	PLANNED	Luna				
+M5-16	M5	Storage Verify	M5-15	PLANNED	Luna				
+M5-17	M5	Atomisches Audit für Mutationen	M5-16	PLANNED	Luna				
+M5-18	M5	Separates Raw-Read-Audit-WAL	M5-17	PLANNED	Luna				
+M5-19	M5	Audit-Recovery und Retention	M5-18	PLANNED	Luna				
+M5-20	M5	SQLite-Referenzbackend	M5-19	PLANNED	Luna				
+M5-21	M5	ODE-004 Schreib-Supportbasis festlegen	M5-20	PLANNED	Luna				
+M5-22	M5	Fault-/Crashmatrix	M5-21	PLANNED	Luna				
+M5-23	M5	M5-Gate	M5-01,M5-02,M5-03,M5-04,M5-05,M5-06,M5-06a,M5-07,M5-08,M5-09,M5-10,M5-11,M5-12,M5-13,M5-14,M5-15,M5-16,M5-17,M5-18,M5-19,M5-20,M5-21,M5-22	PLANNED	Luna				
+M6-01	M6	Indexformat und Fallback	M5-23	PLANNED	Luna				
+M6-02	M6	Record-/Operation-/Schema-Indizes	M6-01	PLANNED	Luna				
+M6-03	M6	Assertion-Point-/History-Index	M6-02	PLANNED	Luna				
+M6-04	M6	Zeit-/Mask-/Boundary-Indizes	M6-03	PLANNED	Luna				
+M6-05	M6	Eventindizes	M6-04	PLANNED	Luna				
+M6-06	M6	Evidence-/Provenance-Nachbarschaft	M6-05	PLANNED	Luna				
+M6-07	M6	Atomarer Index-Rebuild	M6-06	PLANNED	Luna				
+M6-08	M6	Produktive Raw/Resolved/Explain-Engine	M6-07	PLANNED	Luna				
+M6-09	M6	Suche/Fulltext	M6-08	PLANNED	Luna				
+M6-10	M6	Graph Traversal	M6-09	PLANNED	Luna				
+M6-11	M6	COUNT/EXISTS/Gruppierung	M6-10	PLANNED	Luna				
+M6-12	M6	Pagination/Streaming	M6-11	PLANNED	Luna				
+M6-13	M6	Differential-Querysuite	M6-12	PLANNED	Luna				
+M6-14a	M6	Versionierten Messkorpus bauen	M6-13	PLANNED	Luna				
+M6-14b	M6	Plattformmessungen ausführen	M6-14a	PLANNED	Luna				
+M6-14c	M6	ODE-003 entscheiden	M6-14b	PLANNED	Luna				
+M6-15	M6	M6-Gate	M6-01,M6-02,M6-03,M6-04,M6-05,M6-06,M6-07,M6-08,M6-09,M6-10,M6-11,M6-12,M6-13,M6-14a,M6-14b,M6-14c	PLANNED	Luna				
+M7-01	M7	Migrationskategorien und Plan	M6-15	PLANNED	Luna				
+M7-02	M7	Deterministischen Transformer	M7-01	PLANNED	Luna				
+M7-03	M7	Dry Run	M7-02	PLANNED	Luna				
+M7-04	M7	Unresolved-/Adminentscheidungen	M7-03	PLANNED	Luna				
+M7-05	M7	Nichtbrechende Migration ausführen	M7-04	PLANNED	Luna				
+M7-06	M7	Crash-Resume und Compensating Migration	M7-05	PLANNED	Luna				
+M7-07	M7	Storageformat-Migration vorbereiten	M7-06	PLANNED	Luna				
+M7-08	M7	Exact/Hot Backup	M7-07	PLANNED	Luna				
+M7-09	M7	AuditCompleteBackup	M7-08	PLANNED	Luna				
+M7-10	M7	Restore	M7-09	PLANNED	Luna				
+M7-10a	M7	Restrictive und Breaking Migration ausführen	M7-10	PLANNED	Luna				
+M7-10b	M7	Storageformat-Upgrade ausführen	M7-10a	PLANNED	Luna				
+M7-11	M7	Logical Export	M7-10b	PLANNED	Luna				
+M7-12	M7	Teilen-Export	M7-11	PLANNED	Luna				
+M7-13	M7	Import/ID-Remap	M7-12	PLANNED	Luna				
+M7-13a	M7	Isolierten Adaptervertrag	M7-13	PLANNED	Luna				
+M7-14	M7	Purge-Plan	M7-13a	PLANNED	Luna				
+M7-15	M7	Offline-Purge-Rewrite	M7-14	PLANNED	Luna				
+M7-16	M7	Fault-/Compatibility-Runden	M7-15	PLANNED	Luna				
+M7-17	M7	M7-Gate	M7-01,M7-02,M7-03,M7-04,M7-05,M7-06,M7-07,M7-08,M7-09,M7-10,M7-10a,M7-10b,M7-11,M7-12,M7-13,M7-13a,M7-14,M7-15,M7-16	PLANNED	Luna				
+M8-01	M8	Öffentliche Rust-Facade stabilisieren	M7-17	PLANNED	Luna				
+M8-02	M8	CLI-Grundgerüst	M8-01	PLANNED	Luna				
+M8-03	M8	CLI Verify/Recovery/Salvage	M8-02	PLANNED	Luna				
+M8-04	M8	CLI Backup/Restore	M8-03	PLANNED	Luna				
+M8-05	M8	CLI Migration	M8-04	PLANNED	Luna				
+M8-06	M8	CLI Export/Import	M8-05	PLANNED	Luna				
+M8-07	M8	CLI Purge	M8-06	PLANNED	Luna				
+M8-08	M8	ODE-002 Desktop-Prozessspike	M8-07	PLANNED	Luna				
+M8-09	M8	Desktop-Shell und sichere IPC	M8-08	PLANNED	Luna				
+M8-10	M8	Projekt anlegen/öffnen und Multiwindow	M8-09	PLANNED	Luna				
+M8-11a	M8	Schema-Verwaltung	M8-10	PLANNED	Luna				
+M8-11b	M8	Entity-Verwaltung	M8-11a	PLANNED	Luna				
+M8-12	M8	Branch-/Layer-Verwaltung	M8-11b	PLANNED	Luna				
+M8-13	M8	Perspektivenansicht	M8-12	PLANNED	Luna				
+M8-13a	M8	Rechteverwaltung	M8-13	PLANNED	Luna				
+M8-14	M8	Assertions/Masken/Boundaries erfassen	M8-13a	PLANNED	Luna				
+M8-14a	M8	Korrektur, Archive und Retraction bedienen	M8-14	PLANNED	Luna				
+M8-15	M8	Events und Eventrelationen erfassen	M8-14a	PLANNED	Luna				
+M8-16	M8	Quellen/Belege/Provenienz erfassen	M8-15	PLANNED	Luna				
+M8-17	M8	Historie/Resolved/Explain anzeigen	M8-16	PLANNED	Luna				
+M8-18	M8	Suche, Graph und Aggregation anzeigen	M8-17	PLANNED	Luna				
+M8-19	M8	Commitkonflikte und unklare Ausgänge	M8-18	PLANNED	Luna				
+M8-20	M8	Job-/Cancel-/Shutdown-Ansicht	M8-19	PLANNED	Luna				
+M8-21	M8	Recovery-Oberfläche	M8-20	PLANNED	Luna				
+M8-22	M8	Migrationsoberfläche	M8-21	PLANNED	Luna				
+M8-23a	M8	Backup-/Restore-Oberfläche	M8-22	PLANNED	Luna				
+M8-23b	M8	Export-/Import-Oberfläche	M8-23a	PLANNED	Luna				
+M8-23c	M8	Purge-Oberfläche	M8-23b	PLANNED	Luna				
+M8-24	M8	Fehler-/Diagnoseoberfläche	M8-23c	PLANNED	Luna				
+M8-25	M8	Update-/Formatkompatibilität	M8-24	PLANNED	Luna				
+M8-26	M8	Native E2E-Prüfsuite vorbereiten	M8-25	PLANNED	Luna				
+M8-26a	M8	Native Windows-E2E ausführen	M8-26	PLANNED	Luna				
+M8-26b	M8	Native macOS-E2E ausführen	M8-26	PLANNED	Luna				
+M8-26c	M8	Native Linux-E2E ausführen	M8-26	PLANNED	Luna				
+M8-26d	M8	Native E2E-Ergebnisse abnehmen	M8-26a,M8-26b,M8-26c	PLANNED	Luna				
+M8-27	M8	M8-Gate	M8-01,M8-02,M8-03,M8-04,M8-05,M8-06,M8-07,M8-08,M8-09,M8-10,M8-11a,M8-11b,M8-12,M8-13,M8-13a,M8-14,M8-14a,M8-15,M8-16,M8-17,M8-18,M8-19,M8-20,M8-21,M8-22,M8-23a,M8-23b,M8-23c,M8-24,M8-25,M8-26,M8-26a,M8-26b,M8-26c,M8-26d	PLANNED	Luna				
+M9-01	M9	Öffentliche Verträge einfrieren	M8-27	PLANNED	Luna				
+M9-02	M9	N-1-Kompatibilität	M9-01	PLANNED	Luna				
+M9-03	M9	Upgrade-/Downgrade-Grenzen	M9-02	PLANNED	Luna				
+M9-04	M9	Langzeit-Fuzzziele inventarisieren	M9-03	PLANNED	Luna				
+M9-04a	M9	Wire-/IPC-/übrige Decoder fuzzern	M9-04	PLANNED	Luna				
+M9-04b	M9	Importpfade fuzzern	M9-04	PLANNED	Luna				
+M9-04c	M9	Recovery-Scanner fuzzern	M9-04	PLANNED	Luna				
+M9-04d	M9	Fuzzbefunde schließen	M9-04a,M9-04b,M9-04c	PLANNED	Luna				
+M9-05	M9	Disk-/Prozess-Stresstests	M9-03	PLANNED	Luna				
+M9-06	M9	Security-Härtung	M9-05	PLANNED	Luna				
+M9-07	M9	Performance-/Ressourcenregression	M9-06	PLANNED	Luna				
+M9-08	M9	ODE-004 final schließen	M9-07	PLANNED	Luna				
+M9-09	M9	Dependency-/Supply-Chain-Prüfung	M9-08	PLANNED	Luna				
+M9-10	M9	Plattformpakete bauen	M9-09	PLANNED	Luna				
+M9-11	M9	Handbücher	M9-09	PLANNED	Luna				
+M9-12	M9	RC-Restore-/Recovery-Übung	M9-11	PLANNED	Luna				
+M9-13	M9	Release Candidate veröffentlichbar machen	M9-10,M9-12	PLANNED	Luna				
+M9-13a	M9	Repräsentative Pilotnutzung belegen	M9-13	PLANNED	Pilotverantwortung + Luna				
+M9-13b	M9	Produktweite Unterscheidungen und Architektur prüfen	M9-13	PLANNED	Luna				
+M9-14	M9	RC-Gate	M9-01,M9-02,M9-03,M9-04,M9-04a,M9-04b,M9-04c,M9-04d,M9-05,M9-06,M9-07,M9-08,M9-09,M9-10,M9-11,M9-12,M9-13,M9-13a,M9-13b	PLANNED	Luna				
+M10-01	M10	Vollständige Invariantenabdeckung	M9-14	PLANNED	Luna				
+M10-02	M10	Lossless-Trace neu prüfen	M10-01	PLANNED	Luna				
+M10-03	M10	Unabhängigen Semantik-/Security-Audit durchführen	M10-02	PLANNED	Unabhängige Reviewer				
+M10-04	M10	Unabhängigen Storage-/Recovery-/Plattform-Audit durchführen	M10-02	PLANNED	Unabhängige Reviewer				
+M10-05	M10	Findings schließen	M10-03,M10-04	PLANNED	Luna				
+M10-06	M10	Beide Audits wiederholen	M10-05	PLANNED	Unabhängige Reviewer				
+M10-07	M10	Alle sechs ODEs abschließen	M10-06	PLANNED	Luna				
+M10-08	M10	Finalen realen Restore-Drill ausführen	M10-07	PLANNED	Luna				
+M10-09	M10	1.0-Artefaktbundle freigeben	M10-08	PLANNED	Luna				
+M10-10	M10	WorldDB 1.0 veröffentlichen	M10-09	PLANNED	Produktverantwortung + Luna				

@@ -1,0 +1,45 @@
+{
+  "format_version": 1,
+  "archive": "WorldDB_vNext_Lossless_Consolidation_Audit.zip",
+  "archive_size_bytes": 127472,
+  "archive_sha256": "f53fb969515171030bca3db9b9d4526a9ca51dfa6b68872da8e6e9029af8edbe",
+  "zip_test": "PASS",
+  "files": [
+    {
+      "path": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "size_bytes": 193802,
+      "sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
+      "encoding": "UTF-8"
+    },
+    {
+      "path": "WorldDB_Consolidation_Trace.md",
+      "size_bytes": 34060,
+      "sha256": "9415ed13dc84d1a8ac9cb094228b9d4624ce44dd6af70e55cb0c6b662af9f0ee",
+      "encoding": "UTF-8"
+    },
+    {
+      "path": "WorldDB_Invariantenregister_vNext.md",
+      "size_bytes": 32428,
+      "sha256": "f12110372ccaf928ff6477154fe65285418fbb8d3c163284274dbfd43f20d7ce",
+      "encoding": "UTF-8"
+    },
+    {
+      "path": "WorldDB_ADRs_vNext.md",
+      "size_bytes": 16305,
+      "sha256": "3d37b438b616436d4429283cec3a8d935df84e7df31555d93c29fdcf95171c4f",
+      "encoding": "UTF-8"
+    },
+    {
+      "path": "WorldDB_Offene_Entscheidungen_vNext.md",
+      "size_bytes": 6097,
+      "sha256": "5cde6fd4d3ca6bc93a0d2aa7ea12b27837375f1e8fd2a2a48b47c38ce6c55a2f",
+      "encoding": "UTF-8"
+    },
+    {
+      "path": "invariants_vNext.toml",
+      "size_bytes": 114684,
+      "sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
+      "encoding": "UTF-8"
+    }
+  ]
+}

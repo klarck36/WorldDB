@@ -1,0 +1,2774 @@
+# Generated normative registry for WorldDB vNext.
+schema_version = 1
+master_file = "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md"
+master_sha256 = "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064"
+allowed_evidence_classes = ["UT", "PT", "SM", "DF", "CF", "CT", "FZ", "CR", "CP", "NI", "E2E", "PF", "ST", "DR"]
+
+[[invariant]]
+id = "WDB-PHIL-001"
+class = "HARD"
+statement = "Abstraktionen erhalten jede für Semantik, History, Security, Recovery, Retry, Ownership oder Diagnose relevante Unterscheidung, sofern kein Verlustfreiheitsnachweis vorliegt."
+main_locations = ["Zentraler Architekturgrundsatz", "§30.1", "§30.2", "§31"]
+evidence_classes = ["CT", "FZ", "ST"]
+implementations = ["Architecture lint, negative API tests"]
+
+[[invariant]]
+id = "WDB-HIS-001"
+class = "HARD"
+statement = "Veröffentlichte Revisionen steigen monoton und sind eindeutig."
+main_locations = ["§2.1", "§3.1", "§30.2"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-HIS-002"
+class = "HARD"
+statement = "Revision ist Transaction Time und bestimmt keine fachliche Precedence."
+main_locations = ["§30.2"]
+evidence_classes = ["UT", "DF"]
+implementations = ["UT, DF"]
+
+[[invariant]]
+id = "WDB-HIS-003"
+class = "HARD"
+statement = "Committed History wird nur durch expliziten Offline-Purge physisch entfernt."
+main_locations = ["§30.2"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-HIS-004"
+class = "HARD"
+statement = "Historical Query bindet Daten- und Schema-Snapshot reproduzierbar."
+main_locations = ["§2.1", "§30.2"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, CT"]
+
+[[invariant]]
+id = "WDB-BRA-001"
+class = "HARD"
+statement = "Child sieht Parent höchstens bis `base_revision`."
+main_locations = ["§2.1", "§30.2", "§33"]
+evidence_classes = ["PT", "DF"]
+implementations = ["PT, DF"]
+
+[[invariant]]
+id = "WDB-BRA-002"
+class = "HARD"
+statement = "Spätere Parent-Commits fließen nicht automatisch in Child."
+main_locations = ["§30.2", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-BRA-003"
+class = "HARD"
+statement = "Siblings sind ohne explizite Migration/Merge isoliert."
+main_locations = ["§2.1", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-BRA-004"
+class = "HARD"
+statement = "HistorySpace-Operationen ändern keine Schemaidentitäten."
+main_locations = ["§2.1", "§33"]
+evidence_classes = ["UT", "CT"]
+implementations = ["UT, CT"]
+
+[[invariant]]
+id = "WDB-BRA-005"
+class = "HARD"
+statement = "HistorySpace ist der einzige Branch-Domain-Typ; `BranchId` existiert nicht."
+main_locations = ["§33"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, API snapshot"]
+
+[[invariant]]
+id = "WDB-LAY-001"
+class = "HARD"
+statement = "Jeder layerfähige Record trägt genau eine LayerId; Layer ist orthogonal zu HistorySpace, Perspective und Security."
+main_locations = ["§33"]
+evidence_classes = ["CT", "ST"]
+implementations = ["Schema/API tests"]
+
+[[invariant]]
+id = "WDB-LAY-002"
+class = "HARD"
+statement = "ContextPrecedence ordnet HistorySpace-Spezifität vor LayerRank; Perspective/EpistemicMode sind keine Ränge."
+main_locations = ["§2.3.1", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-LAY-003"
+class = "HARD"
+statement = "Masking überschreitet weder Perspective- noch EpistemicMode-Partitionen."
+main_locations = ["§33"]
+evidence_classes = ["UT", "NI"]
+implementations = ["Truth table, NI"]
+
+[[invariant]]
+id = "WDB-LAY-004"
+class = "HARD"
+statement = "Layerrechte verändern keine fachliche Precedence."
+main_locations = ["§33"]
+evidence_classes = ["DF", "NI"]
+implementations = ["NI, DF"]
+
+[[invariant]]
+id = "WDB-LAY-005"
+class = "HARD"
+statement = "Jeder wirksame historische Schemastand bezeichnet genau einen aktiven Base-Layer."
+main_locations = ["§2.1.2", "§33"]
+evidence_classes = ["CT"]
+implementations = ["Schema validation, migration golden"]
+
+[[invariant]]
+id = "WDB-LAY-006"
+class = "HARD"
+statement = "LayerDefinition folgt `Active → Deprecated → Retired`; Retirement verhindert neue Records, erhält aber Definition und historische Records."
+main_locations = ["§33"]
+evidence_classes = ["SM", "DF", "CT"]
+implementations = ["SM, DF, migration golden"]
+
+[[invariant]]
+id = "WDB-LAY-007"
+class = "HARD"
+statement = "`base_layer_id` ist historisierte Projektschemadaten und weder hardcodierte ID noch Name."
+main_locations = ["§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["Schema golden, DF"]
+
+[[invariant]]
+id = "WDB-LAY-008"
+class = "HARD"
+statement = "Der bezeichnete Base-Layer besitzt den eindeutig niedrigsten aktiven PrecedenceRank und kann während der Bezeichnung nicht deprecated/retired sein."
+main_locations = ["§33"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, schema validation"]
+
+[[invariant]]
+id = "WDB-LAY-009"
+class = "HARD"
+statement = "Jeder persistierte layerfähige Record trägt eine ausdrückliche LayerId; Decoder, Import und Storage setzen nie still den Base-Layer ein."
+main_locations = ["§2.1.2", "§33"]
+evidence_classes = ["CT", "FZ"]
+implementations = ["FZ, CT, import negative"]
+
+[[invariant]]
+id = "WDB-LAY-010"
+class = "HARD"
+statement = "Base-Layer-Wechsel ist eine atomare Schemaänderung, erhält historische Bezeichnungen und verschiebt keine Records automatisch."
+main_locations = ["§2.1.2", "§33"]
+evidence_classes = ["SM", "DF", "CT"]
+implementations = ["SM, migration golden, DF"]
+
+[[invariant]]
+id = "WDB-LAY-011"
+class = "HARD"
+statement = "LayerSelection ist `BaseOnly"
+main_locations = ["§33"]
+evidence_classes = ["DF", "CF", "CT", "ST"]
+implementations = ["AllActive | Explicit`; BaseOnly wird gegen den gepinnten Query-Schemasnapshot aufgelöst. | CF, DF, historical query"]
+
+[[invariant]]
+id = "WDB-TIM-001"
+class = "HARD"
+statement = "RecordedAsOf, WorldTime, EventTime und AssertionValidity sind getrennte Typen."
+main_locations = ["§2.1"]
+evidence_classes = ["UT", "CF"]
+implementations = ["CF, UT"]
+
+[[invariant]]
+id = "WDB-TIM-002"
+class = "HARD"
+statement = "Inkompatible Timelines erhalten keine implizite globale Ordnung."
+main_locations = ["§2.1", "§12"]
+evidence_classes = ["PT", "CF"]
+implementations = ["CF, PT"]
+
+[[invariant]]
+id = "WDB-TIM-003"
+class = "HARD"
+statement = "Intervallgrenzen verwenden eine einzige dokumentierte Halb-offen-Semantik `[start,end)`."
+main_locations = ["§2.1"]
+evidence_classes = ["PT", "DF"]
+implementations = ["PT, DF"]
+
+[[invariant]]
+id = "WDB-AST-001"
+class = "HARD"
+statement = "Assertion-Records sind immutable."
+main_locations = ["§2.2", "§33"]
+evidence_classes = ["SM"]
+implementations = ["API, SM"]
+
+[[invariant]]
+id = "WDB-AST-002"
+class = "HARD"
+statement = "Close, Retract und Correct erzeugen neue Lifecycle-/Domain-Records."
+main_locations = ["§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-AST-003"
+class = "HARD"
+statement = "Retraction bedeutet Korrektur auf Transaction Time, nicht World-Time-Ende."
+main_locations = ["§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-PRO-001"
+class = "HARD"
+statement = "Proposition Equality besteht exakt aus Subject, Predicate, Value, Polarity."
+main_locations = ["§2.2"]
+evidence_classes = ["PT"]
+implementations = ["PT"]
+
+[[invariant]]
+id = "WDB-MSK-001"
+class = "HARD"
+statement = "Masking ist kein positiver oder negativer Fakt."
+main_locations = ["§2.2", "§2.3.2", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-MSK-002"
+class = "HARD"
+statement = "Mask wirkt nur gegen strikt niedrigere `ContextPrecedence`."
+main_locations = ["§33"]
+evidence_classes = ["UT"]
+implementations = ["Truth table"]
+
+[[invariant]]
+id = "WDB-MSK-003"
+class = "HARD"
+statement = "Mask-Scope ist genau ExactAssertion, Proposition oder Slot."
+main_locations = ["§33"]
+evidence_classes = ["UT", "FZ"]
+implementations = ["UT, FZ"]
+
+[[invariant]]
+id = "WDB-MSK-004"
+class = "HARD"
+statement = "Ohne verbleibenden Kandidaten resultiert grundsätzlich Unknown."
+main_locations = ["§33"]
+evidence_classes = ["UT"]
+implementations = ["Truth table"]
+
+[[invariant]]
+id = "WDB-MSK-005"
+class = "HARD"
+statement = "EventMask ist keine EventRetraction und cascadiert nicht zu Assertions."
+main_locations = ["§2.3.2", "§30.2", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-RES-001"
+class = "HARD"
+statement = "Fachoutcomes sind Known, Unknown oder Conflict; Technikfehler separat."
+main_locations = ["§2.2"]
+evidence_classes = ["UT", "CF"]
+implementations = ["CF, UT"]
+
+[[invariant]]
+id = "WDB-RES-002"
+class = "HARD"
+statement = "Keine ResolutionPolicy verwendet implizites Last Write Wins."
+main_locations = ["§9"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-RES-003"
+class = "HARD"
+statement = "Securityfilter läuft vor Masking und Resolution."
+main_locations = ["§2.2"]
+evidence_classes = ["DF", "NI"]
+implementations = ["NI, DF"]
+
+[[invariant]]
+id = "WDB-RES-004"
+class = "HARD"
+statement = "ReplacementBoundary ist nur für MultiValueReplace gültig."
+main_locations = ["§2.2", "§33"]
+evidence_classes = ["UT", "FZ"]
+implementations = ["UT, FZ"]
+
+[[invariant]]
+id = "WDB-RES-005"
+class = "HARD"
+statement = "ReplacementBoundary kann eine explizit vollständige leere Menge erzeugen."
+main_locations = ["§2.2"]
+evidence_classes = ["UT"]
+implementations = ["Truth table"]
+
+[[invariant]]
+id = "WDB-RES-006"
+class = "HARD"
+statement = "Resolutionausgabe besitzt deterministische kanonische Ordnung."
+main_locations = ["§2.2"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-VAL-001"
+class = "HARD"
+statement = "Core-Value enthält weder Null, Float, JSON, Array noch Map."
+main_locations = ["§2.3"]
+evidence_classes = ["CF", "FZ"]
+implementations = ["CF, FZ"]
+
+[[invariant]]
+id = "WDB-VAL-002"
+class = "HARD"
+statement = "Equality ist typisiert und coercion-frei."
+main_locations = ["§2.3"]
+evidence_classes = ["PT"]
+implementations = ["PT"]
+
+[[invariant]]
+id = "WDB-VAL-003"
+class = "HARD"
+statement = "Decimal besitzt genau eine kanonische Darstellung."
+main_locations = ["§2.3", "§12"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-VAL-005"
+class = "HARD"
+statement = "Decimal-Scale ist nicht Teil numerischer Identität; Darstellungs-/Messpräzision liegt in Schema/Metadaten."
+main_locations = ["§2.3", "§12"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-VAL-006"
+class = "HARD"
+statement = "CalendarPeriod ist 1.0 kein Assertion-Value."
+main_locations = ["§2.3", "§12"]
+evidence_classes = ["CF", "FZ"]
+implementations = ["CF, Wire FZ"]
+
+[[invariant]]
+id = "WDB-VAL-004"
+class = "HARD"
+statement = "`Value` besitzt kein globales fachliches `Ord`."
+main_locations = ["§2.3", "§12"]
+evidence_classes = ["CF"]
+implementations = ["CF"]
+
+[[invariant]]
+id = "WDB-ID-001"
+class = "HARD"
+statement = "Domänen-IDs sind nicht vertauschbare Newtypes."
+main_locations = ["§33"]
+evidence_classes = ["CF"]
+implementations = ["CF"]
+
+[[invariant]]
+id = "WDB-ID-002"
+class = "HARD"
+statement = "IDs sind 128 Bit; Zero und All-FF sind ungültig."
+main_locations = ["§3.1"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-ID-003"
+class = "HARD"
+statement = "ID-Zeitanteile definieren keine fachliche Zeit oder Authentizität."
+main_locations = ["§3.1"]
+evidence_classes = ["UT", "ST"]
+implementations = ["UT, Review"]
+
+[[invariant]]
+id = "WDB-ID-004"
+class = "HARD"
+statement = "BranchId, SchemaVersionId und typgelöschte LifecycleRecordId existieren nicht."
+main_locations = ["§3.1"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, API snapshot"]
+
+[[invariant]]
+id = "WDB-REF-001"
+class = "HARD"
+statement = "Persistierter/Wire-RecordRef ist eine geschlossene exhaustive Enum."
+main_locations = ["§3.3", "§31.2.1"]
+evidence_classes = ["CF", "CT", "FZ"]
+implementations = ["CF, CT, FZ"]
+
+[[invariant]]
+id = "WDB-REF-002"
+class = "HARD"
+statement = "Evidence-, Provenance- und Lifecycle-Targets sind validierte RecordRef-Teilmengen."
+main_locations = ["§3.3", "§31.2.1"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-REF-003"
+class = "HARD"
+statement = "EvidenceTargetRef erlaubt ausschließlich die in §31.2.1 mit J markierten Varianten."
+main_locations = ["§31.2.1"]
+evidence_classes = ["PT", "CF", "FZ"]
+implementations = ["CF, PT, FZ"]
+
+[[invariant]]
+id = "WDB-REF-004"
+class = "HARD"
+statement = "Corrects verlangt dieselbe kompatible Recordfamilie und konkrete Lifecycle-Variante."
+main_locations = ["§31.2.1"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-REF-005"
+class = "HARD"
+statement = "DerivedFrom- und ResultedFrom-Endpunkte folgen den geschlossenen Matrizen ohne Other-/String-Escape-Hatch."
+main_locations = ["§31.2.1"]
+evidence_classes = ["PT", "CF", "FZ"]
+implementations = ["CF, PT, FZ"]
+
+[[invariant]]
+id = "WDB-SEN-001"
+class = "HARD"
+statement = "Kein Sentinel codiert Abwesenheit, Fehler oder Lifecycle."
+main_locations = ["§3.1"]
+evidence_classes = ["FZ", "ST"]
+implementations = ["Policy, FZ"]
+
+[[invariant]]
+id = "WDB-SEN-002"
+class = "HARD"
+statement = "Option, Result und Domain-Enum bleiben semantisch getrennt."
+main_locations = ["§3.3"]
+evidence_classes = ["CF", "ST"]
+implementations = ["API review, CF"]
+
+[[invariant]]
+id = "WDB-TYP-001"
+class = "HARD"
+statement = "Fremddaten umgehen keine validierenden Konstruktoren."
+main_locations = ["§3.1", "§3.3"]
+evidence_classes = ["CT", "FZ", "ST"]
+implementations = ["FZ, API test"]
+
+[[invariant]]
+id = "WDB-TYP-002"
+class = "HARD"
+statement = "Handles/Transactions/Snapshots sind nur bei expliziter Semantik klonbar."
+main_locations = ["§3.2", "§3.3"]
+evidence_classes = ["CF"]
+implementations = ["CF"]
+
+[[invariant]]
+id = "WDB-SCH-001"
+class = "HARD"
+statement = "Es gibt genau eine projektweite Schemahistorie."
+main_locations = ["§2.4", "§33"]
+evidence_classes = ["SM", "CT"]
+implementations = ["SM, CT"]
+
+[[invariant]]
+id = "WDB-SCH-002"
+class = "HARD"
+statement = "`SchemaMode::Historical` ist Default und nutzt SchemaAt(RecordedAsOf)."
+main_locations = ["§33"]
+evidence_classes = ["DF"]
+implementations = ["API, DF"]
+
+[[invariant]]
+id = "WDB-SCH-003"
+class = "HARD"
+statement = "Alle Schema-IDs, einschließlich PredicateId, EntityTypeId, EventKindId, EventRoleId, EventAttributeId und LayerId, bleiben über Active/Deprecated/Retired stabil."
+main_locations = ["§2.4", "§33"]
+evidence_classes = ["CT"]
+implementations = ["Migration golden"]
+
+[[invariant]]
+id = "WDB-SCH-004"
+class = "HARD"
+statement = "ResolutionPolicy ist Predicate-Semantik und historisiert."
+main_locations = ["§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, CT"]
+
+[[invariant]]
+id = "WDB-SCH-005"
+class = "HARD"
+statement = "PredicateDefinition enthält SubjectConstraint, ValueKind/ObjectConstraint, Cardinality, ResolutionPolicy, Constraints und Lifecycle."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["CT", "ST"]
+implementations = ["CT, API test"]
+
+[[invariant]]
+id = "WDB-SCH-006"
+class = "HARD"
+statement = "Entity Object Constraint ist genau für Entity-Values zulässig und wird strukturell validiert."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-SCH-007"
+class = "HARD"
+statement = "Single ist nur mit SingleValueReplace, Multi nur mit MultiValueOverlay/MultiValueReplace kompatibel."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["UT", "FZ"]
+implementations = ["Truth table, FZ"]
+
+[[invariant]]
+id = "WDB-SCH-008"
+class = "HARD"
+statement = "Single verhindert nicht widersprüchliche Assertions; StructuralValidationError und ResolutionConflict bleiben getrennt."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-SCH-009"
+class = "HARD"
+statement = "EventKindDefinition historisiert Rollen, Cardinalities, Attribute und Event-Time-Constraint vollständig."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["CT"]
+implementations = ["CT, Migration golden"]
+
+[[invariant]]
+id = "WDB-SCH-010"
+class = "HARD"
+statement = "Deprecated Writes verlangen Opt-in, Capability und Warning; Retired verbietet neue Writes."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["E2E, NI"]
+
+[[invariant]]
+id = "WDB-SCH-011"
+class = "HARD"
+statement = "Schema und Daten sind atomar; Referenzen validieren gegen das Post-Transaction-Schema."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-SCH-012"
+class = "HARD"
+statement = "SchemaDependencies werden am Commitpoint gegen den aktuellen Head revalidiert."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-SCH-013"
+class = "HARD"
+statement = "SchemaSnapshot ist derived/cacheable; Schemahistorie ist Wahrheit und Fingerprint ist kanonisch."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, CT"]
+
+[[invariant]]
+id = "WDB-SCH-014"
+class = "HARD"
+statement = "Schemaänderungen werden nach Auswirkung als kompatibel, restrictive oder breaking klassifiziert."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["CT"]
+implementations = ["Migration golden"]
+
+[[invariant]]
+id = "WDB-SCH-015"
+class = "HARD"
+statement = "Bedeutungsinkompatible Änderungen benötigen eine neue Schema-ID; reine additive/metadatenbezogene Änderungen nicht."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["CT", "ST", "DR"]
+implementations = ["Migration golden, ADR test"]
+
+[[invariant]]
+id = "WDB-SCH-016"
+class = "HARD"
+statement = "Historical, Current und Explicit sind bewusste SchemaModes; keine stille Current-Coercion."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["DF", "CT", "ST"]
+implementations = ["DF, API test"]
+
+[[invariant]]
+id = "WDB-SCH-017"
+class = "HARD"
+statement = "Beschädigtes benötigtes Historical Schema scheitert explizit und fällt nicht auf Current zurück."
+main_locations = ["§31.3", "§33"]
+evidence_classes = ["PT", "CR", "NI", "E2E"]
+implementations = ["Corruption E2E, NI"]
+
+[[invariant]]
+id = "WDB-EVT-001"
+class = "HARD"
+statement = "Event und Assertion sind getrennte First-Class-Records."
+main_locations = ["§2.3", "§33"]
+evidence_classes = ["UT", "CF"]
+implementations = ["CF, UT"]
+
+[[invariant]]
+id = "WDB-EVT-002"
+class = "HARD"
+statement = "Event erzeugt keine automatische Assertion/Inference."
+main_locations = ["§33"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-EVT-003"
+class = "HARD"
+statement = "EventMask cascadiert nicht automatisch zu Assertions."
+main_locations = ["§30.2", "§33"]
+evidence_classes = ["UT"]
+implementations = ["Truth table"]
+
+[[invariant]]
+id = "WDB-EVT-004"
+class = "HARD"
+statement = "Participants verwenden ausschließlich im EventKind erlaubte Rollen."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-EVT-005"
+class = "HARD"
+statement = "Role Cardinality und Required-Rollen werden strukturell validiert."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-EVT-006"
+class = "HARD"
+statement = "Participant-Reihenfolge ist bedeutungslos; identische Role/Entity-Paare sind unzulässige Duplikate."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-EVT-007"
+class = "HARD"
+statement = "EventKind-Schema bestimmt erlaubte/erforderliche Rollen, Attribute, Typen und Zeitconstraint."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["CT", "FZ"]
+implementations = ["CT, FZ"]
+
+[[invariant]]
+id = "WDB-EVT-008"
+class = "HARD"
+statement = "EventTime ist Instant oder halb-offener Span; offene Spans schließen nur durch EventSpanClosure."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "SM"]
+implementations = ["PT, SM"]
+
+[[invariant]]
+id = "WDB-EVT-009"
+class = "HARD"
+statement = "Gleiche WorldTime erzeugt keine implizite Eventordnung."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "DF"]
+implementations = ["PT, DF"]
+
+[[invariant]]
+id = "WDB-EVT-010"
+class = "HARD"
+statement = "Die Engine dedupliziert Events nicht automatisch."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-EVT-011"
+class = "HARD"
+statement = "Witness impliziert kein Wissen; subjektive Erinnerung/Behauptung ist kein perspektivisches Event."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-EVT-012"
+class = "HARD"
+statement = "Eventkorrektur erzeugt neuen Event plus Corrects und mutiert/retractet nicht implizit."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-EVT-013"
+class = "HARD"
+statement = "EventMask ist keine Retraction, nimmt Wirkungen nicht zurück und cascadiert nicht."
+main_locations = ["§2.3.2", "§31.1", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-EVT-014"
+class = "HARD"
+statement = "EventRelation ist ein eigener immutable Record mit Before/After/SameTime/Causes."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, CT"]
+
+[[invariant]]
+id = "WDB-EVT-015"
+class = "HARD"
+statement = "Zeitwerte inferieren keine Eventrelation; Causes entsteht niemals aus zeitlicher Nähe."
+main_locations = ["§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["DF, Truth table"]
+
+[[invariant]]
+id = "WDB-EVT-016"
+class = "HARD"
+statement = "Event-Self-Relations sind unzulässig; SameTime wird symmetrisch kanonisiert."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-EVT-017"
+class = "HARD"
+statement = "Der normalisierte Before-Graph und der separate Causes-Graph sind azyklisch; aktive Duplikatkanten sind unzulässig."
+main_locations = ["§33"]
+evidence_classes = ["PT", "SM"]
+implementations = ["SM, PT"]
+
+[[invariant]]
+id = "WDB-EVT-018"
+class = "HARD"
+statement = "EventRelation besitzt keine World-Time-Validity und wird nur durch konkreten Retraction-Record korrigiert."
+main_locations = ["§33"]
+evidence_classes = ["SM", "CT"]
+implementations = ["SM, CT"]
+
+[[invariant]]
+id = "WDB-EVT-019"
+class = "HARD"
+statement = "`After(A,B)` ist nur Eingabealias und wird vor Equality/Persistenz zu `Before(B,A)` normalisiert; After wird nicht persistiert."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "CT", "FZ"]
+implementations = ["PT, FZ, wire golden"]
+
+[[invariant]]
+id = "WDB-EVT-020"
+class = "HARD"
+statement = "SameTime wird als geordnetes EventId-Paar kanonisiert und als Äquivalenzrelation ausgewertet, ohne transitive Records zu materialisieren."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "SM", "DF"]
+implementations = ["PT, SM, DF"]
+
+[[invariant]]
+id = "WDB-EVT-021"
+class = "HARD"
+statement = "Duplikatprüfung verwendet ausschließlich den normalisierten Relation-Key und erfasst dadurch inverse Before/After-Duplikate."
+main_locations = ["§31.1", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, import negative"]
+
+[[invariant]]
+id = "WDB-EVT-022"
+class = "HARD"
+statement = "Der Before-Graph ist nach SameTime-Komponentenkollaps azyklisch; Before innerhalb einer Komponente und SameTime über einen Before-Pfad sind Konflikte."
+main_locations = ["§33"]
+evidence_classes = ["UT", "PT", "SM"]
+implementations = ["SM, PT, truth table"]
+
+[[invariant]]
+id = "WDB-EVT-023"
+class = "HARD"
+statement = "Causes ist zeitlich orthogonal, impliziert kein Before und besitzt nur seine separate Self-/Duplikat-/Zyklusprüfung, sofern Schema keinen strengeren Constraint setzt."
+main_locations = ["§33"]
+evidence_classes = ["UT", "DF", "ST"]
+implementations = ["Truth table, DF, schema test"]
+
+[[invariant]]
+id = "WDB-EPI-001"
+class = "HARD"
+statement = "WorldState, Knows, Believes und Claims implizieren einander nicht automatisch."
+main_locations = ["§2.3", "§2.3.1", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-EPI-002"
+class = "HARD"
+statement = "Fehlendes Knows/Believes und negiertes Knows/Believes bleiben verschieden."
+main_locations = ["§2.3.1", "§33"]
+evidence_classes = ["UT"]
+implementations = ["Truth table"]
+
+[[invariant]]
+id = "WDB-EPI-003"
+class = "HARD"
+statement = "PerspectiveId und PrincipalId sind nicht austauschbar."
+main_locations = ["§33"]
+evidence_classes = ["CF", "NI"]
+implementations = ["CF, NI"]
+
+[[invariant]]
+id = "WDB-SRC-001"
+class = "HARD"
+statement = "Source ist ein eigener immutable Herkunftsrecord; ohne Evidence-Relation behauptet er nichts über einen Domain-Record."
+main_locations = ["§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["UT, DF"]
+
+[[invariant]]
+id = "WDB-SRC-002"
+class = "HARD"
+statement = "Source-Felder werden vor Public-Ausgabe autorisiert; Auslassung und Fehlermapping leaken keine Source-Existenz."
+main_locations = ["§2.3.2", "§31.2"]
+evidence_classes = ["NI"]
+implementations = ["NI, leak corpus"]
+
+[[invariant]]
+id = "WDB-EVI-001"
+class = "HARD"
+statement = "Evidence verändert Resolution nicht automatisch."
+main_locations = ["§2.3", "§33"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-PRV-001"
+class = "HARD"
+statement = "Provenance ist erklärend und nicht imperativ/cascading."
+main_locations = ["§2.3", "§33"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-EVI-002"
+class = "HARD"
+statement = "Evidence ist projektweite immutable Meta-History ohne eigene World-Time-Validity."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, CT"]
+
+[[invariant]]
+id = "WDB-EVI-003"
+class = "HARD"
+statement = "RecordedAsOf filtert Evidence nach Erzeugungs-/Retraction-Revision."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["DF, SM"]
+
+[[invariant]]
+id = "WDB-EVI-004"
+class = "HARD"
+statement = "base_revision beschneidet Targetsichtbarkeit, nicht die globale Evidence-History."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["DF", "NI"]
+implementations = ["DF, NI"]
+
+[[invariant]]
+id = "WDB-EVI-005"
+class = "HARD"
+statement = "Evidence wird nur ausgegeben, wenn Target und Sourcefelder autorisiert sichtbar sind."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-EVI-006"
+class = "HARD"
+statement = "Evidence darf historische/retracted Targets dokumentieren, reaktiviert sie aber nicht."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-EVI-007"
+class = "HARD"
+statement = "Aktive Evidence-Duplikate gleichen Source/Target/Relation-Tupels sind unzulässig."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["PT", "SM"]
+implementations = ["PT, SM"]
+
+[[invariant]]
+id = "WDB-PRV-002"
+class = "HARD"
+statement = "Corrects bezeichnet Datenkorrektur, keine World-Time-Nachfolge, und retractet nicht automatisch."
+main_locations = ["§2.3.2", "§31.2", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-PRV-003"
+class = "HARD"
+statement = "DerivedFrom bezeichnet informationelle Ableitung und keine Story-Kausalität."
+main_locations = ["§2.3.1", "§2.3.2", "§31.2", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-PRV-004"
+class = "HARD"
+statement = "ResultedFrom bezeichnet fachliche Wirkung, keine logische Ableitung, und cascadiert nicht."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["UT", "DF"]
+implementations = ["Truth table, DF"]
+
+[[invariant]]
+id = "WDB-PRV-005"
+class = "HARD"
+statement = "Provenance ist projektweite Meta-History ohne ContextPrecedence oder Resolutionwirkung."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, CT"]
+
+[[invariant]]
+id = "WDB-PRV-006"
+class = "HARD"
+statement = "Provenance-Self-Loops sind unzulässig."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-PRV-007"
+class = "HARD"
+statement = "Der gemeinsame Provenance-Abhängigkeitsgraph ist relationsintern und relationsübergreifend azyklisch."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["PT", "SM"]
+implementations = ["SM, PT"]
+
+[[invariant]]
+id = "WDB-PRV-008"
+class = "HARD"
+statement = "Aktive Provenance-Duplikate gleichen From/To/Relation-Tupels sind unzulässig."
+main_locations = ["§33"]
+evidence_classes = ["PT", "SM"]
+implementations = ["PT, SM"]
+
+[[invariant]]
+id = "WDB-PRV-009"
+class = "HARD"
+statement = "Graphvalidierung und Traversal sind bounded; unentscheidbare Insertprüfung scheitert fail-closed."
+main_locations = ["§31.2", "§33"]
+evidence_classes = ["SM", "PF"]
+implementations = ["PF, SM"]
+
+[[invariant]]
+id = "WDB-PRV-011"
+class = "HARD"
+statement = "Dependency-Projektion ist Corrects(new,old): new→old; DerivedFrom(source,derived): derived→source; ResultedFrom(cause,effect): effect→cause."
+main_locations = ["Invariantenregister"]
+evidence_classes = ["UT", "CT"]
+implementations = ["Truth table, CT"]
+
+[[invariant]]
+id = "WDB-PRV-012"
+class = "HARD"
+statement = "Gemischte Zyklen über Corrects, DerivedFrom und ResultedFrom werden abgewiesen."
+main_locations = ["Invariantenregister"]
+evidence_classes = ["PT", "SM"]
+implementations = ["SM, PT"]
+
+[[invariant]]
+id = "WDB-PRV-013"
+class = "HARD"
+statement = "Zyklusvalidierung prüft den atomaren Post-Transaction-Zustand einschließlich aller Batchkanten."
+main_locations = ["Invariantenregister"]
+evidence_classes = ["SM"]
+implementations = ["SM, OCC integration"]
+
+[[invariant]]
+id = "WDB-PRV-010"
+class = "HARD"
+statement = "Meta-History-Security verwendet die Schnittmenge der Endpoint-/Feldrechte und leakt keine versteckten Kanten."
+main_locations = ["§17", "§33"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-LFC-001"
+class = "HARD"
+statement = "Close Validity, Retraction, Archive und Purge sind getrennte Record-/Operationsverträge."
+main_locations = ["§2.3.2", "§33"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-LFC-002"
+class = "HARD"
+statement = "Jeder Lifecycle-Record besitzt eine konkrete getypte ID und ist über RecordRef referenzierbar."
+main_locations = ["§2.3.2"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, CT"]
+
+[[invariant]]
+id = "WDB-MIG-001"
+class = "HARD"
+statement = "Migration überschreibt keine committed History."
+main_locations = ["§2.4", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-MIG-002"
+class = "HARD"
+statement = "Restrictive/Breaking besitzen Dry Run."
+main_locations = ["§2.4", "§33"]
+evidence_classes = ["E2E"]
+implementations = ["E2E"]
+
+[[invariant]]
+id = "WDB-MIG-003"
+class = "HARD"
+statement = "Breaking verlangt Adminaktion und standardmäßig Restore Point."
+main_locations = ["§33"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["Security E2E"]
+
+[[invariant]]
+id = "WDB-MIG-004"
+class = "HARD"
+statement = "Jeder Multi-Transaction-Zwischenstand ist gültig und historisch lesbar."
+main_locations = ["§2.4", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-MIG-005"
+class = "HARD"
+statement = "Storageformat- und Schema-Migration sind getrennte Protokolle."
+main_locations = ["§33"]
+evidence_classes = ["CT", "E2E"]
+implementations = ["CT, E2E"]
+
+[[invariant]]
+id = "WDB-MIG-006"
+class = "HARD"
+statement = "MigrationCategory ist exakt MetadataOnly, Additive, CompatibleConstraintChange, Restrictive oder Breaking."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, CT"]
+
+[[invariant]]
+id = "WDB-MIG-007"
+class = "HARD"
+statement = "MigrationPlan und MigrationRun sind getrennte Typen mit eigenen Identitäten."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CF", "CT", "ST"]
+implementations = ["CF, API test"]
+
+[[invariant]]
+id = "WDB-MIG-008"
+class = "HARD"
+statement = "Plan enthält Source-Schema-Precondition, Target, Steps, Fingerprint, Transformer-Version und Budgets."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CT", "FZ"]
+implementations = ["CT, FZ"]
+
+[[invariant]]
+id = "WDB-MIG-009"
+class = "HARD"
+statement = "Start und Resume weisen eine abweichende Source-Schema-Precondition zurück."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["SM", "E2E"]
+implementations = ["SM, E2E"]
+
+[[invariant]]
+id = "WDB-MIG-010"
+class = "HARD"
+statement = "Dry Run und Execution verwenden dieselbe Transformationslogik."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-MIG-011"
+class = "HARD"
+statement = "Commit-Transformer sind deterministisch und verwenden weder Uhr, Zufall, Locale, Netzwerk noch AI."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["DF", "ST"]
+implementations = ["ST, DF"]
+
+[[invariant]]
+id = "WDB-MIG-012"
+class = "HARD"
+statement = "AI-Vorschläge werden nur als versionierter kanonischer Plan committed; versteckte Coercions bleiben verboten."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CT", "E2E"]
+implementations = ["E2E, CT"]
+
+[[invariant]]
+id = "WDB-MIG-013"
+class = "HARD"
+statement = "Warning, UnresolvedMigrationItem und Error sind getrennte Zustände."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CF", "CT", "ST"]
+implementations = ["CF, API test"]
+
+[[invariant]]
+id = "WDB-MIG-014"
+class = "HARD"
+statement = "Restrictive/Breaking committen unresolved Items nur mit expliziter validierter Adminentscheidung."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["E2E, NI"]
+
+[[invariant]]
+id = "WDB-MIG-015"
+class = "HARD"
+statement = "Representation Migration ändert keine World-Time-Semantik; historische/retracted Records nur bei explizitem Plan."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["DF", "CT"]
+implementations = ["DF, Migration golden"]
+
+[[invariant]]
+id = "WDB-MIG-016"
+class = "HARD"
+statement = "Jeder Stepcommit ist eine normale OCC-Transaction."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-MIG-017"
+class = "HARD"
+statement = "MigrationId, StepId, RunId und OperationId besitzen getrennte Semantik."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CF", "CT"]
+implementations = ["CF, CT"]
+
+[[invariant]]
+id = "WDB-MIG-018"
+class = "HARD"
+statement = "Step-Resume klärt Unknown Outcome über OperationId und ist inputfingerprint-idempotent."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-MIG-019"
+class = "HARD"
+statement = "Expand → Migrate → Contract ist Default und jeder Zwischenstand ist gültig."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["SM", "CT"]
+implementations = ["SM, Migration golden"]
+
+[[invariant]]
+id = "WDB-MIG-020"
+class = "HARD"
+statement = "Committed Migration-History wird nicht zurückgerollt."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-MIG-021"
+class = "HARD"
+statement = "Fachliche Rücknahme erfolgt als neue Compensating Migration."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["DF", "E2E"]
+implementations = ["E2E, DF"]
+
+[[invariant]]
+id = "WDB-MIG-022"
+class = "HARD"
+statement = "Migration Run Journal ist recoverbares Koordinationsmetadatum, nicht normative History."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CT", "CR"]
+implementations = ["CR, CT"]
+
+[[invariant]]
+id = "WDB-MIG-023"
+class = "HARD"
+statement = "Storage-Format-Migration bleibt vom fachlichen Migrationsprotokoll getrennt."
+main_locations = ["§31.4", "§33"]
+evidence_classes = ["CT", "E2E"]
+implementations = ["E2E, CT"]
+
+[[invariant]]
+id = "WDB-TX-001"
+class = "HARD"
+statement = "Commit konsumiert eine validierte Transaktion genau einmal."
+main_locations = ["§33"]
+evidence_classes = ["SM", "CF"]
+implementations = ["CF, SM"]
+
+[[invariant]]
+id = "WDB-TX-002"
+class = "HARD"
+statement = "Drop führt weder Commit noch persistente Reparatur aus."
+main_locations = ["§33"]
+evidence_classes = ["UT", "CR"]
+implementations = ["UT, CR"]
+
+[[invariant]]
+id = "WDB-TX-003"
+class = "HARD"
+statement = "Schema, Daten, Event, Assertion und Provenance können atomar committed werden."
+main_locations = ["§2.3", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-TX-004"
+class = "HARD"
+statement = "OperationId dedupliziert einen logischen Commitversuch persistent."
+main_locations = ["§5.3", "§9", "§33"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-TX-005"
+class = "HARD"
+statement = "Gleiche OperationId mit abweichendem Payload wird abgelehnt."
+main_locations = ["§33"]
+evidence_classes = ["UT", "CR"]
+implementations = ["UT, CR"]
+
+[[invariant]]
+id = "WDB-TX-006"
+class = "HARD"
+statement = "Commitantwort wird erst nach durablem Commitpoint erzeugt."
+main_locations = ["§33"]
+evidence_classes = ["CR"]
+implementations = ["CR"]
+
+[[invariant]]
+id = "WDB-OCC-001"
+class = "HARD"
+statement = "Write/Write- und relevante Write/Read-Konflikte werden erkannt."
+main_locations = ["§9"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-OCC-002"
+class = "HARD"
+statement = "Range-/Predicate-Dependencies erkennen Phantoms."
+main_locations = ["§9"]
+evidence_classes = ["SM", "DF"]
+implementations = ["SM, DF"]
+
+[[invariant]]
+id = "WDB-OCC-003"
+class = "HARD"
+statement = "TransactionConflict ist erwartbares Outcome, kein Storagefehler."
+main_locations = ["§9"]
+evidence_classes = ["CT"]
+implementations = ["API snapshot"]
+
+[[invariant]]
+id = "WDB-OCC-004"
+class = "HARD"
+statement = "Auto-Retry gilt nur für ReplaySafe ohne externe Side Effects und ist begrenzt."
+main_locations = ["§9"]
+evidence_classes = ["SM"]
+implementations = ["SM"]
+
+[[invariant]]
+id = "WDB-OCC-005"
+class = "HARD"
+statement = "UnknownCommitOutcome wird vor Retry über OperationId geklärt."
+main_locations = ["§5.3", "§9"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-SNP-001"
+class = "HARD"
+statement = "Snapshot pinnt Daten, Schema, HistorySpace, LayerSelection samt historischen LayerDefinitionen und Securitymodus gemeinsam."
+main_locations = ["§10", "§33"]
+evidence_classes = ["SM"]
+implementations = ["SM"]
+
+[[invariant]]
+id = "WDB-SNP-002"
+class = "HARD"
+statement = "Snapshot bewegt sich nie still auf eine neue Revision."
+main_locations = ["§10", "§33"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-SNP-003"
+class = "HARD"
+statement = "Gepinnte Segmente werden nicht reclaimed."
+main_locations = ["§10", "§33"]
+evidence_classes = ["CR", "PF"]
+implementations = ["CR, PF"]
+
+[[invariant]]
+id = "WDB-SNP-004"
+class = "HARD"
+statement = "Öffentliche Queryresultate borgen nicht aus Lock oder Memory Map."
+main_locations = ["§10", "§33"]
+evidence_classes = ["CF"]
+implementations = ["CF, Miri"]
+
+[[invariant]]
+id = "WDB-STO-001"
+class = "HARD"
+statement = "Backend publiziert höchstens eine neue Revision atomar."
+main_locations = ["§11", "§31.7"]
+evidence_classes = ["SM", "CT", "CR"]
+implementations = ["Contract SM, CR"]
+
+[[invariant]]
+id = "WDB-STO-002"
+class = "HARD"
+statement = "Engine- und Backendgarantien sind getrennt und testbar."
+main_locations = ["§11", "§31.7"]
+evidence_classes = ["CT"]
+implementations = ["Contract suite"]
+
+[[invariant]]
+id = "WDB-STO-003"
+class = "HARD"
+statement = "Produktionscommit verlangt Machine-Durability."
+main_locations = ["§11", "§31.7"]
+evidence_classes = ["CR"]
+implementations = ["CR, CP"]
+
+[[invariant]]
+id = "WDB-STO-004"
+class = "HARD"
+statement = "SegmentId ist eine zufällige stabile Identität ohne Content-Semantik."
+main_locations = ["§31.7"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-STO-005"
+class = "HARD"
+statement = "ContentDigest hasht kanonische Segmentbytes getrennt von SegmentId."
+main_locations = ["§31.7"]
+evidence_classes = ["PT", "CT", "FZ"]
+implementations = ["PT, CT, FZ"]
+
+[[invariant]]
+id = "WDB-STO-006"
+class = "HARD"
+statement = "Manifest, Backup und Recovery verifizieren SegmentId und ContentDigest getrennt."
+main_locations = ["§31.7"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-WIR-001"
+class = "HARD"
+statement = "Persistentes Format ist explizit versioniert und serde-implementierungsunabhängig."
+main_locations = ["§12"]
+evidence_classes = ["CT"]
+implementations = ["CT"]
+
+[[invariant]]
+id = "WDB-WIR-002"
+class = "HARD"
+statement = "Varints, Felder und Decimal sind kanonisch; alternative Encodings werden abgewiesen."
+main_locations = ["§12"]
+evidence_classes = ["PT", "FZ"]
+implementations = ["PT, FZ"]
+
+[[invariant]]
+id = "WDB-WIR-003"
+class = "HARD"
+statement = "Decoder prüft Limits und Overflows vor Allokation/Cast."
+main_locations = ["§4.2"]
+evidence_classes = ["FZ", "PF"]
+implementations = ["FZ, PF"]
+
+[[invariant]]
+id = "WDB-WIR-004"
+class = "HARD"
+statement = "TypeScript transportiert i128/u128/Decimal/Revision verlustfrei als Strings."
+main_locations = ["§12"]
+evidence_classes = ["PT", "E2E"]
+implementations = ["E2E, PT"]
+
+[[invariant]]
+id = "WDB-WIR-005"
+class = "HARD"
+statement = "Semantische Hard-Limits, Defaultprofile und provisorische Performancegates sind getrennt klassifiziert."
+main_locations = ["§12"]
+evidence_classes = ["ST"]
+implementations = ["Spec/policy test"]
+
+[[invariant]]
+id = "WDB-WAL-001"
+class = "HARD"
+statement = "Commitmarker wird erst nach synchronisiertem Prepare geschrieben."
+main_locations = ["§13"]
+evidence_classes = ["CR"]
+implementations = ["CR"]
+
+[[invariant]]
+id = "WDB-WAL-002"
+class = "HARD"
+statement = "Zweiter WAL-Sync ist Commitpoint."
+main_locations = ["§13"]
+evidence_classes = ["CR"]
+implementations = ["CR"]
+
+[[invariant]]
+id = "WDB-WAL-003"
+class = "HARD"
+statement = "Manifest referenziert nie Daten oberhalb des sicheren WAL-Präfix."
+main_locations = ["§13"]
+evidence_classes = ["SM", "CR"]
+implementations = ["CR, SM"]
+
+[[invariant]]
+id = "WDB-WAL-004"
+class = "HARD"
+statement = "Historysegmente sind immutable."
+main_locations = ["§13"]
+evidence_classes = ["CT", "ST"]
+implementations = ["Contract test"]
+
+[[invariant]]
+id = "WDB-WAL-005"
+class = "HARD"
+statement = "Publication berücksichtigt Datei- und Verzeichnissync pro Plattform."
+main_locations = ["§13"]
+evidence_classes = ["CR"]
+implementations = ["CP, CR"]
+
+[[invariant]]
+id = "WDB-REC-001"
+class = "HARD"
+statement = "Recovery macht nur vollständig verifizierten committed Präfix sichtbar."
+main_locations = ["§14"]
+evidence_classes = ["FZ", "CR"]
+implementations = ["CR, FZ"]
+
+[[invariant]]
+id = "WDB-REC-002"
+class = "HARD"
+statement = "Uncommitted Tail wird niemals als Commit interpretiert."
+main_locations = ["§14"]
+evidence_classes = ["CR"]
+implementations = ["CR"]
+
+[[invariant]]
+id = "WDB-REC-003"
+class = "HARD"
+statement = "Korruption im sicheren Bereich wird nicht automatisch repariert."
+main_locations = ["§14"]
+evidence_classes = ["PT", "CR", "E2E"]
+implementations = ["Corruption E2E"]
+
+[[invariant]]
+id = "WDB-REC-004"
+class = "HARD"
+statement = "Recovery ist über wiederholte Abstürze idempotent."
+main_locations = ["§14"]
+evidence_classes = ["CR", "ST"]
+implementations = ["Nested crash test"]
+
+[[invariant]]
+id = "WDB-REC-005"
+class = "HARD"
+statement = "Salvage überschreibt nie das Original und berichtet Verluste."
+main_locations = ["§14"]
+evidence_classes = ["E2E"]
+implementations = ["E2E"]
+
+[[invariant]]
+id = "WDB-BKP-001"
+class = "HARD"
+statement = "ExactDatabaseBackup enthält alle für den Daten-/Schemasnapshot erforderlichen Bytes und History."
+main_locations = ["§15.1"]
+evidence_classes = ["DF", "CR", "ST"]
+implementations = ["Restore DF"]
+
+[[invariant]]
+id = "WDB-BKP-002"
+class = "HARD"
+statement = "Backup gilt erst nach Ziel-Verify als erfolgreich."
+main_locations = ["§15.1"]
+evidence_classes = ["PT", "CR", "ST"]
+implementations = ["Corruption test"]
+
+[[invariant]]
+id = "WDB-BKP-003"
+class = "HARD"
+statement = "Restore publiziert nur in ein leeres Ziel und erst nach Recovery/Verify."
+main_locations = ["§15.1"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-BKP-004"
+class = "HARD"
+statement = "Backup-Digest beweist Integrität; Authentizität benötigt separat MAC oder Signatur."
+main_locations = ["§15.1"]
+evidence_classes = ["CT", "ST"]
+implementations = ["CT, tamper tests"]
+
+[[invariant]]
+id = "WDB-BKP-005"
+class = "HARD"
+statement = "ExactDatabaseBackup und AuditCompleteBackup sind getrennte Profile; fehlende Auditdaten werden ausdrücklich als `audit_scope=Excluded` manifestiert."
+main_locations = ["§15.1"]
+evidence_classes = ["DF", "CT", "CR", "ST"]
+implementations = ["CT, restore DF"]
+
+[[invariant]]
+id = "WDB-EXP-001"
+class = "HARD"
+statement = "Logical Export manifestiert Scope und ausgelassene Datenklassen."
+main_locations = ["§15.2"]
+evidence_classes = ["CT"]
+implementations = ["CT"]
+
+[[invariant]]
+id = "WDB-EXP-002"
+class = "HARD"
+statement = "Import remappt IDs nur über expliziten protokollierten Plan."
+main_locations = ["§15.2"]
+evidence_classes = ["PT", "E2E"]
+implementations = ["PT, E2E"]
+
+[[invariant]]
+id = "WDB-PRG-001"
+class = "HARD"
+statement = "Purge 1.0 ist Offline-Rewrite, kein In-place-History-Umschreiben."
+main_locations = ["§15.3"]
+evidence_classes = ["CT", "E2E"]
+implementations = ["E2E, CT"]
+
+[[invariant]]
+id = "WDB-PRG-002"
+class = "HARD"
+statement = "Secure Erase wird für SSD/COW/Backups nicht behauptet."
+main_locations = ["§15.3"]
+evidence_classes = ["ST"]
+implementations = ["Documentation test"]
+
+[[invariant]]
+id = "WDB-API-001"
+class = "HARD"
+statement = "Streamende ist `None`; Konstruktion-, Item-, Cancel- und Budgetfehler sind getrennt."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["UT"]
+implementations = ["API UT"]
+
+[[invariant]]
+id = "WDB-API-002"
+class = "HARD"
+statement = "Paginationcursor bindet Snapshot und Queryhash."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["PT", "E2E"]
+implementations = ["PT, E2E"]
+
+[[invariant]]
+id = "WDB-API-003"
+class = "HARD"
+statement = "Ungeordnete Resultate erhalten kanonische Ordnung."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["PT", "CT"]
+implementations = ["PT, CT"]
+
+[[invariant]]
+id = "WDB-API-004"
+class = "HARD"
+statement = "Unvollständige Aggregation wird nie als vollständig markiert."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["E2E", "PF"]
+implementations = ["Budget E2E"]
+
+[[invariant]]
+id = "WDB-API-005"
+class = "HARD"
+statement = "Cursor bindet Snapshot, QueryHash und EngineSession und verfällt beim Engine-Neustart."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["E2E", "ST"]
+implementations = ["E2E, key rotation tests"]
+
+[[invariant]]
+id = "WDB-API-006"
+class = "HARD"
+statement = "Cursorwire enthält ausschließlich public-safe Daten; sensitiver Payload bleibt im bounded Session-State."
+main_locations = ["§31.5"]
+evidence_classes = ["FZ", "NI"]
+implementations = ["NI, FZ"]
+
+[[invariant]]
+id = "WDB-API-007"
+class = "HARD"
+statement = "Cursor bindet Principal, effektive Capabilities, SecurityEpoch, Snapshot, QueryHash, Session und Expiry."
+main_locations = ["§16", "§31.5"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["NI, E2E"]
+
+[[invariant]]
+id = "WDB-API-008"
+class = "HARD"
+statement = "AuthorizationNow und SecurityEpoch werden vor jeder Seite neu geprüft; relevante Änderung invalidiert den Cursor."
+main_locations = ["§31.5"]
+evidence_classes = ["SM", "NI"]
+implementations = ["NI, SM"]
+
+[[invariant]]
+id = "WDB-API-009"
+class = "HARD"
+statement = "Öffentliche Cursorfehler vereinheitlichen unbekannt, abgelaufen, manipuliert und security-invalidiert, wenn Differenzierung leaken würde."
+main_locations = ["§31.5"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-SEC-001"
+class = "HARD"
+statement = "Perspective ist kein Security Principal."
+main_locations = ["§33"]
+evidence_classes = ["CF", "NI"]
+implementations = ["CF, NI"]
+
+[[invariant]]
+id = "WDB-SEC-002"
+class = "HARD"
+statement = "Authorization erfolgt vor Redaction und Resolution."
+main_locations = ["§17", "§33"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-SEC-003"
+class = "HARD"
+statement = "Unsichtbare Records beeinflussen öffentliche Shape/Codes/Counts/Explain nicht."
+main_locations = ["§17", "§33"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-SEC-004"
+class = "HARD"
+statement = "Graphsuche exponiert weder versteckte Knoten noch versteckte Kantenzahlen."
+main_locations = ["§17", "§33"]
+evidence_classes = ["NI"]
+implementations = ["NI"]
+
+[[invariant]]
+id = "WDB-SEC-005"
+class = "HARD"
+statement = "Historical Permission Mode ist explizit; Default ist AuthorizationNow."
+main_locations = ["§33"]
+evidence_classes = ["NI"]
+implementations = ["API, NI"]
+
+[[invariant]]
+id = "WDB-ERR-001"
+class = "HARD"
+statement = "`Display`, `Debug`, `Hash`, `Eq`, `Ord`, `Drop` haben keine fachlichen Side Effects."
+main_locations = ["§5.2"]
+evidence_classes = ["UT", "ST"]
+implementations = ["Policy, UT"]
+
+[[invariant]]
+id = "WDB-ERR-002"
+class = "HARD"
+statement = "Öffentliche Errors enthalten stabile Codes und keine geheimen Ursachen."
+main_locations = ["§5"]
+evidence_classes = ["CT", "NI"]
+implementations = ["Snapshot, NI"]
+
+[[invariant]]
+id = "WDB-ERR-003"
+class = "HARD"
+statement = "`source()` erhält interne Ursachen ohne sie öffentlich zu serialisieren."
+main_locations = ["§5"]
+evidence_classes = ["UT"]
+implementations = ["UT"]
+
+[[invariant]]
+id = "WDB-ERR-004"
+class = "HARD"
+statement = "`Debug` öffentlicher/operativer Errors respektiert dieselbe Leak-Grenze wie `Display`."
+main_locations = ["§5"]
+evidence_classes = ["CT", "NI"]
+implementations = ["Snapshot, canary NI"]
+
+[[invariant]]
+id = "WDB-ERR-005"
+class = "HARD"
+statement = "Security-, Recovery-, Retry- und Public-API-Mappings sind exhaustive und besitzen keinen semantischen Catch-all."
+main_locations = ["§5.4"]
+evidence_classes = ["CF", "CT", "ST"]
+implementations = ["Compile/API tests"]
+
+[[invariant]]
+id = "WDB-ERR-006"
+class = "HARD"
+statement = "Niedrige Errors enthalten Error Facts; SuggestedAction/RecoveryPolicy wird an höherer Boundary entschieden."
+main_locations = ["§5"]
+evidence_classes = ["CT", "ST"]
+implementations = ["Type/API tests"]
+
+[[invariant]]
+id = "WDB-OBS-001"
+class = "HARD"
+statement = "Telemetriefehler blockieren keine Domainoperation."
+main_locations = ["§18.1"]
+evidence_classes = ["ST"]
+implementations = ["Fault test"]
+
+[[invariant]]
+id = "WDB-OBS-002"
+class = "HARD"
+statement = "Logs enthalten standardmäßig keine Values, Querytexte, Pfade oder Principalnamen."
+main_locations = ["§18.1"]
+evidence_classes = ["PT", "NI"]
+implementations = ["Capture/NI"]
+
+[[invariant]]
+id = "WDB-OBS-003"
+class = "HARD"
+statement = "Kein Sync-/Span-Guard wird über `.await` gehalten."
+main_locations = ["§6"]
+evidence_classes = ["ST"]
+implementations = ["Clippy/custom lint"]
+
+[[invariant]]
+id = "WDB-OBS-004"
+class = "HARD"
+statement = "Nicht klassifizierte Diagnosewerte sind `Omitted`; `Shown` und `Hashed` sind opt-in."
+main_locations = ["§18.1"]
+evidence_classes = ["PT", "NI"]
+implementations = ["Capture/NI"]
+
+[[invariant]]
+id = "WDB-AUD-001"
+class = "HARD"
+statement = "Durable-Audit-Policyaktionen sind fail-closed."
+main_locations = ["§33"]
+evidence_classes = ["CR"]
+implementations = ["Fault/CR"]
+
+[[invariant]]
+id = "WDB-AUD-002"
+class = "HARD"
+statement = "Audit und Telemetrie besitzen getrennte Retention und Berechtigungen."
+main_locations = ["§33"]
+evidence_classes = ["E2E"]
+implementations = ["E2E"]
+
+[[invariant]]
+id = "WDB-AUD-003"
+class = "HARD"
+statement = "Auditpflichtige Domain Action und Required Audit Record erreichen atomar denselben Commitpoint."
+main_locations = ["§18.2", "§33"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-AUD-004"
+class = "HARD"
+statement = "Reines Raw-Read-Audit verwendet eigene AuditSequence/WAL und erzeugt keine WorldDB-Datenrevision."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["CT", "CR"]
+implementations = ["CT, CR"]
+
+[[invariant]]
+id = "WDB-AUD-005"
+class = "HARD"
+statement = "Vor jeder Raw-Read-Seitenausgabe ist RawReadAttempt durable; Auditfehler blockiert Ausgabe."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-AUD-006"
+class = "HARD"
+statement = "RawReadAttempt bindet Principal, Scope, Snapshot, SecurityEpoch und PageOrdinal ohne sensitive Nutzdaten."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["CT", "NI"]
+implementations = ["NI, CT"]
+
+[[invariant]]
+id = "WDB-AUD-007"
+class = "HARD"
+statement = "Retries besitzen neue AuditOperationId, behalten ClientRequestId und bleiben als Mehrfachversuche sichtbar."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-AUD-008"
+class = "HARD"
+statement = "Auditwriter ist serialisiert, hält keinen Datenwriter über I/O und wird vor Raw-Reads recovered."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["SM", "CR"]
+implementations = ["SM, CR"]
+
+[[invariant]]
+id = "WDB-AUD-009"
+class = "HARD"
+statement = "Korruption im committed Auditpräfix sperrt auditpflichtige Operationen und wird nicht automatisch repariert."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["PT", "CR", "E2E"]
+implementations = ["Corruption E2E, CR"]
+
+[[invariant]]
+id = "WDB-AUD-010"
+class = "HARD"
+statement = "Nur AuditCompleteBackup enthält und verifiziert Auditlog, Auditmanifest und deklarierte audit_safe_sequence."
+main_locations = ["§15.1", "§31.6", "§33"]
+evidence_classes = ["DF", "CR", "E2E", "ST"]
+implementations = ["Restore DF, E2E"]
+
+[[invariant]]
+id = "WDB-AUD-011"
+class = "HARD"
+statement = "Audit-Retention und -Zugriff sind policy-versioniert, separat autorisiert und selbst auditiert."
+main_locations = ["§31.6", "§33"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["E2E, NI"]
+
+[[invariant]]
+id = "WDB-AUD-012"
+class = "HARD"
+statement = "audit_safe_sequence ist vom WorldDB-safe_revision unabhängig; Raw-Read-Audit erzeugt keine künstliche Datenrevision."
+main_locations = ["§31.6"]
+evidence_classes = ["SM", "DF", "CR", "ST"]
+implementations = ["SM, restore DF"]
+
+[[invariant]]
+id = "WDB-AUD-013"
+class = "HARD"
+statement = "Restore eines AuditCompleteBackup recovered Daten- und Auditnamespace separat und gibt Auditoperationen erst nach verifizierter Auditlineage frei."
+main_locations = ["§15.1", "§31.6"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-CON-001"
+class = "HARD"
+statement = "Genau ein Writer publiziert; N Reader lesen gepinnte Snapshots."
+main_locations = ["§19"]
+evidence_classes = ["SM", "ST"]
+implementations = ["Stress, SM"]
+
+[[invariant]]
+id = "WDB-CON-002"
+class = "HARD"
+statement = "Kein Lockguard wird über I/O, Callback, IPC oder await gehalten."
+main_locations = ["§4.2", "§6"]
+evidence_classes = ["SM", "ST"]
+implementations = ["Loom/custom lint"]
+
+[[invariant]]
+id = "WDB-CON-003"
+class = "HARD"
+statement = "Queues und Pools besitzen harte Grenzen und Backpressure."
+main_locations = ["§33"]
+evidence_classes = ["PF"]
+implementations = ["Load, PF"]
+
+[[invariant]]
+id = "WDB-CON-004"
+class = "HARD"
+statement = "Cancellation nach Commitpoint macht Commit nicht teilweise rückgängig."
+main_locations = ["§4.2", "§10"]
+evidence_classes = ["CR", "E2E"]
+implementations = ["CR, E2E"]
+
+[[invariant]]
+id = "WDB-OWN-001"
+class = "HARD"
+statement = "Shared Handles werden mit `Arc::clone`/`Rc::clone` von kopierten Fachwerten unterscheidbar gemacht."
+main_locations = ["§6"]
+evidence_classes = ["ST"]
+implementations = ["Custom lint, review test"]
+
+[[invariant]]
+id = "WDB-OWN-002"
+class = "HARD"
+statement = "Clone, `'static` und Taskownership dürfen keine ungeklärte Ownership kaschieren."
+main_locations = ["§6"]
+evidence_classes = ["CF", "CT", "ST"]
+implementations = ["Policy, compile/API tests"]
+
+[[invariant]]
+id = "WDB-OWN-003"
+class = "HARD"
+statement = "Borrowed-to-Owned-Konversionen bleiben an Boundaries sichtbar."
+main_locations = ["§6"]
+evidence_classes = ["ST"]
+implementations = ["API review, custom lint"]
+
+[[invariant]]
+id = "WDB-IDX-001"
+class = "HARD"
+statement = "Indexresultate sind differential gleich zum Full-Scan-Orakel."
+main_locations = ["§20"]
+evidence_classes = ["DF"]
+implementations = ["DF"]
+
+[[invariant]]
+id = "WDB-IDX-002"
+class = "HARD"
+statement = "Staler/fehlender Index liefert nie still unvollständige Daten."
+main_locations = ["§20"]
+evidence_classes = ["DF"]
+implementations = ["Fault, DF"]
+
+[[invariant]]
+id = "WDB-IDX-003"
+class = "HARD"
+statement = "Indexgeneration wird atomar vollständig publiziert."
+main_locations = ["§20"]
+evidence_classes = ["CR"]
+implementations = ["CR"]
+
+[[invariant]]
+id = "WDB-PER-001"
+class = "GUARDED"
+statement = "Performanceoptimierung benötigt reproduzierbare Messung."
+main_locations = ["§20.2"]
+evidence_classes = ["PF", "ST"]
+implementations = ["Benchmark review"]
+
+[[invariant]]
+id = "WDB-ENG-001"
+class = "HARD"
+statement = "Core hängt nicht von UI, konkretem Storage oder Observability-Adapter ab."
+main_locations = ["§6"]
+evidence_classes = ["CR", "ST"]
+implementations = ["Crate graph lint"]
+
+[[invariant]]
+id = "WDB-ENG-002"
+class = "HARD"
+statement = "Core-Domainerrors verwenden keine universelle Error-Erasure."
+main_locations = ["§23.2"]
+evidence_classes = ["ST"]
+implementations = ["Dependency/API lint"]
+
+[[invariant]]
+id = "WDB-ENG-003"
+class = "HARD"
+statement = "Produktionspfade paniken nicht auf falliblen Fremddaten."
+main_locations = ["§4.2"]
+evidence_classes = ["FZ", "ST"]
+implementations = ["Lint, FZ"]
+
+[[invariant]]
+id = "WDB-ENG-004"
+class = "HARD"
+statement = "`unsafe` ist außerhalb des genehmigten Plattformadapters verboten."
+main_locations = ["§23", "§25"]
+evidence_classes = ["ST"]
+implementations = ["Workspace lint"]
+
+[[invariant]]
+id = "WDB-ENG-005"
+class = "HARD"
+statement = "Der kanonische Verify-Pfad ist lokal und in CI identisch."
+main_locations = ["§23", "§25"]
+evidence_classes = ["NI", "ST"]
+implementations = ["CI manifest"]
+
+[[invariant]]
+id = "WDB-ENG-006"
+class = "GUARDED"
+statement = "Lokale Lint-Ausnahme besitzt ID, Owner, Grund und Ablaufdatum."
+main_locations = ["§23", "§25"]
+evidence_classes = ["ST"]
+implementations = ["Policy test"]
+
+[[invariant]]
+id = "WDB-ENG-007"
+class = "HARD"
+statement = "Crates werden nur nach bestandenem Boundary-Gate extrahiert; der Repositorybaum ist Zielhypothese."
+main_locations = ["§23", "§25"]
+evidence_classes = ["CR", "ST"]
+implementations = ["Crate graph/policy test"]
+
+[[invariant]]
+id = "WDB-DEP-001"
+class = "HARD"
+statement = "Releasebuilds verwenden Lockfile und genehmigte Sources/Lizenzen."
+main_locations = ["§23.2", "§24"]
+evidence_classes = ["ST"]
+implementations = ["CI, SBOM"]
+
+[[invariant]]
+id = "WDB-DEP-002"
+class = "HARD"
+statement = "Dependencytypen leaken nicht unabsichtlich in stabile Public API."
+main_locations = ["§24"]
+evidence_classes = ["ST"]
+implementations = ["API diff"]
+
+[[invariant]]
+id = "WDB-EXT-001"
+class = "HARD"
+statement = "1.0 führt keinen untrusted Extensioncode in-process aus."
+main_locations = ["§21"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["E2E security"]
+
+[[invariant]]
+id = "WDB-DES-001"
+class = "HARD"
+statement = "Desktopfrontend kann Storage/Dateisystem nicht außerhalb versionierter IPC umgehen."
+main_locations = ["§34.2"]
+evidence_classes = ["NI", "E2E"]
+implementations = ["E2E security"]
+
+[[invariant]]
+id = "WDB-DES-002"
+class = "HARD"
+statement = "Core lauscht standardmäßig auf keinem Netzwerkport."
+main_locations = ["§34.2"]
+evidence_classes = ["E2E"]
+implementations = ["E2E"]
+
+[[main_rule_binding]]
+key = "MAIN-L17"
+statement = "**WDB-PHIL-001 – Erhalt relevanter Unterscheidungen [HARD]:** Eine Abstraktion darf zwei semantisch oder architektonisch relevante Zustände nur zusammenfassen, wenn nachgewiesen ist, dass dadurch keine für Resolution, History, Security, Recovery, Retry, Ownership oder Diagnose erforderliche Information verloren geht."
+invariant_ids = ["WDB-PHIL-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L73"
+statement = "- [HARD; WDB-HIS-001] Revisionsnummern steigen pro Datenbank monoton und lückenlos für veröffentlichte Commits. Reservierte, aber nicht veröffentlichte Nummern werden nicht sichtbar."
+invariant_ids = ["WDB-HIS-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L74"
+statement = "- [HARD; WDB-HIS-004] Historical Queries gegen dieselbe unveränderte Datenbank, Revision, SchemaMode, Security-Zeitbasis und denselben Query-Vertrag liefern dieselbe geordnete logische Antwort."
+invariant_ids = ["WDB-HIS-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L75"
+statement = "- [HARD; WDB-BRA-001/002] Ein Child-HistorySpace sieht den Parent ausschließlich bis einschließlich `base_revision`; spätere Parent-Commits werden nicht importiert."
+invariant_ids = ["WDB-BRA-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L76"
+statement = "- [HARD; WDB-BRA-003] Sibling-HistorySpaces sind isoliert; Austausch findet nur durch eine explizite, provenance-erhaltende Migration oder Merge-Transaktion statt."
+invariant_ids = ["WDB-BRA-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L77"
+statement = "- [HARD; WDB-BRA-004] HistorySpace-Operationen verändern keine projektweiten Schemaidentitäten."
+invariant_ids = ["WDB-BRA-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L78"
+statement = "- [HARD; WDB-TIM-001/002] World Time, Event Time, Assertion Validity und RecordedAsOf bleiben getrennte Typen. Zwischen inkompatiblen Timelines entsteht keine implizite Ordnung."
+invariant_ids = ["WDB-TIM-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L79"
+statement = "- [HARD; WDB-TIM-003] Zeitintervalle verwenden durchgehend die halb-offene Semantik `[start,end)`; ein fehlendes Ende bedeutet offen, nicht einen Sentinelwert."
+invariant_ids = ["WDB-TIM-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L91"
+statement = "Vorgesehene Semantik ist ein explizites Overlay. Jeder wirksame historische Schemastand bestimmt **genau einen** aktiven `base_layer_id`; Name, Symbol und ID dieses Layers sind Projektdaten und nicht in der Engine hardcodiert. Der bezeichnete Base-Layer besitzt den eindeutig niedrigsten `precedence_rank` aller aktiven Layer und darf nicht deprecated oder retired werden, solange er Base-Layer ist. Weitere Layer wie `campaign_override`, `scenario` oder `temporary_adjudication` sind Schema-/Projektdaten. Layer codiert weder Wissen noch Berechtigung noch Branchzugehörigkeit. [WDB-LAY-005/007/008]"
+invariant_ids = ["WDB-LAY-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L93"
+statement = "Jeder layerfähige persistierte Record trägt auch dann eine ausdrückliche `LayerId`, wenn er im Base-Layer liegt; Decoder, Import und Storage setzen niemals still den Base-Layer ein. `LayerSelection` ist die geschlossene Auswahl `BaseOnly | AllActive | Explicit(NonEmptySet<LayerId>)`. `BaseOnly` wird gegen den vom Query-Schemasnapshot bestimmten historischen `base_layer_id` aufgelöst. Ein UI oder Builder darf eine ausdrücklich gewählte Defaultaktion in `BaseOnly` übersetzen, muss aber vor Recordbau eine konkrete `LayerId` materialisieren. [WDB-LAY-009/011]"
+invariant_ids = ["WDB-LAY-009"]
+
+[[main_rule_binding]]
+key = "MAIN-L95"
+statement = "Ein Wechsel des Base-Layers ist eine atomare Schemaänderung: Der Post-Transaction-Schemastand muss wieder genau einen aktiven, eindeutig niedrigsten Base-Layer besitzen. Frühere Bezeichnungen bleiben in der Schemahistorie erhalten; bestehende Records werden weder verschoben noch umgeschrieben. Ein bisheriger Base-Layer darf erst in demselben oder einem späteren gültigen Schemastand deprecated/retired werden, nachdem die Base-Bezeichnung gewechselt wurde. [WDB-LAY-010]"
+invariant_ids = ["WDB-LAY-010"]
+
+[[main_rule_binding]]
+key = "MAIN-L120"
+statement = "- [HARD; WDB-AST-001/002] Assertions sind immutable. Schließen der World-Time-Gültigkeit, Retract und Correct erzeugen neue Records."
+invariant_ids = ["WDB-AST-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L121"
+statement = "- [HARD; WDB-PRO-001] Proposition Equality besteht exakt aus Subject, Predicate, Value und Polarity."
+invariant_ids = ["WDB-PRO-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L122"
+statement = "- [HARD; WDB-MSK-001/002/003] Masking folgt `ExactAssertion`, `Proposition`, `Slot`, wirkt nur gegen strikt niedrigere `ContextPrecedence` und erzeugt keinen Fakt."
+invariant_ids = ["WDB-MSK-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L123"
+statement = "- [HARD; WDB-RES-001] Resolution liefert `Known`, `Unknown` oder `Conflict`; technische Fehler sind separat."
+invariant_ids = ["WDB-RES-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L124"
+statement = "- [HARD; WDB-RES-004/005] `ReplacementBoundary` ist nur für `MultiValueReplace` zulässig und kann eine ausdrücklich vollständige leere Menge repräsentieren."
+invariant_ids = ["WDB-RES-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L125"
+statement = "- [HARD; WDB-RES-003] Security-Filterung erfolgt vor Masking und Resolution."
+invariant_ids = ["WDB-RES-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L129"
+statement = "- [HARD; WDB-VAL-001] Core-Werte sind Bool, Int, UInt, Decimal, String, Symbol, Entity, Time, Duration und Bytes. Null, binäre Floats, generisches JSON, Array oder Map sind keine Core-Werte."
+invariant_ids = ["WDB-VAL-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L130"
+statement = "- [HARD; WDB-VAL-002/003] Equality ist typisiert; es gibt keine versteckten Coercions. Decimal besitzt eine einzige kanonische Darstellung."
+invariant_ids = ["WDB-VAL-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L131"
+statement = "- [HARD; WDB-EPI-001/003] WorldState, Knows, Believes und Claims sind getrennte epistemische Räume; Perspective ist kein Principal."
+invariant_ids = ["WDB-EPI-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L132"
+statement = "- [HARD; WDB-EVT-001/002, WDB-TX-003] Event und Assertion sind getrennte immutable Records. Atomarer gemeinsamer Commit ist möglich, automatische Story-Inference nicht."
+invariant_ids = ["WDB-EVT-001", "WDB-TX-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L133"
+statement = "- [HARD; WDB-EVI-001, WDB-PRV-001] Evidence (`Supports`, `Contradicts`, `Documents`) und Provenance (`Corrects`, `DerivedFrom`, `ResultedFrom`) sind erklärend; sie verändern Resolution nie implizit."
+invariant_ids = ["WDB-EVI-001", "WDB-PRV-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L139"
+statement = "- [HARD; WDB-LAY-002] EpistemicMode ist keine Precedence-Rangfolge."
+invariant_ids = ["WDB-LAY-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L140"
+statement = "- [HARD; WDB-EPI-001] `Knows(P)` impliziert weder `WorldState(P)` noch umgekehrt."
+invariant_ids = ["WDB-EPI-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L141"
+statement = "- [HARD; WDB-EPI-001] `Claims(P)` impliziert weder `Believes(P)` noch umgekehrt."
+invariant_ids = ["WDB-EPI-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L142"
+statement = "- [HARD; WDB-EPI-002] `NOT Believes(P)` ist nicht `Believes(NOT P)`."
+invariant_ids = ["WDB-EPI-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L143"
+statement = "- [HARD; WDB-EPI-002] `NOT Knows(P)` ist nicht `Knows(NOT P)`."
+invariant_ids = ["WDB-EPI-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L144"
+statement = "- [HARD; WDB-EPI-002] Fehlendes `Knows(P)` ergibt Unknown und niemals automatisch `NOT Knows(P)`."
+invariant_ids = ["WDB-EPI-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L145"
+statement = "- [HARD; WDB-EPI-002] Fehlendes `Believes(P)` ergibt Unknown und niemals automatisch `NOT Believes(P)`."
+invariant_ids = ["WDB-EPI-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L146"
+statement = "- [HARD; WDB-EPI-001, WDB-PRV-003] Es gibt keine automatische Propagation zwischen epistemischen Räumen. Jede abgeleitete Übernahme benötigt einen expliziten neuen Record und `DerivedFrom`-Provenance."
+invariant_ids = ["WDB-EPI-001", "WDB-PRV-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L182"
+statement = "- [HARD; WDB-MSK-001] Mask ist keine Negation."
+invariant_ids = ["WDB-MSK-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L183"
+statement = "- [HARD; WDB-MSK-005, WDB-EVT-013] EventMask ist keine EventRetraction und cascadiert nicht zu Assertions."
+invariant_ids = ["WDB-MSK-005", "WDB-EVT-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L184"
+statement = "- [HARD; WDB-PRV-002] `Corrects` löst keine Retraction aus."
+invariant_ids = ["WDB-PRV-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L185"
+statement = "- [HARD; WDB-PRV-003/004] `ResultedFrom` und `DerivedFrom` lösen keine Cascade aus."
+invariant_ids = ["WDB-PRV-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L186"
+statement = "- [HARD; WDB-LFC-001] Close Validity ist keine Retraction."
+invariant_ids = ["WDB-LFC-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L187"
+statement = "- [HARD; WDB-LFC-001] Archive, Retract und Purge bleiben getrennte Verträge."
+invariant_ids = ["WDB-LFC-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L191"
+statement = "- [HARD; WDB-SCH-001/002] Es existiert genau eine projektweite Schemahistorie auf derselben Revisionsachse wie Daten. `SchemaMode::Historical` ist Default."
+invariant_ids = ["WDB-SCH-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L192"
+statement = "- [HARD; WDB-SCH-003] Alle Schemaidentitäten, insbesondere `PredicateId`, `EntityTypeId`, `EventKindId`, `EventRoleId`, `EventAttributeId` und `LayerId`, bleiben über `Active → Deprecated → Retired` stabil."
+invariant_ids = ["WDB-SCH-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L193"
+statement = "- [HARD; WDB-MIG-001/005/023] Migration schreibt History durch normale Transactions fort. Storage-Format-Migration und fachliche Schema-Migration bleiben getrennt."
+invariant_ids = ["WDB-MIG-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L194"
+statement = "- [HARD; WDB-MIG-002/003] Restrictive/Breaking unterstützen Dry Run; Breaking verlangt explizite Admin-Aktion und standardmäßig einen verifizierten Restore Point."
+invariant_ids = ["WDB-MIG-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L195"
+statement = "- [HARD; WDB-MIG-004/019] Bei Multi-Transaction-Migrationen ist jeder veröffentlichte Zwischenstand schema- und referenzgültig sowie historisch lesbar; Expand → Migrate → Contract ist der Defaultablauf."
+invariant_ids = ["WDB-MIG-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L232"
+statement = "- [HARD; WDB-ID-002] Die binäre Domain-ID ist exakt 16 Byte; Wire-Text ist kanonisches lowercase UUID-Format ohne alternative Kurzform."
+invariant_ids = ["WDB-ID-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L233"
+statement = "- [HARD; WDB-ID-002, WDB-SEN-001] Nil/Zero sowie ausschließlich `ff` sind ungültig. Decoder und `TryFrom` weisen sie ab; sie stehen nie für „nicht vorhanden“."
+invariant_ids = ["WDB-ID-002", "WDB-SEN-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L234"
+statement = "- [HARD; WDB-ID-003, WDB-TYP-001] Eingelesene IDs werden nicht allein wegen zeitlicher Unplausibilität abgelehnt. Generatorversion/Variante und verbotene Sentinelwerte werden validiert."
+invariant_ids = ["WDB-ID-003", "WDB-TYP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L235"
+statement = "- [HARD; WDB-HIS-001, WDB-SEN-001] `Revision(u64)` beginnt bei 0 als leerer Genesis-Stand; der erste Commit veröffentlicht 1. `Revision::MAX` ist kein Sentinel und wird wegen Overflowreserve nicht vergeben."
+invariant_ids = ["WDB-HIS-001", "WDB-SEN-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L280"
+statement = "Fremddaten entstehen ausschließlich über validierende `TryFrom`, `FromStr` oder Decoder. Serde wird nur an Adaptergrenzen eingesetzt; Domain-Typen dürfen nicht pauschal `Deserialize` ableiten, wenn dadurch Konstruktorinvarianten umgangen würden. [WDB-TYP-001]"
+invariant_ids = ["WDB-TYP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L292"
+statement = "- [HARD; WDB-ENG-003] Produktionspfade dürfen auf Fremddaten, Platte, Netzwerk, IPC, Benutzerwerten, Uhr, Zufall, FFI, Parsern, Decodern oder Indexzugriffen kein `unwrap`, `expect`, `panic!`, `unreachable!` oder ungeprüftes `[]` verwenden."
+invariant_ids = ["WDB-ENG-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L294"
+statement = "- [HARD; WDB-WIR-003, WDB-ENG-003] Release-Profile aktivieren Overflow Checks. Arithmetik an Größen, Offsets, Revisionen und Budgets nutzt checked/saturating Operationen nur gemäß fachlichem Vertrag; Saturation darf keinen Fehler verbergen."
+invariant_ids = ["WDB-WIR-003", "WDB-ENG-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L295"
+statement = "- [HARD; WDB-WIR-003] Parser besitzen harte Eingabe-, Tiefen-, Record-, String- und Allokationsgrenzen vor Allokation."
+invariant_ids = ["WDB-WIR-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L296"
+statement = "- [HARD; WDB-CON-002, WDB-ENG-003] Wenn das gewählte Synchronisationsprimitive Poisoning oder einen vergleichbaren invalidierten Zustand kennt, darf dieser Zustand nicht still ignoriert oder durch ungeprüften Zugriff auf den inneren Wert umgangen werden. Die konkrete Fehlerform bleibt adapter-/primitive-spezifisch und wird an der Concurrency-Boundary klassifiziert."
+invariant_ids = ["WDB-CON-002", "WDB-ENG-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L297"
+statement = "- [HARD; WDB-CON-004, WDB-ENG-003] Join-/Task-Panics werden beobachtet und in `TaskFailure::Panicked` übersetzt. Ein Writer-Task-Panic versetzt die Datenbank in `NeedsRestart`, bis Recovery den Zustand bestätigt."
+invariant_ids = ["WDB-CON-004", "WDB-ENG-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L322"
+statement = "Alle Klassifikations- und Darstellungsmethoden sind pure und loggen nicht. `Display` ist kurz, deterministisch und frei von Geheimnissen. Für öffentliche und operative WorldDB-Errors MUSS `Debug` dieselbe Leak-Sicherheitsgrenze wie `Display` einhalten; technische Ursachen bleiben über intern kontrollierte `source()`-Ketten und ausdrücklich autorisierte Diagnoseexporte verfügbar. Interne Debugtypen dürfen detaillierter sein, dürfen aber keine Public-/Player-Grenze überschreiten. [WDB-ERR-001/002/003/004]"
+invariant_ids = ["WDB-ERR-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L330"
+statement = "Ein Abbruch nach möglichem Commitpoint liefert `CommitError::UnknownCommitOutcome { operation_id }`. Der Client MUSS `commit_status(operation_id)` abfragen und darf denselben logischen Auftrag nur mit derselben OperationId erneut senden. Eine neue OperationId könnte doppelte fachliche Wirkung erzeugen und ist verboten, bis der Status `NotCommitted` beweist. [WDB-OCC-005, WDB-TX-004/005]"
+invariant_ids = ["WDB-OCC-005", "WDB-TX-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L336"
+statement = "Security-, Recovery-, Retry- und Public-API-Mappings verwenden exhaustive Matches. Neue Errorvarianten MÜSSEN dort eine bewusste Compile-Time-Entscheidung erzwingen; `_`, `..` oder semantisch pauschale Catch-all-Arme sind an diesen Grenzen verboten. Nur protokollfremde, numerisch unbekannte Wirecodes dürfen in eine ausdrücklich benannte `UnknownExternalCode`-Variante fallen. [WDB-ERR-005]"
+invariant_ids = ["WDB-ERR-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L344"
+statement = "- [HARD; WDB-OWN-001, WDB-CON-002] Kein öffentliches `Arc<Mutex<WorldDb>>`."
+invariant_ids = ["WDB-OWN-001", "WDB-CON-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L345"
+statement = "- [HARD; WDB-OWN-001] `Rc` ist nur in eindeutig threadlokalen UI-/Parserstrukturen zulässig und darf keine Core-Portgrenze überschreiten."
+invariant_ids = ["WDB-OWN-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L346"
+statement = "- [HARD; WDB-OWN-001/002] `Arc` drückt geteilte langlebige Ownership aus, nicht Borrow-Checker-Flucht. Jede Arc-Stelle nennt den Owner-Lifecycle."
+invariant_ids = ["WDB-OWN-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L347"
+statement = "- [HARD; WDB-OWN-001] Gemeinsame Ownership wird als `Arc::clone(&handle)` beziehungsweise `Rc::clone(&handle)` sichtbar gemacht. Ein semantisch mehrdeutiges `handle.clone()` ist hierfür nicht zulässig."
+invariant_ids = ["WDB-OWN-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L348"
+statement = "- [HARD; WDB-OWN-002] Plain `.clone()` ist kein Reparaturwerkzeug für Move-Fehler, zu lange Borrows, ungeklärte Taskownership oder künstliches `'static`. Jede nichttriviale Clone-Stelle muss als Fachwertkopie, Snapshot/DTO-Kopie oder begründete Boundary-Konversion einordenbar sein."
+invariant_ids = ["WDB-OWN-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L349"
+statement = "- [HARD; WDB-OWN-003] Borrowed-to-Owned-Übergänge werden an der Boundary mit dem spezifischen Vorgang (`to_owned`, `to_vec`, `to_path_buf` oder Domainkonstruktor) sichtbar. Sie dürfen nicht in generischen Helpern verborgen werden."
+invariant_ids = ["WDB-OWN-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L350"
+statement = "- [HARD; WDB-CON-002] Mutex/RwLock schützen kleine, benannte Zustände. Über Storage-I/O, Callback, IPC oder `.await` wird kein Guard gehalten."
+invariant_ids = ["WDB-CON-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L351"
+statement = "- [HARD; WDB-ENG-001, WDB-OBS-003] Der synchrone Domain-/Resolution-Core führt kein Async aus. Async-Adapter übernehmen I/O, Cancellation und Backpressure."
+invariant_ids = ["WDB-ENG-001", "WDB-OBS-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L408"
+statement = "- [HARD; WDB-RES-002] Kein Last-Write-Wins."
+invariant_ids = ["WDB-RES-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L409"
+statement = "- [HARD; WDB-OCC-004] Automatischer Retry ist nur für als `ReplaySafe` markierte interne Transaktionen ohne externe Side Effects, mit unverändertem autoritativem Input und maximal zwei Versuchen erlaubt."
+invariant_ids = ["WDB-OCC-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L410"
+statement = "- [HARD; WDB-OCC-004] Benutzertransaktionen und Migrationen werden standardmäßig manuell auf neuer Basis wiederholt."
+invariant_ids = ["WDB-OCC-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L411"
+statement = "- [HARD; WDB-OCC-005, WDB-TX-004] Retry benutzt dieselbe fachliche Absicht, aber eine neue TransactionId; OperationId bleibt gleich, bis definitiv NotCommitted."
+invariant_ids = ["WDB-OCC-005", "WDB-TX-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L419"
+statement = "- [HARD; WDB-SNP-001] Snapshotdaten und Schema sind gemeinsam gepinnt; Current-Schema-Abfragen pinnen die explizit gewählte aktuelle SchemaRevision zusätzlich."
+invariant_ids = ["WDB-SNP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L420"
+statement = "- [HARD; WDB-SNP-002] Ein Snapshot sieht keine späteren Commits und wird nicht still auf einen neueren Stand verschoben."
+invariant_ids = ["WDB-SNP-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L421"
+statement = "- [HARD; WDB-SNP-003] Reclamation entfernt kein Segment, das durch Snapshot, Backup, Recovery-Checkpoint oder Export gepinnt ist."
+invariant_ids = ["WDB-SNP-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L422"
+statement = "- [HARD; WDB-SNP-004, WDB-CON-004] Prozessshutdown invalidiert neue Reads, wartet begrenzt auf aktive Leases und bricht kooperativ ab; borrowed Daten werden niemals nach Unmap exponiert."
+invariant_ids = ["WDB-SNP-004", "WDB-CON-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L530"
+statement = "`ExactDatabaseBackup` enthält Formatversion, DatabaseId, Manifest, alle referenzierten Segmente, erforderlichen WAL-Präfix, Schemahistorie, OperationId-Dedup und einen Inventarbericht. Der Begriff **exact** bezieht sich ausschließlich auf den vollständigen, wiederherstellbaren WorldDB-Daten-/Schema-Snapshot; er behauptet noch keine Auditvollständigkeit. **MUST Integrität:** Jede Inventarposition und das Gesamtinventar besitzen einen kryptographischen Digest; Verify erkennt Änderung, Auslassung und Vertauschung. **OPTIONAL/Policy-dependent Authentizität:** Ein MAC oder eine digitale Signatur bindet das Inventar an einen Schlüssel/Unterzeichner. Ein bloßer Digest beweist keine Herkunft. Schlüsselidentität, Algorithmus und Signaturstatus werden getrennt vom Digest gespeichert. Ein Hot Backup pinnt einen Snapshot und kopiert nur dessen geschlossene Generationen; aktive WAL-Daten werden über einen Backend-Checkpoint geschlossen. Backup-Erfolg erfordert vollständige Verify-Prüfung des Ziels. [WDB-BKP-001/002/004/005]"
+invariant_ids = ["WDB-BKP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L532"
+statement = "`AuditCompleteBackup` ist ein `ExactDatabaseBackup` plus vollständig verifiziertes Auditmanifest und alle Auditsegmente bis zu einer deklarierten `audit_safe_sequence`. `safe_revision` und `audit_safe_sequence` sind unabhängige Wasserstände; insbesondere erzeugt ein Raw-Read-Audit keine Datenrevision. Eine Sicherung ohne Auditdaten bleibt ein exaktes Datenbankbackup, MUSS aber `audit_scope = Excluded` tragen und darf für Policies mit Auditkontinuität nicht als auditvollständig gelten. [WDB-AUD-010/012, WDB-BKP-005]"
+invariant_ids = ["WDB-AUD-010", "WDB-BKP-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L534"
+statement = "Restore schreibt in ein leeres Ziel, prüft Inventar und Kompatibilität, führt Recovery aus und publiziert erst danach. Bei `AuditCompleteBackup` werden Daten- und Auditnamespace mit ihren jeweiligen Recoveryregeln unabhängig verifiziert; die Freigabe auditpflichtiger Operationen erfolgt erst, wenn Auditkette, `audit_safe_sequence` und Lineage konsistent sind. In-place Überschreiben ist kein Restoremodus. Eine bewusst als Klon geöffnete Sicherung erhält neue DatabaseId; Disaster-Recovery kann dieselbe ID behalten, verlangt aber Exklusivität, damit Original und Restore nicht später zusammengeführt werden. [WDB-BKP-003, WDB-AUD-013]"
+invariant_ids = ["WDB-BKP-003", "WDB-AUD-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L563"
+statement = "Der Cursorzustand bindet `PrincipalId`, den Fingerprint des effektiven Capability-Sets, `SecurityEpoch`, `SnapshotId`, `QueryHash`, `EngineSessionId`, den internen SortKey und Expiry. Vor **jeder** Seite werden `AuthorizationNow`, aktuelle Principal-/Capability-Daten und `SecurityEpoch` erneut geprüft. Jede relevante Policy-, Principal- oder Capability-Änderung invalidiert den Cursor mit einem einheitlichen `CursorInvalidated`; die Abfrage läuft niemals still unter alten Rechten weiter. Auch unsichtbare IDs dürfen nicht durch Länge, Fehlertyp oder Tokendecodierung erkennbar werden. [WDB-API-007/008/009]"
+invariant_ids = ["WDB-API-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L575"
+statement = "- [HARD; WDB-SEC-003] Unsichtbare Assertions, Events, Masken, Evidence oder Provenance dürfen Ergebnis, Conflict-Details, Explain, Search-Snippets, Cursor, Counts oder Fehlermeldungen nicht unterscheidbar beeinflussen."
+invariant_ids = ["WDB-SEC-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L576"
+statement = "- [HARD; WDB-SEC-004, WDB-PRV-010] Graph Traversal expandiert nur sichtbare Kanten und Knoten. Verdeckte Knoten werden nicht als „hidden count“ verraten."
+invariant_ids = ["WDB-SEC-004", "WDB-PRV-010"]
+
+[[main_rule_binding]]
+key = "MAIN-L577"
+statement = "- [HARD; WDB-SEC-003] COUNT/EXISTS zählen nur sichtbare resolved Results; Optimierungen müssen non-interference beweisen."
+invariant_ids = ["WDB-SEC-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L578"
+statement = "- [HARD; WDB-SEC-002] Authorization erfolgt vor Redaction. Redaction macht unberechtigten Zugriff nicht erlaubt."
+invariant_ids = ["WDB-SEC-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L600"
+statement = "Wenn eine Policy durable Audit verlangt, bilden **Domain Action + Required Audit Record eine gemeinsame atomare Durability-Einheit**. Eine auditpflichtige Fachaktion darf weder als committed sichtbar noch als erfolgreich quittiert werden, wenn ihr verpflichtender Auditrecord nicht denselben Commitpoint erreicht hat. Das kanonische Backend codiert beide im selben WAL-Prepare und deckt beide durch denselben Commitmarker/zweiten WAL-Sync ab. Ein alternatives Backend muss eine äquivalente All-or-Nothing-Garantie beweisen; „best effort nachträglich schreiben“ ist unzulässig. [WDB-AUD-003]"
+invariant_ids = ["WDB-AUD-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L694"
+statement = "`cargo deny check` prüft Advisories, Licenses, Bans und Sources. Zusätzlich prüfen `cargo metadata`, Featurematrix und ein eigener Policytest: keine verbotenen Crates (`anyhow`, `thiserror`, `failure`) in WorldDB-Core-Verträgen; CLI/Desktop dürfen `anyhow` nur über genehmigte Ausnahme als oberste Präsentationsschicht nutzen, standardmäßig bleibt es workspaceweit gebannt. `Box<dyn Error>` ist an öffentlichen Domainports verboten. [WDB-ENG-002, WDB-DEP-001]"
+invariant_ids = ["WDB-ENG-002", "WDB-DEP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L706"
+statement = "Jede Dependency braucht Boundarynutzen, Maintainer-/Releasegesundheit, Lizenzkompatibilität, Advisorylage, transitive Größe, MSRV, Unsafe-Anteil und Exit-Plan. Build Dependencies und Proc-Macros erhalten höhere Prüfung, da sie beim Build Code ausführen. Git Dependencies sind in Releases verboten; Registry und Hash müssen im Lockfile stehen. [WDB-DEP-001]"
+invariant_ids = ["WDB-DEP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L710"
+statement = "Default Features fremder Crates sind deaktiviert, sofern nicht vollständig benötigt und geprüft. Dependency-Typen dürfen nicht unabsichtlich Teil öffentlicher API werden. Zulässige Lizenzen und Ausnahmen stehen zentral; unbekannte/mehrdeutige Lizenz stoppt Release. SBOM und Advisory-Snapshot sind Releaseartefakte. [WDB-DEP-001/002]"
+invariant_ids = ["WDB-DEP-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L890"
+statement = "- `WDB-PHIL-001` als übergreifende Erhaltungsinvariante;"
+invariant_ids = ["WDB-PHIL-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L907"
+statement = "Revision ist Transaction Time, keine Precedence | Technische Gesamtspezifikation §§2.1 und 8; `WDB-HIS-001–004` | Preserved | –"
+invariant_ids = ["WDB-HIS-001", "WDB-HIS-002", "WDB-HIS-003", "WDB-HIS-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L908"
+statement = "Child erbt Parent nur bis base_revision | Technische Gesamtspezifikation §§2.1.1 und 9; `WDB-BRA-001–002` | Preserved | ADR-021 Terminologie"
+invariant_ids = ["WDB-BRA-001", "WDB-BRA-002"]
+
+[[main_rule_binding]]
+key = "MAIN-L917"
+statement = "EventMask keine Cascade | Technische Gesamtspezifikation §2.3.2; `WDB-MSK-005`, `WDB-EVT-003` | Preserved | –"
+invariant_ids = ["WDB-MSK-005", "WDB-EVT-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L960"
+statement = "10. **Semantikverlust durch Vereinfachung:** kein bekannter verbleibender Verlust; künftige Änderungen unterliegen WDB-PHIL-001."
+invariant_ids = ["WDB-PHIL-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L998"
+statement = "Die Regeln dieses Abschnitts sind die präzise normative Ausfaltung der zuvor komprimierten §§2, 3, 8–10 und 16–18. Bei unterschiedlicher Präzision gilt dieser Abschnitt; ein echter Widerspruch ist ein Release-Blocker und darf nicht durch diese Präzedenzregel verdeckt werden. [WDB-PHIL-001]"
+invariant_ids = ["WDB-PHIL-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L1006"
+statement = "EVT-01 | HARD | Jede Participant-Rolle muss im historischen EventKind-Schema erlaubt sein. | WDB-EVT-004"
+invariant_ids = ["WDB-EVT-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L1007"
+statement = "EVT-02 | HARD | Role Cardinality wird pro Rolle als `min..=max` validiert; fehlende Required-Rollen und Überschreitung sind StructuralValidationErrors. | WDB-EVT-005"
+invariant_ids = ["WDB-EVT-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1008"
+statement = "EVT-03 | HARD | Dasselbe `(role_id, entity_id)`-Paar darf in einem Event höchstens einmal vorkommen; Decoder weist Duplikate ab. | WDB-EVT-006"
+invariant_ids = ["WDB-EVT-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1009"
+statement = "EVT-04 | HARD | Participant-Reihenfolge besitzt keine Semantik und wird kanonisch sortiert. | WDB-EVT-006"
+invariant_ids = ["WDB-EVT-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1010"
+statement = "EVT-05 | HARD | EventKindDefinition bestimmt erlaubte/erforderliche Rollen, Attribute, Attributtypen, Cardinalities und Event-Time-Constraint. | WDB-EVT-007"
+invariant_ids = ["WDB-EVT-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L1011"
+statement = "EVT-06 | HARD | Nicht deklarierte Attribute, fehlende Required-Attribute und typwidrige Attribute werden abgewiesen. | WDB-EVT-007"
+invariant_ids = ["WDB-EVT-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L1012"
+statement = "EVT-07 | HARD | `EventTime` ist exakt `Instant(WorldTime)` oder `Span { start: WorldTime, end: Option<WorldTime> }`; geschlossene Spans sind `[start,end)` und verlangen `start < end`. | WDB-EVT-008"
+invariant_ids = ["WDB-EVT-008"]
+
+[[main_rule_binding]]
+key = "MAIN-L1013"
+statement = "EVT-08 | HARD | Ein offener Span hat `end=None`; nur `EventSpanClosure` darf ihn historisch schließen. | WDB-EVT-008"
+invariant_ids = ["WDB-EVT-008"]
+
+[[main_rule_binding]]
+key = "MAIN-L1014"
+statement = "EVT-09 | HARD | Gleiche WorldTime erzeugt weder Reihenfolge noch Identität noch Deduplizierung. | WDB-EVT-009"
+invariant_ids = ["WDB-EVT-009"]
+
+[[main_rule_binding]]
+key = "MAIN-L1015"
+statement = "EVT-10 | HARD | Ähnlich aussehende Events bleiben verschiedene Records; die Engine dedupliziert nicht automatisch. | WDB-EVT-010"
+invariant_ids = ["WDB-EVT-010"]
+
+[[main_rule_binding]]
+key = "MAIN-L1016"
+statement = "EVT-11 | HARD | Eine Witness-/Observer-Rolle erzeugt weder `Knows` noch `Believes` noch `Claims`. | WDB-EVT-011"
+invariant_ids = ["WDB-EVT-011"]
+
+[[main_rule_binding]]
+key = "MAIN-L1017"
+statement = "EVT-12 | HARD | Subjektive Erinnerung oder Behauptung wird als Assertion im passenden EpistemicMode modelliert, nicht als perspektivisches Event. | WDB-EVT-011"
+invariant_ids = ["WDB-EVT-011"]
+
+[[main_rule_binding]]
+key = "MAIN-L1018"
+statement = "EVT-13 | HARD | Eventkorrektur mutiert den Eventrecord nicht; sie erzeugt einen neuen Event und eine explizite `Corrects`-Kante. Eine Retraction ist separat und nicht impliziert. | WDB-EVT-012"
+invariant_ids = ["WDB-EVT-012"]
+
+[[main_rule_binding]]
+key = "MAIN-L1019"
+statement = "EVT-14 | HARD | `EventMask` ist weder `EventRetraction` noch Rücknahme früherer Eventwirkungen. | WDB-EVT-013"
+invariant_ids = ["WDB-EVT-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L1020"
+statement = "EVT-15 | HARD | EventMasking cascadiert weder zu Assertions noch zu ResultedFrom-Nachfolgern. | WDB-EVT-013"
+invariant_ids = ["WDB-EVT-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L1034"
+statement = "Die kanonische Persistenz kennt für zeitliche Richtung ausschließlich `Before`: API-/Importinput `After(A,B)` wird vor Equality, Hashing, Duplikatprüfung und Persistenz zu `Before(B,A)` normalisiert; ein persistierter `After`-Tag ist nicht zulässig. `SameTime(A,B)` wird als ungeordnetes Paar `(min(EventId), max(EventId))` kanonisiert. `SameTime` bildet eine Äquivalenzrelation für Validierung und Abfragen, ohne dass transitive Kanten als Records materialisiert werden müssen. `Causes` bleibt gerichtet. [WDB-EVT-019–021]"
+invariant_ids = ["WDB-EVT-019", "WDB-EVT-020", "WDB-EVT-021"]
+
+[[main_rule_binding]]
+key = "MAIN-L1036"
+statement = "Self-Relations sind für alle vier Eingabearten ungültig. Eine normalisierte aktive Duplikatkante wird abgewiesen. Der `Before`-Graph wird nach Kollabieren jeder `SameTime`-Komponente geprüft: Ein `Before` innerhalb derselben Komponente, ein `SameTime` zwischen Knoten mit einem `Before`-Pfad in irgendeine Richtung sowie eine neue `Before`-Kante, die einen Rückpfad erzeugt, sind `EventRelationConflict`. Damit können `Before(A,B)`, `After(A,B)` und `SameTime(A,B)` nicht widersprüchlich koexistieren. [WDB-EVT-016/017/022]"
+invariant_ids = ["WDB-EVT-016"]
+
+[[main_rule_binding]]
+key = "MAIN-L1038"
+statement = "`Causes` ist im Core orthogonal zur zeitlichen Ordnung: Es impliziert kein `Before`, wird niemals aus Zeitnähe, Reihenfolge oder Überlappung inferiert und widerspricht nicht allein wegen einer `Before`-/`SameTime`-Relation. Projektschemata dürfen strengere Kausal-Zeit-Constraints definieren. Der normalisierte `Causes`-Graph bleibt separat azyklisch. EventRelation hat keine eigene World-Time-Validity und kann nur über einen konkreten `EventRelationRetraction` korrigiert werden. [WDB-EVT-014/015/018/023]"
+invariant_ids = ["WDB-EVT-014"]
+
+[[main_rule_binding]]
+key = "MAIN-L1042"
+statement = "`Corrects` bezeichnet Datenkorrektur und niemals normale World-Time-Nachfolge. Es mutiert und retractet kein Ziel automatisch. Beide Endpoints müssen derselben kompatiblen Recordfamilie angehören; bei Lifecycle-Records ist dieselbe konkrete Variante erforderlich. `DerivedFrom` bezeichnet informationelle/logische Ableitung und ist keine Story-Kausalität. `ResultedFrom` bezeichnet fachliche/kausale Wirkung und ist keine logische Ableitung; es erzeugt keine Cascade, Retraction oder automatische Maskierung. [WDB-PRV-002–004]"
+invariant_ids = ["WDB-PRV-002", "WDB-PRV-003", "WDB-PRV-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L1044"
+statement = "Evidence und Provenance sind immutable projektweite Meta-History auf der gemeinsamen Revision-Achse. Sie besitzen keine eigene World-Time-Validity. `RecordedAsOf` filtert sie nach ihrer Erzeugungs- und Retraction-Revision. `HistorySpace.base_revision` beschneidet die Sichtbarkeit des referenzierten Domain-Records, nicht die projektweite Meta-History selbst; eine Kante wird nur ausgegeben, wenn alle für die Ausgabe erforderlichen Endpoints im Querykontext sichtbar und autorisiert sind. Keine Meta-Kante nimmt an ContextPrecedence oder fachlicher Resolution teil. [WDB-EVI-002–005, WDB-PRV-005]"
+invariant_ids = ["WDB-EVI-002", "WDB-EVI-003", "WDB-EVI-004", "WDB-EVI-005", "WDB-PRV-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1046"
+statement = "Evidence auf einen bereits historischen oder retracteten Targetrecord ist zulässig und dokumentiert gerade diesen historischen Record; sie reaktiviert ihn nicht. Eine aktive Evidence-Duplikatkante mit identischem `(source, target, relation)` ist unzulässig. Eine aktive Provenance-Duplikatkante mit identischem `(from, to, relation)` ist unzulässig. Self-Loops sind unzulässig. [WDB-EVI-006–007, WDB-PRV-006/008]"
+invariant_ids = ["WDB-EVI-006", "WDB-EVI-007", "WDB-PRV-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1048"
+statement = "Für Zyklusprüfung werden alle drei Provenance-Relationen in einen gemeinsamen **Abhängigkeitsgraphen** projiziert. `Corrects(new, old)` erzeugt `new → old`; `DerivedFrom(source, derived)` erzeugt `derived → source`; `ResultedFrom(cause, effect)` erzeugt `effect → cause`. Der Graph aller im Post-Transaction-Zustand aktiven Kanten MUSS azyklisch sein. Damit sind sowohl relationsinterne als auch gemischte Zyklen wie „A derived from B, B corrects A“ unzulässig. Die Commitvalidierung berücksichtigt den gesamten Batch atomar; das Aufteilen eines Mischzyklus auf mehrere Operationen oder Relationstypen darf die Prüfung nicht umgehen. [WDB-PRV-007/011–013]"
+invariant_ids = ["WDB-PRV-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L1050"
+statement = "Insert-Validierung verwendet bounded Traversal und scheitert bei ausgeschöpftem Budget fail-closed mit `GraphValidationBudgetExceeded`. Graphabfragen besitzen explizite Tiefen-, Knoten-, Kanten- und Zeitbudgets. [WDB-PRV-009/010]"
+invariant_ids = ["WDB-PRV-009"]
+
+[[main_rule_binding]]
+key = "MAIN-L1066"
+statement = "Für `Corrects` ist ein `J` nur gültig, wenn From und To dieselbe Tabellenkategorie und dieselbe konkrete Recordvariante besitzen; Assertionen müssen zusätzlich denselben Proposition-Slot betreffen, Events denselben EventKind oder eine ausdrücklich kompatible Schema-Nachfolge. Der korrigierende Record muss auf Transaction Time später liegen. `DerivedFrom` darf keine rein operative Directive als Quelle verwenden; als Ziel ist sie zulässig, wenn die Ableitung die Entscheidung dokumentiert. `ResultedFrom` bleibt auf story-fähige Assertions und Events begrenzt. EventRelation, Schema- und Migrationrecords erhalten eigene, später erweiterbare geschlossene Endpoint-Enummen und werden nicht durch `RecordRef::Other` eingeschleust. [WDB-REF-003–005]"
+invariant_ids = ["WDB-REF-003", "WDB-REF-004", "WDB-REF-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1085"
+statement = "`object_constraint` ist genau dann vorhanden, wenn `value_kind == Entity`; andernfalls ist es ungültig. `Single` ist ausschließlich mit `SingleValueReplace` kompatibel. `Multi` ist mit `MultiValueOverlay` oder `MultiValueReplace` kompatibel. Cardinality ist Structural Validation für den Predicatevertrag, verhindert aber nicht das Speichern mehrerer widersprüchlicher oder gleichrangiger Assertions; ein solcher Zustand wird durch Resolution als `Conflict` sichtbar. StructuralValidationError und ResolutionConflict bleiben getrennt. [WDB-SCH-005–008]"
+invariant_ids = ["WDB-SCH-005", "WDB-SCH-006", "WDB-SCH-007", "WDB-SCH-008"]
+
+[[main_rule_binding]]
+key = "MAIN-L1087"
+statement = "`EventKindDefinition` enthält stabile EventKindId, erlaubte/erforderliche Rollen einschließlich Role Cardinality, erlaubte/erforderliche Attribute einschließlich ValueKind/Constraints, Event-Time-Constraint (`InstantOnly`, `SpanOnly`, `InstantOrSpan`, `OpenSpanAllowed`) und Lifecycle. Neue Writes gegen `Deprecated` benötigen explizites `allow_deprecated_schema`, eine passende Capability und eine typisierte Warnung. Neue Writes gegen `Retired` sind verboten. Historische Reads bleiben für beide vollständig möglich. [WDB-SCH-009–010]"
+invariant_ids = ["WDB-SCH-009", "WDB-SCH-010"]
+
+[[main_rule_binding]]
+key = "MAIN-L1089"
+statement = "Schema und Daten dürfen atomar in derselben Transaction geändert werden. Jede Referenz wird gegen das **Post-Transaction-Schema** validiert; SchemaDependencies werden am Commitpoint gegen den aktuellen Head revalidiert. `SchemaSnapshot` ist eine derived/cacheable Projektion aus der normativen Schemahistorie und darf verworfen/rebuilt werden. Sein `SchemaFingerprint` ist der kryptographische Digest der kanonisch sortierten wirksamen Definitionen, ihrer Constraints und Policies. [WDB-SCH-011–013]"
+invariant_ids = ["WDB-SCH-011", "WDB-SCH-012", "WDB-SCH-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L1091"
+statement = "`MetadataOnly`, `Additive` und nachgewiesen erweiternde Constraintänderungen sind kompatibel. Eine Änderung, die zuvor gültige neue Writes verbietet, Interpretation/Resolution historischer Werte ändert, ValueKind/Cardinality inkompatibel ändert oder Required-Felder nachträglich erzwingt, ist `Restrictive` oder `Breaking`. Eine neue PredicateId/EventKindId ist erforderlich, wenn alte und neue Bedeutung nicht gleichzeitig unter derselben stabilen Identität historisch interpretierbar sind; reine Umbenennung, Beschreibung oder additive optionale Felder behalten die ID. [WDB-SCH-014–015]"
+invariant_ids = ["WDB-SCH-014", "WDB-SCH-015"]
+
+[[main_rule_binding]]
+key = "MAIN-L1093"
+statement = "`SchemaMode::Historical` verwendet SchemaAt(RecordedAsOf); `Current` und `Explicit(SchemaRevision)` sind bewusste Modi. Historische Daten werden niemals still zum Current-Schema coerced. Ein beschädigter benötigter historischer Schemastand liefert `HistoricalSchemaCorrupt` und darf weder durch Current noch durch einen benachbarten Stand ersetzt werden. [WDB-SCH-016–017]"
+invariant_ids = ["WDB-SCH-016", "WDB-SCH-017"]
+
+[[main_rule_binding]]
+key = "MAIN-L1097"
+statement = "Migrationen sind exakt klassifiziert als `MetadataOnly`, `Additive`, `CompatibleConstraintChange`, `Restrictive` oder `Breaking`. `MigrationPlan` ist ein immutable, prüfbarer Plan; `MigrationRun` ist eine konkrete Ausführung mit eigenem `MigrationRunId`. Der Plan enthält `MigrationId`, Source-Schema-Precondition, Target-Schema, geordnete `MigrationStepId`s, kanonischen PlanFingerprint, Transformer-Version und Budgetprofil. Start und Resume weisen eine nicht passende Source-Schema-Precondition zurück. [WDB-MIG-006–009]"
+invariant_ids = ["WDB-MIG-006", "WDB-MIG-007", "WDB-MIG-008", "WDB-MIG-009"]
+
+[[main_rule_binding]]
+key = "MAIN-L1099"
+statement = "Dry Run und Execution verwenden dieselbe Transformationsfunktion und unterscheiden sich nur im Sink. Transformer sind deterministisch und dürfen im Commitpfad weder Current Time, Randomness, Locale, Netzwerk noch AI aufrufen. AI darf außerhalb des Commitpfads einen Plan oder Mappingvorschlag erzeugen; committed wird ausschließlich ein versionierter, kanonischer und überprüfter Plan. Versteckte Coercions und Sentinelwerte sind verboten. [WDB-MIG-010–012]"
+invariant_ids = ["WDB-MIG-010", "WDB-MIG-011", "WDB-MIG-012"]
+
+[[main_rule_binding]]
+key = "MAIN-L1101"
+statement = "Ein nicht eindeutig transformierbarer Record erzeugt `UnresolvedMigrationItem`; Warning, Unresolved und Error sind getrennte Zustände. Restrictive/Breaking dürfen mit unresolved Items nicht committen, sofern der Plan nicht für jedes Item eine explizite, validierte Adminentscheidung enthält. Representation Migration verändert weder World-Time-Gültigkeit noch Proposition-Semantik. Historische oder retractete Records werden nur umgeschrieben, wenn der explizite Plan dies verlangt; ansonsten bleiben sie im historischen Encoding lesbar. [WDB-MIG-013–015]"
+invariant_ids = ["WDB-MIG-013", "WDB-MIG-014", "WDB-MIG-015"]
+
+[[main_rule_binding]]
+key = "MAIN-L1103"
+statement = "Jeder Stepcommit ist eine normale OCC-Transaction. `MigrationId` identifiziert die fachliche Migration, `MigrationStepId` den stabilen Planschritt, `MigrationRunId` die Ausführung und `OperationId` den idempotenten Step-Commit. Resume nach Crash liest das Run Journal und bestätigt jeden unklaren Commit über OperationId. Derselbe Step mit demselben Inputfingerprint ist idempotent; abweichender Fingerprint scheitert. [WDB-MIG-016–018]"
+invariant_ids = ["WDB-MIG-016", "WDB-MIG-017", "WDB-MIG-018"]
+
+[[main_rule_binding]]
+key = "MAIN-L1105"
+statement = "Expand → Migrate → Contract ist der Default. Jeder persistierte Zwischenstand ist gültig und historisch lesbar. Bereits committed History wird nicht normal zurückgerollt; fachliche Rücknahme erfolgt durch eine neue Compensating Migration. Das Migration Run Journal ist idempotent wiederherstellbares Koordinationsmetadatum und keine normative WorldDB-History; die tatsächlich committed Schema-/Datenrecords bleiben die Wahrheit. Storage-Format-Migration ist ein getrenntes Protokoll. [WDB-MIG-019–023]"
+invariant_ids = ["WDB-MIG-019", "WDB-MIG-020", "WDB-MIG-021", "WDB-MIG-022", "WDB-MIG-023"]
+
+[[main_rule_binding]]
+key = "MAIN-L1109"
+statement = "Der Cursorvertrag aus §16 ist vollständig sicherheitsbindend: Das Wiretoken ist opaque und enthält nur public-safe Formatdaten; sensitiver Payload bleibt im bounded serverseitigen Sessionzustand. Der Zustand bindet Principal, effektive Capabilities, SecurityEpoch, Snapshot, QueryHash, Session und Expiry. Vor jeder Seite wird AuthorizationNow neu ausgewertet. Eine relevante Securityänderung invalidiert den Cursor, statt alte Rechte weiterzuverwenden. Fehlermapping unterscheidet öffentlich nicht zwischen abgelaufenem, unbekanntem, manipuliertem oder security-invalidiertem Token, wenn dies Existenz leaken könnte. [WDB-API-006–009]"
+invariant_ids = ["WDB-API-006", "WDB-API-007", "WDB-API-008", "WDB-API-009"]
+
+[[main_rule_binding]]
+key = "MAIN-L1113"
+statement = "Reine Raw-Reads erzeugen keine Story-/Datenrevision. Sie verwenden ein getrenntes append-only Audit-Subsystem mit monotoner `AuditSequence`, `AuditRecordId`, `AuditOperationId`, eigenem WAL, Commitmarker, Sync- und Recoveryvertrag. Vor **jeder** ausgabefähigen Raw-Read-Seite wird nach Authorization ein `RawReadAttempt` mit sicherem Principalbezug, Scope-Fingerprint, SnapshotId, SecurityEpoch und PageOrdinal appended und durable synchronisiert; erst danach dürfen Bytes die Security-Boundary verlassen. Scheitert Auditappend oder Auditsync, bleibt die Ausgabe fail-closed. [WDB-AUD-004–006]"
+invariant_ids = ["WDB-AUD-004", "WDB-AUD-005", "WDB-AUD-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1115"
+statement = "Ein Crash nach durablem Auditrecord, aber vor Ausgabe erzeugt zulässig einen dokumentierten Versuch ohne Datenausgabe. Ein Crash nach Ausgabe kann keinen fehlenden Auditrecord erzeugen, weil Ausgabe erst nach dessen Commitpoint beginnt. Retries behalten eine ClientRequestId, erzeugen aber je tatsächlichem Versuch eine neue AuditOperationId und Sequenz; dadurch sind Mehrfachversuche erkennbar, ohne sie fälschlich zu deduplizieren. [WDB-AUD-007]"
+invariant_ids = ["WDB-AUD-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L1117"
+statement = "Das Audit-Subsystem besitzt genau einen serialisierten Auditwriter, blockiert keinen WorldDB-Datenwriter über I/O und wird beim Start vor Raw-Read-Freigabe recovered. Korruption im committed Auditpräfix sperrt auditpflichtige Operationen und erfordert explizite Recovery/Salvage; sie wird nicht automatisch repariert. Nur ein `AuditCompleteBackup` enthält und verifiziert Auditmanifest, Auditsegmente und `audit_safe_sequence`; ein `ExactDatabaseBackup` ohne diese Daten trägt `audit_scope = Excluded`. Retention ist policy-versioniert, selbst auditiert und darf die konfigurierte Mindestfrist nicht unterschreiten; Zugriff und Export sind separat autorisiert. [WDB-AUD-008–013]"
+invariant_ids = ["WDB-AUD-008", "WDB-AUD-009", "WDB-AUD-010", "WDB-AUD-011", "WDB-AUD-012", "WDB-AUD-013"]
+
+[[main_rule_binding]]
+key = "MAIN-L1123"
+statement = "`SegmentId` ist eine zufällig erzeugte stabile Identität. `ContentDigest` ist ein kryptographischer Digest über die kanonischen Segmentbytes einschließlich Formatversion und Inhaltsverzeichnis, aber ohne veränderliche Dateisystemmetadaten. Manifest, Backupinventar und Recovery verifizieren beide getrennt. Kein API darf aus SegmentId Inhaltsgleichheit oder aus ContentDigest fachliche Identität ableiten. [WDB-STO-004–006]"
+invariant_ids = ["WDB-STO-004", "WDB-STO-005", "WDB-STO-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1152"
+statement = "Entity | EntityId | §§2.3, 3 | WDB-ID-001/002, WDB-SCH-005 | typed 16-byte ID + schema record | immutable identity + schema metadata | schema-defined active state | record/field policy | Evidence: über Assertions; Provenance: über konkrete Records"
+invariant_ids = ["WDB-ID-001", "WDB-SCH-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1153"
+statement = "PredicateDefinition | PredicateId | §§2.4, 31.3 | WDB-SCH-001–017 | tagged schema record | normative schema history | Active/Deprecated/Retired | schema-admin capability | separate schema provenance enum"
+invariant_ids = ["WDB-SCH-001", "WDB-SCH-002", "WDB-SCH-003", "WDB-SCH-004", "WDB-SCH-005", "WDB-SCH-006", "WDB-SCH-007", "WDB-SCH-008", "WDB-SCH-009", "WDB-SCH-010", "WDB-SCH-011", "WDB-SCH-012", "WDB-SCH-013", "WDB-SCH-014", "WDB-SCH-015", "WDB-SCH-016", "WDB-SCH-017"]
+
+[[main_rule_binding]]
+key = "MAIN-L1154"
+statement = "Assertion | AssertionId | §§2.2–2.3.2 | WDB-AST-001–003 | RecordRef tag + record | immutable history record | closure/retraction | context + field policy | Evidence J; alle drei Provenancearten nach Matrix"
+invariant_ids = ["WDB-AST-001", "WDB-AST-002", "WDB-AST-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L1155"
+statement = "Mask | MaskId | §§2.1.2, 2.3.2 | WDB-MSK-001–005 | RecordRef tag + selector | immutable directive | closure/retraction | context/layer policy | Evidence J; Corrects/DerivedTo J"
+invariant_ids = ["WDB-MSK-001", "WDB-MSK-002", "WDB-MSK-003", "WDB-MSK-004", "WDB-MSK-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1156"
+statement = "ReplacementBoundary | ReplacementBoundaryId | §2.3.2 | WDB-RES-004/005 | RecordRef tag | immutable directive | closure/retraction | context/layer policy | Evidence J; Corrects/DerivedTo J"
+invariant_ids = ["WDB-RES-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L1157"
+statement = "Event | EventId | §§2.3.2, 31.1 | WDB-EVT-001–018 | RecordRef tag + EventTime | immutable history record | span closure/retraction | historyspace/layer/record | Evidence J; Corrects/Derived/Resulted J"
+invariant_ids = ["WDB-EVT-001", "WDB-EVT-002", "WDB-EVT-003", "WDB-EVT-004", "WDB-EVT-005", "WDB-EVT-006", "WDB-EVT-007", "WDB-EVT-008", "WDB-EVT-009", "WDB-EVT-010", "WDB-EVT-011", "WDB-EVT-012", "WDB-EVT-013", "WDB-EVT-014", "WDB-EVT-015", "WDB-EVT-016", "WDB-EVT-017", "WDB-EVT-018"]
+
+[[main_rule_binding]]
+key = "MAIN-L1158"
+statement = "EventRelation | EventRelationId | §31.1 | WDB-EVT-014–023 | canonical Before/SameTime/Causes tag | immutable edge | retraction | endpoint-intersection | separate closed event-relation provenance"
+invariant_ids = ["WDB-EVT-014", "WDB-EVT-015", "WDB-EVT-016", "WDB-EVT-017", "WDB-EVT-018", "WDB-EVT-019", "WDB-EVT-020", "WDB-EVT-021", "WDB-EVT-022", "WDB-EVT-023"]
+
+[[main_rule_binding]]
+key = "MAIN-L1159"
+statement = "EventMask | EventMaskId | §§2.3.2, 31.1 | WDB-EVT-003/013 | RecordRef tag | immutable directive | retraction | context/layer policy | Evidence J; Corrects/DerivedTo J"
+invariant_ids = ["WDB-EVT-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L1160"
+statement = "Source | SourceId | §§2.3.2, 31.2 | WDB-SRC-001/002 | RecordRef tag | project meta-history | immutable/superseded | field policy | Corrects/Derived J; not EvidenceTarget"
+invariant_ids = ["WDB-SRC-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L1161"
+statement = "Evidence | EvidenceId | §31.2 | WDB-EVI-001–007 | closed target tag | project meta-history edge | retraction | endpoint-intersection | Corrects/Derived J; not EvidenceTarget"
+invariant_ids = ["WDB-EVI-001", "WDB-EVI-002", "WDB-EVI-003", "WDB-EVI-004", "WDB-EVI-005", "WDB-EVI-006", "WDB-EVI-007"]
+
+[[main_rule_binding]]
+key = "MAIN-L1162"
+statement = "ProvenanceEdge | ProvenanceId | §31.2 | WDB-PRV-001–010 | relation + closed endpoints | project meta-history graph | retraction | endpoint-intersection | EvidenceTarget J; Corrects/Derived J"
+invariant_ids = ["WDB-PRV-001", "WDB-PRV-002", "WDB-PRV-003", "WDB-PRV-004", "WDB-PRV-005", "WDB-PRV-006", "WDB-PRV-007", "WDB-PRV-008", "WDB-PRV-009", "WDB-PRV-010"]
+
+[[main_rule_binding]]
+key = "MAIN-L1163"
+statement = "LayerDefinition | LayerId | §2.1.2 | WDB-LAY-001–011 | schema ID/definition incl. base designation | schema history | Active/Deprecated/Retired | layer capability | schema provenance only"
+invariant_ids = ["WDB-LAY-001", "WDB-LAY-002", "WDB-LAY-003", "WDB-LAY-004", "WDB-LAY-005", "WDB-LAY-006", "WDB-LAY-007", "WDB-LAY-008", "WDB-LAY-009", "WDB-LAY-010", "WDB-LAY-011"]
+
+[[main_rule_binding]]
+key = "MAIN-L1164"
+statement = "HistorySpace | HistorySpaceId | §2.1.1 | WDB-BRA-001–005 | typed ID + parent/base | immutable ancestry metadata | no implicit merge/delete | space capability | administrative provenance only"
+invariant_ids = ["WDB-BRA-001", "WDB-BRA-002", "WDB-BRA-003", "WDB-BRA-004", "WDB-BRA-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1165"
+statement = "Perspective | PerspectiveId | §§2.1.2, 2.3.1 | WDB-EPI-001–003 | typed ID | project definition | explicit records | never Principal | through assertions"
+invariant_ids = ["WDB-EPI-001", "WDB-EPI-002", "WDB-EPI-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L1166"
+statement = "Schema records | concrete Schema ID | §§2.4, 31.3 | WDB-SCH-001–017 | tagged definitions | normative schema history | A/D/R | schema-admin | separate closed schema provenance"
+invariant_ids = ["WDB-SCH-001", "WDB-SCH-002", "WDB-SCH-003", "WDB-SCH-004", "WDB-SCH-005", "WDB-SCH-006", "WDB-SCH-007", "WDB-SCH-008", "WDB-SCH-009", "WDB-SCH-010", "WDB-SCH-011", "WDB-SCH-012", "WDB-SCH-013", "WDB-SCH-014", "WDB-SCH-015", "WDB-SCH-016", "WDB-SCH-017"]
+
+[[main_rule_binding]]
+key = "MAIN-L1167"
+statement = "Migration records | MigrationId/RunId/StepId | §31.4 | WDB-MIG-001–023 | plan/run DTO tags | plans + coordination journal | planned/running/completed/failed | admin | explicit migration provenance"
+invariant_ids = ["WDB-MIG-001", "WDB-MIG-002", "WDB-MIG-003", "WDB-MIG-004", "WDB-MIG-005", "WDB-MIG-006", "WDB-MIG-007", "WDB-MIG-008", "WDB-MIG-009", "WDB-MIG-010", "WDB-MIG-011", "WDB-MIG-012", "WDB-MIG-013", "WDB-MIG-014", "WDB-MIG-015", "WDB-MIG-016", "WDB-MIG-017", "WDB-MIG-018", "WDB-MIG-019", "WDB-MIG-020", "WDB-MIG-021", "WDB-MIG-022", "WDB-MIG-023"]
+
+[[main_rule_binding]]
+key = "MAIN-L1168"
+statement = "Lifecycle records | concrete lifecycle ID | §2.3.2 | WDB-LFC-001/002 | concrete RecordRef tag | immutable history record | none; correction via new record | target-derived | Evidence J; Corrects/DerivedTo J"
+invariant_ids = ["WDB-LFC-001"]
+
+[[main_rule_binding]]
+key = "MAIN-L1169"
+statement = "Transaction | TransactionId | §8 | WDB-TX-001–006 | IPC handle/receipt only | WAL metadata | state machine | operation authorization | not Evidence/Provenance target"
+invariant_ids = ["WDB-TX-001", "WDB-TX-002", "WDB-TX-003", "WDB-TX-004", "WDB-TX-005", "WDB-TX-006"]
+
+[[main_rule_binding]]
+key = "MAIN-L1170"
+statement = "Snapshot | SnapshotId | §10 | WDB-SNP-001–004 | sessionlocal handle | pin registry | lease/expiry | AuthorizationNow | not Evidence/Provenance target"
+invariant_ids = ["WDB-SNP-001", "WDB-SNP-002", "WDB-SNP-003", "WDB-SNP-004"]
+
+[[main_rule_binding]]
+key = "MAIN-L1171"
+statement = "Job | JobId | §19 | WDB-CON-003/004 | job DTO | resumable metadata | queued/running/terminal | owner/capability | not Evidence/Provenance target"
+invariant_ids = ["WDB-CON-003"]
+
+[[main_rule_binding]]
+key = "MAIN-L1172"
+statement = "Principal | PrincipalId | §17 | WDB-SEC-001–005 | security DTO | security history | policy-defined | root of authorization | not Domain Provenance target"
+invariant_ids = ["WDB-SEC-001", "WDB-SEC-002", "WDB-SEC-003", "WDB-SEC-004", "WDB-SEC-005"]
+
+[[main_rule_binding]]
+key = "MAIN-L1173"
+statement = "AuditRecord | AuditRecordId | §§18.2, 31.6 | WDB-AUD-001–011 | audit-only format | separate append-only audit log | retention/purge policy | audit capability | never Domain Evidence/Provenance target"
+invariant_ids = ["WDB-AUD-001", "WDB-AUD-002", "WDB-AUD-003", "WDB-AUD-004", "WDB-AUD-005", "WDB-AUD-006", "WDB-AUD-007", "WDB-AUD-008", "WDB-AUD-009", "WDB-AUD-010", "WDB-AUD-011"]
