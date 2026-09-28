@@ -19,6 +19,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | Task | Status | Commit/Artefakt | Positiver Nachweis | Negativer/Fault-/Security-Nachweis | `cargo xtask verify` | Externer Lauf/letzte Prüfung/nächster Prüftermin | Nächster Schritt |
 |---|---|---|---|---|---|---|---|
 | M0-01 | DONE | `0bb3c85`; `docs/M0-01-verification.md` | ZIP-Test, 6 Bytevergleiche und Plancheck bestanden | Temporär veränderte Spiegeldatei mit Exitcode 1 abgewiesen | Nicht fällig (M0-01) | – | M0-02 READY |
+| M0-02 | RUNNING | – | Quellen-/Normtextvergleich in Arbeit | – | Noch nicht fällig | – | TOML-Parser und 253-ID-Abgleich erstellen |
 
 ## Entscheidungs- und Release-Gates
 

@@ -1,0 +1,402 @@
+{
+  "manifest_version": 1,
+  "status": "PROVISIONAL",
+  "created_date": "2026-09-29",
+  "source_archive": {
+    "path": "WorldDB_vNext_Lossless_Consolidation_Audit.zip",
+    "sha256": "f53fb969515171030bca3db9b9d4526a9ca51dfa6b68872da8e6e9029af8edbe",
+    "source_inventory": "docs/source/source_manifest.json",
+    "scope_note": "The original standalone v3.1 specification is not present in the supplied ZIP; this manifest covers only the supplied sources."
+  },
+  "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only",
+  "working_copies": [
+    {
+      "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
+      "working_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
+      "byte_identical": true
+    },
+    {
+      "working_file": "WorldDB_Consolidation_Trace.md",
+      "source_file": "docs/source/WorldDB_Consolidation_Trace.md",
+      "source_sha256": "9415ed13dc84d1a8ac9cb094228b9d4624ce44dd6af70e55cb0c6b662af9f0ee",
+      "working_sha256": "9415ed13dc84d1a8ac9cb094228b9d4624ce44dd6af70e55cb0c6b662af9f0ee",
+      "byte_identical": true
+    },
+    {
+      "working_file": "WorldDB_Invariantenregister_vNext.md",
+      "source_file": "docs/source/WorldDB_Invariantenregister_vNext.md",
+      "source_sha256": "f12110372ccaf928ff6477154fe65285418fbb8d3c163284274dbfd43f20d7ce",
+      "working_sha256": "f12110372ccaf928ff6477154fe65285418fbb8d3c163284274dbfd43f20d7ce",
+      "byte_identical": true
+    },
+    {
+      "working_file": "WorldDB_ADRs_vNext.md",
+      "source_file": "docs/source/WorldDB_ADRs_vNext.md",
+      "source_sha256": "3d37b438b616436d4429283cec3a8d935df84e7df31555d93c29fdcf95171c4f",
+      "working_sha256": "3d37b438b616436d4429283cec3a8d935df84e7df31555d93c29fdcf95171c4f",
+      "byte_identical": true
+    },
+    {
+      "working_file": "WorldDB_Offene_Entscheidungen_vNext.md",
+      "source_file": "docs/source/WorldDB_Offene_Entscheidungen_vNext.md",
+      "source_sha256": "5cde6fd4d3ca6bc93a0d2aa7ea12b27837375f1e8fd2a2a48b47c38ce6c55a2f",
+      "working_sha256": "5cde6fd4d3ca6bc93a0d2aa7ea12b27837375f1e8fd2a2a48b47c38ce6c55a2f",
+      "byte_identical": true
+    },
+    {
+      "working_file": "invariants_vNext.toml",
+      "source_file": "docs/source/invariants_vNext.toml",
+      "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
+      "working_sha256": "9a42ee49668dd81f901d6c745e803eeb2b2b848635b87abe74489f657760f7f3",
+      "byte_identical": false
+    }
+  ],
+  "corrections": [
+    {
+      "id": "ERR-M0-02-LAY-011",
+      "file": "invariants_vNext.toml",
+      "invariant_id": "WDB-LAY-011",
+      "change": "Restored the complete statement from the Markdown invariant register and separated its primary-test cell from the split pipe-table text.",
+      "authority": [
+        "docs/source/WorldDB_Invariantenregister_vNext.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §33"
+      ]
+    },
+    {
+      "id": "ERR-M0-02-PRV-001",
+      "file": "invariants_vNext.toml",
+      "binding_key": "MAIN-L1162",
+      "change": "Replaced stale WDB-PRV-001–010 with the exact Master row WDB-PRV-001–013.",
+      "authority": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md:1162"
+    },
+    {
+      "id": "ERR-M0-02-AUD-001",
+      "file": "invariants_vNext.toml",
+      "binding_key": "MAIN-L1173",
+      "change": "Replaced stale WDB-AUD-001–011 with the exact Master row WDB-AUD-001–013.",
+      "authority": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md:1173"
+    },
+    {
+      "id": "ERR-M0-02-BINDINGS",
+      "file": "invariants_vNext.toml",
+      "change": "Expanded every slash/range reference on each bound Master line and made the per-line invariant_ids array exactly cover that line.",
+      "changed_bindings": [
+        {
+          "key": "MAIN-L75",
+          "master_line": 75,
+          "added_invariant_ids": [
+            "WDB-BRA-002"
+          ]
+        },
+        {
+          "key": "MAIN-L78",
+          "master_line": 78,
+          "added_invariant_ids": [
+            "WDB-TIM-002"
+          ]
+        },
+        {
+          "key": "MAIN-L91",
+          "master_line": 91,
+          "added_invariant_ids": [
+            "WDB-LAY-007",
+            "WDB-LAY-008"
+          ]
+        },
+        {
+          "key": "MAIN-L93",
+          "master_line": 93,
+          "added_invariant_ids": [
+            "WDB-LAY-011"
+          ]
+        },
+        {
+          "key": "MAIN-L120",
+          "master_line": 120,
+          "added_invariant_ids": [
+            "WDB-AST-002"
+          ]
+        },
+        {
+          "key": "MAIN-L122",
+          "master_line": 122,
+          "added_invariant_ids": [
+            "WDB-MSK-002",
+            "WDB-MSK-003"
+          ]
+        },
+        {
+          "key": "MAIN-L124",
+          "master_line": 124,
+          "added_invariant_ids": [
+            "WDB-RES-005"
+          ]
+        },
+        {
+          "key": "MAIN-L130",
+          "master_line": 130,
+          "added_invariant_ids": [
+            "WDB-VAL-003"
+          ]
+        },
+        {
+          "key": "MAIN-L131",
+          "master_line": 131,
+          "added_invariant_ids": [
+            "WDB-EPI-003"
+          ]
+        },
+        {
+          "key": "MAIN-L132",
+          "master_line": 132,
+          "added_invariant_ids": [
+            "WDB-EVT-002"
+          ]
+        },
+        {
+          "key": "MAIN-L185",
+          "master_line": 185,
+          "added_invariant_ids": [
+            "WDB-PRV-004"
+          ]
+        },
+        {
+          "key": "MAIN-L191",
+          "master_line": 191,
+          "added_invariant_ids": [
+            "WDB-SCH-002"
+          ]
+        },
+        {
+          "key": "MAIN-L193",
+          "master_line": 193,
+          "added_invariant_ids": [
+            "WDB-MIG-005",
+            "WDB-MIG-023"
+          ]
+        },
+        {
+          "key": "MAIN-L194",
+          "master_line": 194,
+          "added_invariant_ids": [
+            "WDB-MIG-003"
+          ]
+        },
+        {
+          "key": "MAIN-L195",
+          "master_line": 195,
+          "added_invariant_ids": [
+            "WDB-MIG-019"
+          ]
+        },
+        {
+          "key": "MAIN-L322",
+          "master_line": 322,
+          "added_invariant_ids": [
+            "WDB-ERR-002",
+            "WDB-ERR-003",
+            "WDB-ERR-004"
+          ]
+        },
+        {
+          "key": "MAIN-L330",
+          "master_line": 330,
+          "added_invariant_ids": [
+            "WDB-TX-005"
+          ]
+        },
+        {
+          "key": "MAIN-L346",
+          "master_line": 346,
+          "added_invariant_ids": [
+            "WDB-OWN-002"
+          ]
+        },
+        {
+          "key": "MAIN-L530",
+          "master_line": 530,
+          "added_invariant_ids": [
+            "WDB-BKP-002",
+            "WDB-BKP-004",
+            "WDB-BKP-005"
+          ]
+        },
+        {
+          "key": "MAIN-L532",
+          "master_line": 532,
+          "added_invariant_ids": [
+            "WDB-AUD-012"
+          ]
+        },
+        {
+          "key": "MAIN-L563",
+          "master_line": 563,
+          "added_invariant_ids": [
+            "WDB-API-008",
+            "WDB-API-009"
+          ]
+        },
+        {
+          "key": "MAIN-L710",
+          "master_line": 710,
+          "added_invariant_ids": [
+            "WDB-DEP-002"
+          ]
+        },
+        {
+          "key": "MAIN-L1036",
+          "master_line": 1036,
+          "added_invariant_ids": [
+            "WDB-EVT-017",
+            "WDB-EVT-022"
+          ]
+        },
+        {
+          "key": "MAIN-L1038",
+          "master_line": 1038,
+          "added_invariant_ids": [
+            "WDB-EVT-015",
+            "WDB-EVT-018",
+            "WDB-EVT-023"
+          ]
+        },
+        {
+          "key": "MAIN-L1046",
+          "master_line": 1046,
+          "added_invariant_ids": [
+            "WDB-PRV-008"
+          ]
+        },
+        {
+          "key": "MAIN-L1048",
+          "master_line": 1048,
+          "added_invariant_ids": [
+            "WDB-PRV-011",
+            "WDB-PRV-012",
+            "WDB-PRV-013"
+          ]
+        },
+        {
+          "key": "MAIN-L1050",
+          "master_line": 1050,
+          "added_invariant_ids": [
+            "WDB-PRV-010"
+          ]
+        },
+        {
+          "key": "MAIN-L1152",
+          "master_line": 1152,
+          "added_invariant_ids": [
+            "WDB-ID-002"
+          ]
+        },
+        {
+          "key": "MAIN-L1156",
+          "master_line": 1156,
+          "added_invariant_ids": [
+            "WDB-RES-005"
+          ]
+        },
+        {
+          "key": "MAIN-L1159",
+          "master_line": 1159,
+          "added_invariant_ids": [
+            "WDB-EVT-013"
+          ]
+        },
+        {
+          "key": "MAIN-L1160",
+          "master_line": 1160,
+          "added_invariant_ids": [
+            "WDB-SRC-002"
+          ]
+        },
+        {
+          "key": "MAIN-L1162",
+          "master_line": 1162,
+          "added_invariant_ids": [
+            "WDB-PRV-011",
+            "WDB-PRV-012",
+            "WDB-PRV-013"
+          ]
+        },
+        {
+          "key": "MAIN-L1168",
+          "master_line": 1168,
+          "added_invariant_ids": [
+            "WDB-LFC-002"
+          ]
+        },
+        {
+          "key": "MAIN-L1171",
+          "master_line": 1171,
+          "added_invariant_ids": [
+            "WDB-CON-004"
+          ]
+        },
+        {
+          "key": "MAIN-L1173",
+          "master_line": 1173,
+          "added_invariant_ids": [
+            "WDB-AUD-012",
+            "WDB-AUD-013"
+          ]
+        }
+      ],
+      "added_id_references_total": 51
+    }
+  ],
+  "reconciliation_with_2026_09_28_plan_audit": {
+    "historical_count": {
+      "incomplete_binding_rows": 33,
+      "missing_id_references": 44,
+      "distinct_missing_ids": 43
+    },
+    "reproduced_from_immutable_toml": {
+      "incomplete_binding_rows": 33,
+      "missing_id_references": 46,
+      "distinct_missing_ids": 45
+    },
+    "note": "The prior audit's 44/43 tally differs from the source-derived expansion recorded here. The complete per-binding additions are retained in corrections[ERR-M0-02-BINDINGS]; the dated audit entry is not silently rewritten."
+  },
+  "source_discrepancies_for_m0_02a": [
+    {
+      "invariant_id": "WDB-HIS-001",
+      "registry_statement": "Veröffentlichte Revisionen steigen monoton und sind eindeutig.",
+      "master_lines": [
+        73,
+        235
+      ],
+      "difference": "Master §§2.1/3.1 additionally require gapless published revisions, Genesis 0, first commit 1, and reserving Revision::MAX for overflow safety.",
+      "mechanical_action": "Preserved the registry wording; no semantic strengthening was inferred."
+    }
+  ],
+  "classification_method": {
+    "anchor_rule": "ANCHORED means the invariant ID occurs in at least one of the 149 MAIN-L lines after exact source-line normalization. NORMATIVE_SOURCE_GAP means no such direct ID anchor exists.",
+    "gap_list": "docs/contract/source_gaps.tsv",
+    "counts": {
+      "invariant_ids": 253,
+      "main_rule_binding_entries": 149,
+      "main_rule_lines_compared": 149,
+      "original_binding_rows_with_omissions": 33,
+      "original_omitted_id_references": 46,
+      "original_distinct_omitted_ids_across_bindings": 45,
+      "stale_binding_statements_corrected": 2,
+      "binding_cells_expanded": 35,
+      "binding_id_references_added": 51,
+      "anchored_ids": 199,
+      "normative_source_gaps": 54,
+      "normative_source_gaps_by_class": {
+        "HARD": 52,
+        "GUARDED": 2
+      }
+    }
+  },
+  "verification_limits": [
+    "This is a structural source comparison; a text reference is not a product test.",
+    "Open normative source gaps require an explicit M0-02a decision.",
+    "The Master line index is the immutable line-number basis identified by MAIN-L keys."
+  ]
+}

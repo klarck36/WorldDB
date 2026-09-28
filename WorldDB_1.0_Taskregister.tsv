@@ -1,6 +1,6 @@
 task_id	milestone	title	depends_on	status	owner	external_run	last_check	next_check	evidence
 M0-01	M0	Quellen inventarisieren		DONE	Luna				artifact:docs/M0-01-verification.md;artifact:docs/source/source_manifest.json;artifact:WorldDB_1.0_Sourcecheck.py
-M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	READY	Luna				
+M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	RUNNING	Luna				
 M0-02a	M0	Normative Quellenlücken entscheiden	M0-02	PLANNED	Produktverantwortung + Luna				
 M0-03	M0	First-Class-Register maschinenlesbar machen	M0-02	PLANNED	Luna				
 M0-04	M0	Entity-/Perspective-Vertrag schließen	M0-03	PLANNED	Luna				
