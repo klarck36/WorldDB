@@ -1,0 +1,9 @@
+seed_id	seed	note
+empty-state	0x0000000000000000	baseline-zero
+one-state	0x0000000000000001	baseline-one
+alternating	0xaaaaaaaaaaaaaaaa	alternating-bits
+upper-bits	0x8000000000000000	high-bit
+lower-bits	0x00000000ffffffff	low-word
+max-value	0xffffffffffffffff	maximum-u64
+worlddb-default	0x574f524c44444231	stable-default
+mixed-value	0x0123456789abcdef	mixed-bits

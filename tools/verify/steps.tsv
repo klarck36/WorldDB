@@ -24,6 +24,7 @@ step	dev	contract-sources	run	python	-B -X utf8 docs/contract/build_contract_sou
 step	dev	contract-docs	run	python	-B -X utf8 docs/contract/verify_contract_docs.py	-
 step	dev	source-check	run	python	-B -X utf8 WorldDB_1.0_Sourcecheck.py	-
 step	dev	plan-check	run	python	-B -X utf8 WorldDB_1.0_Plancheck.py	-
+step	dev	testkit-evidence	run	python	-B -X utf8 tools/run_m013_evidence.py	-
 step	dev	xtask-tests	run	cargo	test --locked --package xtask	-
 step	dev	working-tree-whitespace	run	git	diff --check HEAD	-
 step	dev	ci-matrix	skip			Added by M0-14.

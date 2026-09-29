@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worlddb.invalid/schemas/test-evidence-v1.json",
+  "title": "WorldDB test run evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "task_id",
+    "status",
+    "started_at",
+    "finished_at",
+    "artifact_path",
+    "repository",
+    "environment",
+    "toolchain",
+    "seed",
+    "fixtures",
+    "tests",
+    "artifacts",
+    "reproduction"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "task_id": { "const": "M0-13" },
+    "status": { "enum": ["PASS", "FAIL"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "artifact_path": { "type": "string", "minLength": 1 },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "dirty", "source_snapshot"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+        "dirty": { "type": "boolean" },
+        "source_snapshot": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "os_version", "architecture", "filesystem", "hardware"],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "os_version": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["root", "type"],
+          "properties": {
+            "root": { "type": "string", "minLength": 1 },
+            "type": { "type": "string", "minLength": 1 }
+          }
+        },
+        "hardware": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["machine", "processor", "logical_cpus"],
+          "properties": {
+            "machine": { "type": "string", "minLength": 1 },
+            "processor": { "type": "string", "minLength": 1 },
+            "logical_cpus": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rustc", "cargo", "host_target"],
+      "properties": {
+        "rustc": { "type": "string", "minLength": 1 },
+        "cargo": { "type": "string", "minLength": 1 },
+        "host_target": { "type": "string", "minLength": 1 }
+      }
+    },
+    "seed": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "path", "sha256"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["test_id", "status", "command", "exit_code", "artifacts"],
+        "properties": {
+          "test_id": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["PASS", "FAIL"] },
+          "command": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string" },
+                { "type": "array", "items": { "type": "string" } }
+              ]
+            }
+          },
+          "exit_code": { "type": ["integer", "null"] },
+          "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+          "details": { "type": "string" }
+        }
+      }
+    },
+    "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+    "reproduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "expected_exit_code", "replayed_identically", "source_snapshot_path"],
+      "properties": {
+        "command": { "type": "array", "items": { "type": "string" } },
+        "expected_exit_code": { "const": 73 },
+        "replayed_identically": { "type": "boolean" },
+        "source_snapshot_path": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

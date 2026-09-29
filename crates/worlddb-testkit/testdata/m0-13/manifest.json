@@ -1,0 +1,24 @@
+{
+  "corpus_version": "m0-13-v1",
+  "files": [
+    {
+      "id": "fuzz-seeds-v1",
+      "kind": "fuzz-seeds",
+      "path": "fuzz-seeds/v1/seeds.tsv",
+      "sha256": "d6b6639e35bc2d14166ecb6aba1ec816db077f8f2bccba9ce672c913d7d4d016"
+    },
+    {
+      "id": "golden-stream-v1",
+      "kind": "golden",
+      "path": "golden/v1/splitmix64.tsv",
+      "sha256": "925c6d77fd7b4a5e785d061a86b4d9de65828e58390912f4939c854f266ad301"
+    },
+    {
+      "id": "full-scan-v1",
+      "kind": "full-scan",
+      "path": "full-scan/v1/records.tsv",
+      "sha256": "227d8c9f9998ad866c61114eb7cba4b59514082d0aec1ee2e1ffa62a792d9b02"
+    }
+  ],
+  "schema_version": 1
+}
