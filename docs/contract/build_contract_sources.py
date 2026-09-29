@@ -55,6 +55,8 @@ SECURITY_POLICY_SPEC = "security_policy_contract.md"
 SECURITY_POLICY_ADR = "ADR-033-security-policy.md"
 QUERY_TRANSPORT_SPEC = "query_transport_contract.md"
 QUERY_TRANSPORT_ADR = "ADR-034-query-transport.md"
+CORRECTION_SPEC = "correction_contract.md"
+CORRECTION_ADR = "ADR-035-correction-actions.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -392,6 +394,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         ("M0-04b", CONSTRAINT_TIME_SPEC, CONSTRAINT_TIME_ADR),
         ("M0-04c", SECURITY_POLICY_SPEC, SECURITY_POLICY_ADR),
         ("M0-04d", QUERY_TRANSPORT_SPEC, QUERY_TRANSPORT_ADR),
+        ("M0-04e", CORRECTION_SPEC, CORRECTION_ADR),
     )
     addition_payloads = {
         name: (root / CONTRACT_DIR / name).read_bytes()
@@ -728,6 +731,20 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 ],
             },
             {
+                "id": "ERR-M0-04E-CORRECTION-ACTIONS",
+                "file": MASTER_NAME,
+                "change": (
+                    "Appended the normative atomic Assertion correction and distinct Event correction "
+                    "commands after the M0-04d Query/Transport supplement."
+                ),
+                "authority": [
+                    f"docs/contract/{CORRECTION_SPEC}",
+                    f"docs/contract/{CORRECTION_ADR}",
+                    f"docs/source/{MASTER_NAME} §§2.2, 2.3.2, 5.3, 8, 17, 31.2",
+                    "docs/source/WorldDB_Consolidation_Trace.md: LEGACY-AST-04, EVT-16, PROV-03/04",
+                ],
+            },
+            {
                 "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
                 "file": TOML_NAME,
                 "change": (
@@ -855,6 +872,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             SECURITY_POLICY_ADR,
             QUERY_TRANSPORT_SPEC,
             QUERY_TRANSPORT_ADR,
+            CORRECTION_SPEC,
+            CORRECTION_ADR,
         }
         and path.name not in expected_names
     ]

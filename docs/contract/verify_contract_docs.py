@@ -23,6 +23,8 @@ SECURITY_POLICY_SPEC_NAME = "security_policy_contract.md"
 SECURITY_POLICY_ADR_NAME = "ADR-033-security-policy.md"
 QUERY_TRANSPORT_SPEC_NAME = "query_transport_contract.md"
 QUERY_TRANSPORT_ADR_NAME = "ADR-034-query-transport.md"
+CORRECTION_SPEC_NAME = "correction_contract.md"
+CORRECTION_ADR_NAME = "ADR-035-correction-actions.md"
 ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
@@ -181,6 +183,31 @@ REQUIRED_QUERY_TRANSPORT_CLAUSES = (
     "`PublicErrorDto` contains only the code, a retryability flag",
     "No new WDB invariant IDs or First-Class persisted types are introduced",
 )
+REQUIRED_CORRECTION_CLAUSES = (
+    "CorrectAssertion {",
+    "CorrectEvent {",
+    "retraction_reason: AssertionRetraction.reason",
+    "same logical assertion slot",
+    "Value`, `Polarity`, and `AssertionValidity` may be corrected",
+    "Corrects(new, old)",
+    "exactly these three domain-history records",
+    "AssertionRetraction { AssertionRetractionId, assertion_id: target",
+    "only effect that makes the original inactive from revision `R` onward",
+    "Corrects` is explanatory Provenance",
+    "exactly two domain-history records: one new immutable Event and one `ProvenanceEdge",
+    "It creates no `EventRetraction`, `EventSpanClosure`, `EventMask`, or `EventRelation`",
+    "CorrectAssertion` requires `AssertionCorrect`, `AssertionCreate`, and `AssertionRetract`",
+    "CorrectEvent` requires `EventCorrect` and `EventCreate`",
+    "AssertionRead`, owning `HistorySpaceRead` and `LayerRead`",
+    "EventRead`, owning `HistorySpaceRead` and `LayerRead`",
+    "ProvenanceCreate` and `RelationshipCreate(Provenance(Corrects))",
+    "original Event remains active",
+    "one write set containing the new Assertion, the explicit AssertionRetraction, and the Corrects ProvenanceEdge",
+    "commit_status(operation_id)",
+    "CommitError::UnknownCommitOutcome",
+    "LEGACY-AST-04",
+    "No new persisted type or WDB invariant ID is introduced",
+)
 REFERENCE_PATTERN = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
 )
@@ -291,6 +318,8 @@ def verify(root: Path) -> int:
     security_policy_adr_path = root / "docs" / "contract" / SECURITY_POLICY_ADR_NAME
     query_transport_spec_path = root / "docs" / "contract" / QUERY_TRANSPORT_SPEC_NAME
     query_transport_adr_path = root / "docs" / "contract" / QUERY_TRANSPORT_ADR_NAME
+    correction_spec_path = root / "docs" / "contract" / CORRECTION_SPEC_NAME
+    correction_adr_path = root / "docs" / "contract" / CORRECTION_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
     master_text = master_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8").strip()
@@ -303,6 +332,8 @@ def verify(root: Path) -> int:
     security_policy_adr_text = security_policy_adr_path.read_text(encoding="utf-8")
     query_transport_spec_text = query_transport_spec_path.read_text(encoding="utf-8").strip()
     query_transport_adr_text = query_transport_adr_path.read_text(encoding="utf-8")
+    correction_spec_text = correction_spec_path.read_text(encoding="utf-8").strip()
+    correction_adr_text = correction_adr_path.read_text(encoding="utf-8")
     missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
     if missing_clauses:
         raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
@@ -337,6 +368,14 @@ def verify(root: Path) -> int:
             "M0-04d supplement is missing required contract clauses: "
             f"{missing_query_transport_clauses}"
         )
+    missing_correction_clauses = [
+        clause for clause in REQUIRED_CORRECTION_CLAUSES if clause not in correction_spec_text
+    ]
+    if missing_correction_clauses:
+        raise ValueError(
+            "M0-04e supplement is missing required contract clauses: "
+            f"{missing_correction_clauses}"
+        )
     master_normalized = master_text.replace("\r\n", "\n").rstrip()
     expected_suffix = (
         spec_text
@@ -348,10 +387,12 @@ def verify(root: Path) -> int:
         + security_policy_spec_text
         + "\n\n"
         + query_transport_spec_text
+        + "\n\n"
+        + correction_spec_text
     )
     if not master_normalized.endswith(expected_suffix):
         raise ValueError(
-            "Master working copy does not end with the exact M0-04 through M0-04d supplements"
+            "Master working copy does not end with the exact M0-04 through M0-04e supplements"
         )
     for heading in (
         "## 2. Entity contract",
@@ -423,6 +464,21 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-034 is not marked accepted")
     if "[Query and transport supplement](query_transport_contract.md)" not in query_transport_adr_text:
         raise ValueError("ADR-034 does not link the normative supplement")
+    for heading in (
+        "## 1. Command boundary and shared transaction",
+        "## 2. `CorrectAssertion`: one explicit three-record effect",
+        "## 3. `CorrectEvent`: new Event and explanatory edge only",
+        "## 4. Authorization and validation boundaries",
+        "## 5. Model, engine, and UI behavior",
+        "## 6. Atomicity, retry, and fault outcomes",
+        "## 7. Existing-contract cross-check",
+    ):
+        if heading not in correction_spec_text:
+            raise ValueError(f"M0-04e supplement is missing required section {heading!r}")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in correction_adr_text:
+        raise ValueError("ADR-035 is not marked accepted")
+    if "[Correction actions supplement](correction_contract.md)" not in correction_adr_text:
+        raise ValueError("ADR-035 does not link the normative supplement")
 
     errata = json.loads(errata_path.read_text(encoding="utf-8"))
     expected_additions = {
@@ -431,6 +487,7 @@ def verify(root: Path) -> int:
         "M0-04b": (constraint_time_spec_path, constraint_time_adr_path),
         "M0-04c": (security_policy_spec_path, security_policy_adr_path),
         "M0-04d": (query_transport_spec_path, query_transport_adr_path),
+        "M0-04e": (correction_spec_path, correction_adr_path),
     }
     additions = {item.get("task"): item for item in errata.get("contract_additions", [])}
     for task, (addition_spec, addition_adr) in expected_additions.items():
@@ -448,6 +505,7 @@ def verify(root: Path) -> int:
         "ERR-M0-04B-CONSTRAINT-TIME",
         "ERR-M0-04C-SECURITY-POLICY",
         "ERR-M0-04D-QUERY-TRANSPORT",
+        "ERR-M0-04E-CORRECTION-ACTIONS",
     ):
         if correction_id not in correction_ids:
             raise ValueError(f"source-errata.json lacks {correction_id}")
@@ -532,7 +590,7 @@ def verify(root: Path) -> int:
         row = by_name.get(name)
         if row is None or any(row[field] != value for field, value in expected_fields.items()):
             raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
-    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04d supplements match the working Master")
+    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04e supplements match the working Master")
     return 0
 
 

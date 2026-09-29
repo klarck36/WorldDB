@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "81559aa1ae20f4f1f4a4f2d861594adbfbc570b1a76dcca49ef54109fb46e8db",
+      "working_sha256": "08199d761a401e200e9613b0367914e8a73bab983c556b5230482a8d53b598e6",
       "byte_identical": false
     },
     {
@@ -93,6 +93,14 @@
       "decision_record": "docs/contract/ADR-034-query-transport.md",
       "decision_record_sha256": "04a97e5336df7588d1d041630350385e17835a94e8b46aa1f1f9c8939392361c",
       "status": "accepted working contract"
+    },
+    {
+      "task": "M0-04e",
+      "specification": "docs/contract/correction_contract.md",
+      "specification_sha256": "4e452beee6c7d6aac34a630e8d9e490590a28f03ab2144626de9d217e7818f18",
+      "decision_record": "docs/contract/ADR-035-correction-actions.md",
+      "decision_record_sha256": "430d05bf79ea1483ad6297d098b4ce810a7168c82b3027cb4760ec359045d9e5",
+      "status": "accepted working contract"
     }
   ],
   "corrections": [
@@ -144,6 +152,17 @@
         "docs/contract/query_transport_contract.md",
         "docs/contract/ADR-034-query-transport.md",
         "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§12, 16, 17, 31.5"
+      ]
+    },
+    {
+      "id": "ERR-M0-04E-CORRECTION-ACTIONS",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Appended the normative atomic Assertion correction and distinct Event correction commands after the M0-04d Query/Transport supplement.",
+      "authority": [
+        "docs/contract/correction_contract.md",
+        "docs/contract/ADR-035-correction-actions.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§2.2, 2.3.2, 5.3, 8, 17, 31.2",
+        "docs/source/WorldDB_Consolidation_Trace.md: LEGACY-AST-04, EVT-16, PROV-03/04"
       ]
     },
     {
