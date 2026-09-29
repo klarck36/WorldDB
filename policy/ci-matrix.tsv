@@ -1,0 +1,5 @@
+# Provider-neutral M0-14 job contract v1.
+job_id	os	rust_toolchain	verify_profile	feature_profiles	checkout	ci_entrypoint	verify_command	artifact_manifest
+linux-msrv	linux	1.85.0	dev	no-default,default,all-features	clean	tools/run_ci_job.py	cargo xtask verify	tools/verify/steps.tsv
+windows-msrv	windows	1.85.0	dev	no-default,default,all-features	clean	tools/run_ci_job.py	cargo xtask verify	tools/verify/steps.tsv
+macos-msrv	macos	1.85.0	dev	no-default,default,all-features	clean	tools/run_ci_job.py	cargo xtask verify	tools/verify/steps.tsv

@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worlddb.invalid/schemas/ci-job-evidence-v1.json",
+  "title": "WorldDB M0-14 CI job evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "job_id",
+    "status",
+    "started_at",
+    "finished_at",
+    "artifact_path",
+    "os",
+    "architecture",
+    "rust_toolchain",
+    "cargo",
+    "target",
+    "commit",
+    "checkout_clean_before",
+    "checkout_clean_after",
+    "feature_profiles",
+    "verify_command",
+    "exit_code",
+    "failure_reasons",
+    "verify_summary",
+    "skipped_steps",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "job_id": { "enum": ["linux-msrv", "windows-msrv", "macos-msrv"] },
+    "status": { "enum": ["PASS", "FAIL"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "artifact_path": { "type": "string", "minLength": 1 },
+    "os": { "type": "string", "minLength": 1 },
+    "architecture": { "type": "string", "minLength": 1 },
+    "rust_toolchain": { "type": "string", "minLength": 1 },
+    "cargo": { "type": "string", "minLength": 1 },
+    "target": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "checkout_clean_before": { "type": "boolean" },
+    "checkout_clean_after": { "type": "boolean" },
+    "feature_profiles": {
+      "type": "array",
+      "items": { "enum": ["no-default", "default", "all-features"] },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "verify_command": { "const": "cargo xtask verify" },
+    "exit_code": { "type": ["integer", "null"] },
+    "failure_reasons": { "type": "array", "items": { "type": "string" } },
+    "verify_summary": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile", "passed", "skipped", "failed"],
+          "properties": {
+            "profile": { "type": "string", "minLength": 1 },
+            "passed": { "type": "integer", "minimum": 0 },
+            "skipped": { "type": "integer", "minimum": 0 },
+            "failed": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "skipped_steps": { "type": "array", "items": { "type": "string" } },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": { "$ref": "#/$defs/artifact" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}
