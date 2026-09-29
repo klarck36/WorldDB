@@ -25,7 +25,7 @@ The Consolidation Trace preserves a legacy correction command that creates a rep
 - The Retraction in Assertion correction is an explicit generated record requiring both `AssertionCorrect` and `AssertionRetract`; `Corrects` alone and general Provenance creation never trigger lifecycle effects.
 - Event correction does not mean temporal succession or causal ordering. Separate EventRelation and EventRetraction commands retain their own permissions and semantics.
 - M2/M3/M4/M5/M8 must model the same outputs, OCC conflicts, authorization composition, idempotent retry, commit uncertainty, UI preview, and injected storage/audit faults.
-- No persisted type or WDB invariant ID is added; M0-02a source gaps remain open.
+- No persisted type or WDB invariant ID is added; ADR-039 later closes the 52 HARD source gaps; the two GUARDED gaps remain open.
 
 ## Verification obligations
 

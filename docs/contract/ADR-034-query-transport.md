@@ -25,7 +25,7 @@ Master §16 defined query operations, cursor binding, security order, and termin
 - Adapter parity can be checked against canonical DTOs without reproducing query semantics in UI or CLI code.
 - M3/M4/M5/M6/M8 must implement the DTO conversions, comparators, cursor continuation, cancellation, authorization mapping, precision rules, and parity/property/fuzz checks.
 - FullText may be absent in a conforming 1.0 engine; it must fail as unsupported and cannot silently become token search.
-- No persisted First-Class type or WDB invariant ID is added. The 54 source gaps and M0-02a decisions remain open.
+- No persisted First-Class type or WDB invariant ID is added. ADR-039 later closes the 52 HARD source gaps; the two GUARDED gaps remain open.
 
 ## Verification obligations
 

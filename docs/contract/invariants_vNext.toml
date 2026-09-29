@@ -306,7 +306,7 @@ implementations = ["Truth table"]
 id = "WDB-RES-006"
 class = "HARD"
 statement = "Resolutionausgabe besitzt deterministische kanonische Ordnung."
-main_locations = ["§2.2"]
+main_locations = ["§16", "M0-02a supplement"]
 evidence_classes = ["PT", "CT"]
 implementations = ["PT, CT"]
 
@@ -354,7 +354,7 @@ implementations = ["CF, Wire FZ"]
 id = "WDB-VAL-004"
 class = "HARD"
 statement = "`Value` besitzt kein globales fachliches `Ord`."
-main_locations = ["§2.3", "§12"]
+main_locations = ["§3.2"]
 evidence_classes = ["CF"]
 implementations = ["CF"]
 
@@ -1386,7 +1386,7 @@ implementations = ["E2E, PT"]
 id = "WDB-WIR-005"
 class = "HARD"
 statement = "Semantische Hard-Limits, Defaultprofile und provisorische Performancegates sind getrennt klassifiziert."
-main_locations = ["§12"]
+main_locations = ["§20.2"]
 evidence_classes = ["ST"]
 implementations = ["Spec/policy test"]
 
@@ -2010,7 +2010,7 @@ implementations = ["E2E security"]
 id = "WDB-DES-001"
 class = "HARD"
 statement = "Desktopfrontend kann Storage/Dateisystem nicht außerhalb versionierter IPC umgehen."
-main_locations = ["§34.2"]
+main_locations = ["ADR-018"]
 evidence_classes = ["NI", "E2E"]
 implementations = ["E2E security"]
 
@@ -2018,7 +2018,7 @@ implementations = ["E2E security"]
 id = "WDB-DES-002"
 class = "HARD"
 statement = "Core lauscht standardmäßig auf keinem Netzwerkport."
-main_locations = ["§34.2"]
+main_locations = ["ADR-018"]
 evidence_classes = ["E2E"]
 implementations = ["E2E"]
 

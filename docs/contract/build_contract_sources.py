@@ -22,6 +22,9 @@ MATRIX_NAME = "WorldDB_1.0_Invariantenabdeckung.tsv"
 ARCHIVE_NAME = "WorldDB_vNext_Lossless_Consolidation_Audit.zip"
 CONTRACT_DIR = Path("docs/contract")
 GAPS_NAME = "source_gaps.tsv"
+GAP_BINDINGS_NAME = "source_gap_bindings.tsv"
+GAP_RESOLUTION_SPEC = "source_gap_resolution.md"
+GAP_RESOLUTION_ADR = "ADR-039-source-gap-resolution.md"
 ERRATA_NAME = "source-errata.json"
 FIRST_CLASS_TYPE_FIELDS = (
     "name",
@@ -388,6 +391,27 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
 
     source_master_text = source_files[MASTER_NAME].decode("utf-8")
     master_lines = source_master_text.splitlines()
+    gap_binding_rows = read_tsv(root / CONTRACT_DIR / GAP_BINDINGS_NAME)
+    gap_resolution_rows = {
+        row["invariant_id"]: row
+        for row in gap_binding_rows
+        if row.get("scope") == "HARD_SOURCE_GAP"
+    }
+    his_resolution_rows = [
+        row for row in gap_binding_rows if row.get("scope") == "HIS_STRONGER_MASTER_RULE"
+    ]
+    if len(gap_resolution_rows) != 52 or len(his_resolution_rows) != 1:
+        raise ValueError("M0-02a registry must contain 52 HARD resolutions and one WDB-HIS-001 reconciliation")
+    if set(gap_resolution_rows) & {"WDB-HIS-001"} or his_resolution_rows[0].get("invariant_id") != "WDB-HIS-001":
+        raise ValueError("M0-02a registry has an invalid WDB-HIS-001 reconciliation")
+    if any(
+        not row.get(field, "").strip()
+        for row in gap_binding_rows
+        for field in ("source_statement", "normative_anchor", "primary_task", "evidence_classes", "owner", "test_obligation", "source_boundary")
+    ):
+        raise ValueError("M0-02a registry has an incomplete binding")
+    if any(row.get("approval_status") != "APPROVED_2026-09-29;ADR-039" for row in gap_binding_rows):
+        raise ValueError("M0-02a registry contains an unapproved binding")
     addition_files = (
         ("M0-04", ENTITY_PERSPECTIVE_SPEC, ENTITY_PERSPECTIVE_ADR),
         ("M0-04a", ARCHIVE_TRANSFER_SPEC, ARCHIVE_TRANSFER_ADR),
@@ -395,6 +419,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         ("M0-04c", SECURITY_POLICY_SPEC, SECURITY_POLICY_ADR),
         ("M0-04d", QUERY_TRANSPORT_SPEC, QUERY_TRANSPORT_ADR),
         ("M0-04e", CORRECTION_SPEC, CORRECTION_ADR),
+        ("M0-02a", GAP_RESOLUTION_SPEC, GAP_RESOLUTION_ADR),
     )
     addition_payloads = {
         name: (root / CONTRACT_DIR / name).read_bytes()
@@ -453,8 +478,16 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     binding_index = 0
     corrected_layout = False
     binding_changes: list[dict] = []
+    location_corrections: list[dict] = []
     line_corrections: list[dict] = []
     array_additions_total = 0
+    expected_location_corrections = {
+        "WDB-DES-001": (["§34.2"], ["ADR-018"]),
+        "WDB-DES-002": (["§34.2"], ["ADR-018"]),
+        "WDB-RES-006": (["§2.2"], ["§16", "M0-02a supplement"]),
+        "WDB-VAL-004": (["§2.3", "§12"], ["§3.2"]),
+        "WDB-WIR-005": (["§12"], ["§20.2"]),
+    }
 
     for start, end in zip(boundaries, boundaries[1:]):
         block = toml_text[start:end]
@@ -482,6 +515,23 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                     toml_string_array([source_register[invariant_id]["primary_tests"]]),
                 )
                 corrected_layout = True
+            if invariant_id in expected_location_corrections:
+                old_locations, new_locations = expected_location_corrections[invariant_id]
+                if source_row["main_locations"] != old_locations:
+                    raise ValueError(
+                        f"Unexpected immutable main_locations for {invariant_id}: "
+                        f"{source_row['main_locations']}"
+                    )
+                block = replace_toml_field(
+                    block, "main_locations", toml_string_array(new_locations)
+                )
+                location_corrections.append(
+                    {
+                        "invariant_id": invariant_id,
+                        "original_main_locations": old_locations,
+                        "corrected_main_locations": new_locations,
+                    }
+                )
         elif table_name == "main_rule_binding":
             rows = source_toml["main_rule_binding"]
             if binding_index >= len(rows):
@@ -538,6 +588,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         raise ValueError("Not all main_rule_binding TOML tables were visited")
     if not corrected_layout:
         raise ValueError("Expected WDB-LAY-011 source-field correction was not applied")
+    if {row["invariant_id"] for row in location_corrections} != set(expected_location_corrections):
+        raise ValueError("M0-02a did not correct every confirmed master-location entry")
     corrected_toml = "".join(chunks).rstrip() + "\n\n" + first_class_toml(first_class_types)
     corrected_doc = tomllib.loads(corrected_toml)
     corrected_invariants = {row["id"]: row for row in corrected_doc["invariant"]}
@@ -547,6 +599,9 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             raise ValueError(f"Corrected TOML invariant still differs from source: {invariant_id}")
         if ", ".join(parsed["implementations"]) != source_register[invariant_id]["primary_tests"]:
             raise ValueError(f"TOML implementation/test field mismatch: {invariant_id}")
+    for invariant_id, (_, expected_locations) in expected_location_corrections.items():
+        if corrected_invariants[invariant_id]["main_locations"] != expected_locations:
+            raise ValueError(f"Corrected main_locations differ from M0-02a for {invariant_id}")
 
     bindings = corrected_doc.get("main_rule_binding", [])
     if len(bindings) != 149 or len({row["key"] for row in bindings}) != 149:
@@ -575,13 +630,32 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         main_lines = [key.removeprefix("MAIN-L") for key in keys]
         if invariant_id == "WDB-HIS-001":
             note = (
-                "Register statement is shorter than Master §§2.1/3.1; preserve it verbatim and "
-                "resolve the stronger Genesis/gapless/overflow wording in M0-02a."
+                "Product Owner confirmed the stronger Master §§2.1/3.1 rule in ADR-039; "
+                "preserve this shorter register statement verbatim for source comparison."
             )
         elif keys:
             note = "Direct WDB-ID reference on the listed normalized Master line(s)."
         else:
-            note = "No direct WDB-ID reference on any of the 149 bound Master main-text lines."
+            note = (
+                "No direct WDB-ID reference on any of the 149 bound Master main-text lines; "
+                "closed by the approved M0-02a supplement."
+                if invariant_id in gap_resolution_rows
+                else "No direct WDB-ID reference on any of the 149 bound Master main-text lines."
+            )
+        if invariant_id in gap_resolution_rows:
+            resolution_status = "CLOSED_BY_M0_02A"
+            effective_anchor = gap_resolution_rows[invariant_id]["normative_anchor"]
+        elif invariant_id == "WDB-HIS-001":
+            resolution_status = "CONFIRMED_STRONGER_MASTER_RULE"
+            effective_anchor = f"{his_resolution_rows[0]['normative_anchor']};MAIN-L73;MAIN-L235"
+        elif keys:
+            resolution_status = "SOURCE_ANCHORED"
+            effective_anchor = ";".join(keys)
+        elif row["class"] == "GUARDED":
+            resolution_status = "OPEN_GUARDED"
+            effective_anchor = ""
+        else:
+            raise ValueError(f"Unresolved HARD source gap after M0-02a: {invariant_id}")
         gap_rows.append(
             {
                 "invariant_id": invariant_id,
@@ -590,6 +664,9 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 "anchor_status": "ANCHORED" if keys else "NORMATIVE_SOURCE_GAP",
                 "master_lines": ";".join(main_lines),
                 "binding_keys": ";".join(keys),
+                "m0_02a_status": resolution_status,
+                "effective_normative_anchor": effective_anchor,
+                "decision_record": "ADR-039" if resolution_status in {"CLOSED_BY_M0_02A", "CONFIRMED_STRONGER_MASTER_RULE"} else "",
                 "note": note,
             }
         )
@@ -601,6 +678,9 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "anchor_status",
             "master_lines",
             "binding_keys",
+            "m0_02a_status",
+            "effective_normative_anchor",
+            "decision_record",
             "note",
         ],
         gap_rows,
@@ -611,6 +691,18 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     gap_ids = invariant_ids - anchored_ids
     if len(anchored_ids) + len(gap_ids) != 253:
         raise ValueError("Anchor and source-gap classification does not cover all 253 IDs")
+    hard_gap_ids = {key for key in gap_ids if matrix[key]["class"] == "HARD"}
+    if hard_gap_ids != set(gap_resolution_rows):
+        raise ValueError(
+            "M0-02a binding IDs do not exactly cover HARD source gaps: "
+            f"unbound={sorted(hard_gap_ids - set(gap_resolution_rows))}, "
+            f"unexpected={sorted(set(gap_resolution_rows) - hard_gap_ids)}"
+        )
+    for invariant_id, binding in gap_resolution_rows.items():
+        if binding["class"] != matrix[invariant_id]["class"] or binding["source_statement"] != matrix[invariant_id]["source_statement"]:
+            raise ValueError(f"M0-02a binding differs from the confirmed source statement: {invariant_id}")
+    if his_resolution_rows[0]["source_statement"] != matrix["WDB-HIS-001"]["source_statement"]:
+        raise ValueError("WDB-HIS-001 reconciliation differs from the preserved source-register wording")
     gap_class_counts = {
         class_name: sum(
             1
@@ -619,6 +711,15 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         )
         for class_name in ("HARD", "GUARDED")
     }
+    effective_hard_gaps = [
+        row["invariant_id"]
+        for row in gap_rows
+        if row["class"] == "HARD"
+        and row["m0_02a_status"]
+        not in {"SOURCE_ANCHORED", "CLOSED_BY_M0_02A", "CONFIRMED_STRONGER_MASTER_RULE"}
+    ]
+    if effective_hard_gaps:
+        raise ValueError(f"HARD invariants lack effective normative anchors: {effective_hard_gaps}")
 
     contract_files[TOML_NAME] = corrected_toml.encode("utf-8")
     output_files: dict[Path, bytes] = {
@@ -790,6 +891,23 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 "changed_bindings": binding_changes,
                 "added_id_references_total": array_additions_total,
             },
+            {
+                "id": "ERR-M0-02A-REGISTER-LOCATIONS",
+                "file": TOML_NAME,
+                "change": "Corrected the confirmed normative locations for WDB-DES-001/002, WDB-VAL-004, WDB-WIR-005, and WDB-RES-006 in the working invariant registry.",
+                "changes": location_corrections,
+                "authority": f"docs/contract/{GAP_RESOLUTION_ADR}",
+            },
+            {
+                "id": "ERR-M0-02A-NORMATIVE-GAPS",
+                "file": MASTER_NAME,
+                "change": "Appended the accepted M0-02a supplement with all 52 confirmed HARD statements, exact source boundaries, owners, and test obligations.",
+                "authority": [
+                    f"docs/contract/{GAP_RESOLUTION_SPEC}",
+                    f"docs/contract/{GAP_RESOLUTION_ADR}",
+                    f"docs/contract/{GAP_BINDINGS_NAME}",
+                ],
+            },
         ],
         "reconciliation_with_2026_09_28_plan_audit": {
             "historical_count": {
@@ -817,7 +935,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                     "Master §§2.1/3.1 additionally require gapless published revisions, Genesis 0, "
                     "first commit 1, and reserving Revision::MAX for overflow safety."
                 ),
-                "mechanical_action": "Preserved the registry wording; no semantic strengthening was inferred.",
+                "mechanical_action": "Product Owner confirmed the stronger existing Master rule unchanged; the shorter register wording was preserved and bound explicitly in ADR-039.",
             }
         ],
         "classification_method": {
@@ -843,11 +961,33 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 "normative_source_gaps_by_class": gap_class_counts,
             },
         },
+        "m0_02a_resolution": {
+            "status": "ACCEPTED",
+            "decision_record": f"docs/contract/{GAP_RESOLUTION_ADR}",
+            "normative_supplement": f"docs/contract/{GAP_RESOLUTION_SPEC}",
+            "binding_registry": f"docs/contract/{GAP_BINDINGS_NAME}",
+            "binding_registry_sha256": sha256((root / CONTRACT_DIR / GAP_BINDINGS_NAME).read_bytes()),
+            "confirmed_hard_gap_count": len(gap_resolution_rows),
+            "confirmed_hard_gap_ids": sorted(gap_resolution_rows),
+            "remaining_guarded_gap_ids": sorted(
+                row["invariant_id"]
+                for row in gap_rows
+                if row["m0_02a_status"] == "OPEN_GUARDED"
+            ),
+            "effective_open_hard_gap_count": len(effective_hard_gaps),
+            "wdb_his_001": {
+                "status": "STRONGER_MASTER_RULE_CONFIRMED",
+                "source_register_statement_preserved": matrix["WDB-HIS-001"]["source_statement"],
+                "master_lines": [73, 235],
+                "decision_record": f"docs/contract/{GAP_RESOLUTION_ADR}",
+            },
+            "corrected_locations": location_corrections,
+        },
         "verification_limits": [
             "This is a structural source comparison; a text reference is not a product test.",
-            "Open normative source gaps require an explicit M0-02a decision.",
+            "The two GUARDED gaps WDB-ENG-006 and WDB-PER-001 remain open; no HARD source gap remains open after M0-02a.",
             "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-            "The Entity/Perspective, Archive/HistorySpace, Constraint/Time, and Security Policy supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
+            "The M0 working-contract supplements are explicit contract additions, not a claim that the missing original v3.1 source was present.",
         ],
     }
     output_files[CONTRACT_DIR / ERRATA_NAME] = (
@@ -874,9 +1014,13 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             QUERY_TRANSPORT_ADR,
             CORRECTION_SPEC,
             CORRECTION_ADR,
+            GAP_BINDINGS_NAME,
+            GAP_RESOLUTION_SPEC,
+            GAP_RESOLUTION_ADR,
             "ADR-036-rust-msrv.md",
             "ADR-037-uuidv7-generator.md",
             "ADR-038-project-license.md",
+            "__pycache__",
         }
         and path.name not in expected_names
     ]
@@ -899,6 +1043,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         "normative_source_gaps": len(gap_ids),
         "normative_source_gaps_HARD": gap_class_counts["HARD"],
         "normative_source_gaps_GUARDED": gap_class_counts["GUARDED"],
+        "m0_02a_confirmed_hard_gaps": len(gap_resolution_rows),
+        "effective_hard_gaps_open": len(effective_hard_gaps),
     }
     return output_files, metrics
 

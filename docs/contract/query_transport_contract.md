@@ -4,7 +4,7 @@
 
 **Decision record:** [ADR-034](ADR-034-query-transport.md)
 
-**Scope:** completes Master §§12, 16, 17, 31.5, and the desktop IPC boundary for query filters, sorting, token search, page DTOs, transport envelopes, cancellation, and protocol versioning. It adds no persisted First-Class type or WDB invariant ID and leaves the M0-02a source gaps open.
+**Scope:** completes Master §§12, 16, 17, 31.5, and the desktop IPC boundary for query filters, sorting, token search, page DTOs, transport envelopes, cancellation, and protocol versioning. It adds no persisted First-Class type or WDB invariant ID and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
 
 ## 1. One semantic request across adapters
 

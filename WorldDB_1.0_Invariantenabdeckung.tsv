@@ -1,6 +1,6 @@
 invariant_id	class	source_statement	primary_task	evidence_classes	followup_evidence_tasks	positive_evidence	negative_evidence	status	note
 WDB-PHIL-001	HARD	Abstraktionen erhalten jede für Semantik, History, Security, Recovery, Retry, Ownership oder Diagnose relevante Unterscheidung, sofern kein Verlustfreiheitsnachweis vorliegt.	M9-13b	CT,FZ,ST				PLANNED	
-WDB-HIS-001	HARD	Veröffentlichte Revisionen steigen monoton und sind eindeutig.	M2-01	SM,CR	M5-22			PLANNED	Master §§2.1/3.1 verlangt zusätzlich lückenlose publizierte Revisionen, Genesis 0, ersten Commit 1 und reserviertes Revision::MAX; Quellabweichung in M0-02 klären.
+WDB-HIS-001	HARD	Veröffentlichte Revisionen steigen monoton und sind eindeutig.	M2-01	SM,CR	M5-22			PLANNED	ADR-039 confirms stronger Master §§2.1/3.1; preserve source statement for source comparison. M2-01/M5-22 proof obligations unchanged.
 WDB-HIS-002	HARD	Revision ist Transaction Time und bestimmt keine fachliche Precedence.	M2-01	UT,DF				PLANNED	
 WDB-HIS-003	HARD	Committed History wird nur durch expliziten Offline-Purge physisch entfernt.	M5-15	SM,CR	M7-15			PLANNED	
 WDB-HIS-004	HARD	Historical Query bindet Daten- und Schema-Snapshot reproduzierbar.	M2-16	DF,CT	M3-05,M5-12,M6-13			PLANNED	
@@ -37,13 +37,13 @@ WDB-RES-002	HARD	Keine ResolutionPolicy verwendet implizites Last Write Wins.	M2
 WDB-RES-003	HARD	Securityfilter läuft vor Masking und Resolution.	M3-04	DF,NI				PLANNED	
 WDB-RES-004	HARD	ReplacementBoundary ist nur für MultiValueReplace gültig.	M2-10	UT,FZ				PLANNED	
 WDB-RES-005	HARD	ReplacementBoundary kann eine explizit vollständige leere Menge erzeugen.	M2-10	UT				PLANNED	
-WDB-RES-006	HARD	Resolutionausgabe besitzt deterministische kanonische Ordnung.	M2-16	PT,CT				PLANNED	
+WDB-RES-006	HARD	Resolutionausgabe besitzt deterministische kanonische Ordnung.	M2-16	PT,CT				PLANNED	Normative location: Master §16 plus M0-02a supplement for complete canonical resolution ordering (ADR-039).
 WDB-VAL-001	HARD	Core-Value enthält weder Null, Float, JSON, Array noch Map.	M1-04	CF,FZ				PLANNED	
 WDB-VAL-002	HARD	Equality ist typisiert und coercion-frei.	M1-03	PT				PLANNED	
 WDB-VAL-003	HARD	Decimal besitzt genau eine kanonische Darstellung.	M1-03	PT,CT				PLANNED	
 WDB-VAL-005	HARD	Decimal-Scale ist nicht Teil numerischer Identität; Darstellungs-/Messpräzision liegt in Schema/Metadaten.	M1-05	PT,CT				PLANNED	
 WDB-VAL-006	HARD	CalendarPeriod ist 1.0 kein Assertion-Value.	M1-04	CF,FZ				PLANNED	
-WDB-VAL-004	HARD	`Value` besitzt kein globales fachliches `Ord`.	M1-04	CF				PLANNED	
+WDB-VAL-004	HARD	`Value` besitzt kein globales fachliches `Ord`.	M1-04	CF				PLANNED	Normative location corrected to Master §3.2 by ADR-039.
 WDB-ID-001	HARD	Domänen-IDs sind nicht vertauschbare Newtypes.	M1-01	CF				PLANNED	
 WDB-ID-002	HARD	IDs sind 128 Bit; Zero und All-FF sind ungültig.	M1-01	PT,FZ				PLANNED	
 WDB-ID-003	HARD	ID-Zeitanteile definieren keine fachliche Zeit oder Authentizität.	M1-01	UT,ST				PLANNED	
@@ -172,7 +172,7 @@ WDB-WIR-001	HARD	Persistentes Format ist explizit versioniert und serde-implemen
 WDB-WIR-002	HARD	Varints, Felder und Decimal sind kanonisch; alternative Encodings werden abgewiesen.	M1-16	PT,FZ				PLANNED	
 WDB-WIR-003	HARD	Decoder prüft Limits und Overflows vor Allokation/Cast.	M1-18	FZ,PF	M9-04a			PLANNED	
 WDB-WIR-004	HARD	TypeScript transportiert i128/u128/Decimal/Revision verlustfrei als Strings.	M1-19	PT,E2E	M8-26d			PLANNED	
-WDB-WIR-005	HARD	Semantische Hard-Limits, Defaultprofile und provisorische Performancegates sind getrennt klassifiziert.	M1-18	ST	M6-14c			PLANNED	
+WDB-WIR-005	HARD	Semantische Hard-Limits, Defaultprofile und provisorische Performancegates sind getrennt klassifiziert.	M1-18	ST	M6-14c			PLANNED	Normative location corrected to Master §20.2 by ADR-039.
 WDB-WAL-001	HARD	Commitmarker wird erst nach synchronisiertem Prepare geschrieben.	M5-04	CR	M5-12,M5-22			PLANNED	
 WDB-WAL-002	HARD	Zweiter WAL-Sync ist Commitpoint.	M5-04	CR	M5-12,M5-22			PLANNED	
 WDB-WAL-003	HARD	Manifest referenziert nie Daten oberhalb des sicheren WAL-Präfix.	M5-07	SM,CR				PLANNED	
@@ -250,5 +250,5 @@ WDB-ENG-007	HARD	Crates werden nur nach bestandenem Boundary-Gate extrahiert; de
 WDB-DEP-001	HARD	Releasebuilds verwenden Lockfile und genehmigte Sources/Lizenzen.	M9-09	ST		artifact:docs/architecture/M0-12-dependency-policy.md;artifact:.cargo/deny.toml;test:cargo-deny check all	test:test_dependency_policy.CargoDenyNegativeTests.test_banned_dependency_makes_cargo_deny_fail;test:test_dependency_policy.CargoDenyNegativeTests.test_external_default_features_require_explicit_review	PLANNED	M0-12 aktiviert die Policy; tatsächlicher Releasebuild und SBOM-Nachweis bleiben M9-09.
 WDB-DEP-002	HARD	Dependencytypen leaken nicht unabsichtlich in stabile Public API.	M8-01	ST		artifact:tools/check_dependency_policy.py;test:test_dependency_policy.CoreErrorErasureTests.test_typed_domain_error_is_allowed	test:test_dependency_policy.CoreErrorErasureTests.test_boxed_dynamic_error_in_core_is_rejected	PLANNED	Core-Error-Erasure wird in M0-12 geprüft; der stabile Public-API-Diff folgt M8-01.
 WDB-EXT-001	HARD	1.0 führt keinen untrusted Extensioncode in-process aus.	M7-13a	NI,E2E				PLANNED	
-WDB-DES-001	HARD	Desktopfrontend kann Storage/Dateisystem nicht außerhalb versionierter IPC umgehen.	M8-09	NI,E2E				PLANNED	
-WDB-DES-002	HARD	Core lauscht standardmäßig auf keinem Netzwerkport.	M8-09	E2E				PLANNED	
+WDB-DES-001	HARD	Desktopfrontend kann Storage/Dateisystem nicht außerhalb versionierter IPC umgehen.	M8-09	NI,E2E				PLANNED	Normative location corrected to ADR-018 by ADR-039.
+WDB-DES-002	HARD	Core lauscht standardmäßig auf keinem Netzwerkport.	M8-09	E2E				PLANNED	Normative location corrected to ADR-018 by ADR-039.

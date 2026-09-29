@@ -2,7 +2,7 @@
 
 **Status:** accepted working contract for M0-04  
 **Decision record:** [ADR-030](ADR-030-entity-perspective.md)  
-**Scope:** fills the creation, typed-reference, type-assignment, metadata, history, retirement, and authorization details missing from Master §§2.3, 2.3.1, 3.1, 17, and 31.3. It does not change unrelated source gaps; the 52 HARD gaps in M0-02a remain open.
+**Scope:** fills the creation, typed-reference, type-assignment, metadata, history, retirement, and authorization details missing from Master §§2.3, 2.3.1, 3.1, 17, and 31.3. M0-02a later confirmed all 52 HARD source statements through ADR-039; the two GUARDED gaps WDB-ENG-006 and WDB-PER-001 remain open.
 
 This supplement is appended to the end of the Master working copy by `build_contract_sources.py`; it does not change the physical line numbers of the source-bound `MAIN-L` rows.
 
@@ -119,7 +119,7 @@ Each action is checked against the acting `PrincipalId` and current effective po
 | `RetirePerspective(id)` | Appends one project-wide retirement and returns its typed lifecycle ID | Unknown/hidden/already retired ID or failed capability: no partial retirement |
 | Entity/Perspective reference in a domain write | Existing, active, authorized typed identity passes all schema constraints | Unknown, retired, cross-type, unauthorized, or constraint-invalid reference fails atomically |
 
-The IDs and definition/lifecycle changes participate in the ordinary transaction commit and its one published Revision. They do not allocate a second counter or World-Time axis. Historical queries do not observe later catalog metadata or retirement. These rules do not resolve the separate `WDB-HIS-001` gap about exact Genesis/gapless/overflow wording; M0-02a remains responsible for that decision.
+The IDs and definition/lifecycle changes participate in the ordinary transaction commit and its one published Revision. They do not allocate a second counter or World-Time axis. Historical queries do not observe later catalog metadata or retirement. The stronger WDB-HIS-001 rule in Master §§2.1/3.1 is confirmed unchanged by ADR-039.
 
 ## 6. Existing-contract cross-check
 

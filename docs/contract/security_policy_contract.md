@@ -4,7 +4,7 @@
 
 **Decision record:** [ADR-033](ADR-033-security-policy.md)
 
-**Scope:** completes Master §§6–8, 14, 17–18 and 31.5–31.6 for policy records, principals, roles, capabilities, scope matching, historical security evaluation, and `SecurityEpoch`. It adds no WDB invariant IDs and leaves the M0-02a source gaps open.
+**Scope:** completes Master §§6–8, 14, 17–18 and 31.5–31.6 for policy records, principals, roles, capabilities, scope matching, historical security evaluation, and `SecurityEpoch`. It adds no WDB invariant IDs and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
 
 ## 1. Security history records
 

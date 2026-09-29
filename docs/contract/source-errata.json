@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "08199d761a401e200e9613b0367914e8a73bab983c556b5230482a8d53b598e6",
+      "working_sha256": "efdd15a69ac74dbc12f78ab73ee1562b37c927f48de5e98c236db21d000ce739",
       "byte_identical": false
     },
     {
@@ -49,7 +49,7 @@
       "working_file": "invariants_vNext.toml",
       "source_file": "docs/source/invariants_vNext.toml",
       "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
-      "working_sha256": "083704e5ce5e9805d4a3f943d5880da357007a571890779ed6e4fb9788dc92fc",
+      "working_sha256": "d3c41f64687574db67ae659283848b8a6ea4c56c7c085bbc882d73b0a14a1ef9",
       "byte_identical": false
     }
   ],
@@ -57,9 +57,9 @@
     {
       "task": "M0-04",
       "specification": "docs/contract/entity_perspective_contract.md",
-      "specification_sha256": "0e63500a6bc044fb672c7b87224264697e25c32fd2efa2bdeff0070236bc90f2",
+      "specification_sha256": "ff5c9c6fde24b56eb3c38e97a6bdb597b1bd7f33d8f82bdd564281760a8f54d6",
       "decision_record": "docs/contract/ADR-030-entity-perspective.md",
-      "decision_record_sha256": "db366f5a63bf6e98c5797e5ba0ff4aa95f3174799ee4e9708edd20ba9ba0c04c",
+      "decision_record_sha256": "36ab71e5960151f0e6ca395a26620f6e71dca220ab3fd44d0bd44f1d984fb28b",
       "status": "accepted working contract"
     },
     {
@@ -73,7 +73,7 @@
     {
       "task": "M0-04b",
       "specification": "docs/contract/constraint_time_contract.md",
-      "specification_sha256": "035c738ddbc3bb29cdab2f1ca5ee49c5191091b212e5b3d7beb57edd8bbbda96",
+      "specification_sha256": "f0634dd2dce515a4adddaa2d0ce049d1277f485c30a8d64f25b29abd46bcc38e",
       "decision_record": "docs/contract/ADR-032-constraint-time.md",
       "decision_record_sha256": "80c8253d7e4912e5b87938fafd0f673ecad7142a5ac34f1535f96afba112bba0",
       "status": "accepted working contract"
@@ -81,7 +81,7 @@
     {
       "task": "M0-04c",
       "specification": "docs/contract/security_policy_contract.md",
-      "specification_sha256": "a43b4a5b1e84678bc0b3e8cbb3a2c4e3d9934bc272b4fd890a1ebc2aef52c2a3",
+      "specification_sha256": "3fc613fca7e94656f7f394abb5d7daf541fd1ac434fa572395be715f532f6d84",
       "decision_record": "docs/contract/ADR-033-security-policy.md",
       "decision_record_sha256": "733dec3b571a5a68887216eb69374309e8d9e4dc4122439e3415459463ad77f7",
       "status": "accepted working contract"
@@ -89,17 +89,25 @@
     {
       "task": "M0-04d",
       "specification": "docs/contract/query_transport_contract.md",
-      "specification_sha256": "081b41693636573c8a893a246f58aab8e7bc1a37ab1df7524a9161685490d3e6",
+      "specification_sha256": "f266af99721b53fb8a7778cd67c6a3589c6564ce080bcc3866cdb728724ddc8d",
       "decision_record": "docs/contract/ADR-034-query-transport.md",
-      "decision_record_sha256": "04a97e5336df7588d1d041630350385e17835a94e8b46aa1f1f9c8939392361c",
+      "decision_record_sha256": "9172099bc84e31948bac4f4ca8bbb36b939046a6f545d38a8c6a790023e61893",
       "status": "accepted working contract"
     },
     {
       "task": "M0-04e",
       "specification": "docs/contract/correction_contract.md",
-      "specification_sha256": "4e452beee6c7d6aac34a630e8d9e490590a28f03ab2144626de9d217e7818f18",
+      "specification_sha256": "7ad30e863a54c923d0f74636c2c322a6bea01a4a62d422f397cd065166f61d23",
       "decision_record": "docs/contract/ADR-035-correction-actions.md",
-      "decision_record_sha256": "430d05bf79ea1483ad6297d098b4ce810a7168c82b3027cb4760ec359045d9e5",
+      "decision_record_sha256": "d1da6a2ccc08d8bfdc69105cc81d42431d7c355152229a7804cc36b265306d80",
+      "status": "accepted working contract"
+    },
+    {
+      "task": "M0-02a",
+      "specification": "docs/contract/source_gap_resolution.md",
+      "specification_sha256": "7d024616f9a2ff1bfb2ca3dbacb1025dca3074825d83a2d9d100f13a3328e412",
+      "decision_record": "docs/contract/ADR-039-source-gap-resolution.md",
+      "decision_record_sha256": "ec38ad858797cf04fa78b76f8507e2488e81c0da543d0ff380f85f41f09fd49a",
       "status": "accepted working contract"
     }
   ],
@@ -463,6 +471,71 @@
         }
       ],
       "added_id_references_total": 51
+    },
+    {
+      "id": "ERR-M0-02A-REGISTER-LOCATIONS",
+      "file": "invariants_vNext.toml",
+      "change": "Corrected the confirmed normative locations for WDB-DES-001/002, WDB-VAL-004, WDB-WIR-005, and WDB-RES-006 in the working invariant registry.",
+      "changes": [
+        {
+          "invariant_id": "WDB-RES-006",
+          "original_main_locations": [
+            "§2.2"
+          ],
+          "corrected_main_locations": [
+            "§16",
+            "M0-02a supplement"
+          ]
+        },
+        {
+          "invariant_id": "WDB-VAL-004",
+          "original_main_locations": [
+            "§2.3",
+            "§12"
+          ],
+          "corrected_main_locations": [
+            "§3.2"
+          ]
+        },
+        {
+          "invariant_id": "WDB-WIR-005",
+          "original_main_locations": [
+            "§12"
+          ],
+          "corrected_main_locations": [
+            "§20.2"
+          ]
+        },
+        {
+          "invariant_id": "WDB-DES-001",
+          "original_main_locations": [
+            "§34.2"
+          ],
+          "corrected_main_locations": [
+            "ADR-018"
+          ]
+        },
+        {
+          "invariant_id": "WDB-DES-002",
+          "original_main_locations": [
+            "§34.2"
+          ],
+          "corrected_main_locations": [
+            "ADR-018"
+          ]
+        }
+      ],
+      "authority": "docs/contract/ADR-039-source-gap-resolution.md"
+    },
+    {
+      "id": "ERR-M0-02A-NORMATIVE-GAPS",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Appended the accepted M0-02a supplement with all 52 confirmed HARD statements, exact source boundaries, owners, and test obligations.",
+      "authority": [
+        "docs/contract/source_gap_resolution.md",
+        "docs/contract/ADR-039-source-gap-resolution.md",
+        "docs/contract/source_gap_bindings.tsv"
+      ]
     }
   ],
   "reconciliation_with_2026_09_28_plan_audit": {
@@ -487,7 +560,7 @@
         235
       ],
       "difference": "Master §§2.1/3.1 additionally require gapless published revisions, Genesis 0, first commit 1, and reserving Revision::MAX for overflow safety.",
-      "mechanical_action": "Preserved the registry wording; no semantic strengthening was inferred."
+      "mechanical_action": "Product Owner confirmed the stronger existing Master rule unchanged; the shorter register wording was preserved and bound explicitly in ADR-039."
     }
   ],
   "classification_method": {
@@ -511,10 +584,135 @@
       }
     }
   },
+  "m0_02a_resolution": {
+    "status": "ACCEPTED",
+    "decision_record": "docs/contract/ADR-039-source-gap-resolution.md",
+    "normative_supplement": "docs/contract/source_gap_resolution.md",
+    "binding_registry": "docs/contract/source_gap_bindings.tsv",
+    "binding_registry_sha256": "363978efb9069c965b5d3dec08903c9bc4fb3aef38ac5da5a99d61179e59e780",
+    "confirmed_hard_gap_count": 52,
+    "confirmed_hard_gap_ids": [
+      "WDB-API-001",
+      "WDB-API-002",
+      "WDB-API-003",
+      "WDB-API-004",
+      "WDB-API-005",
+      "WDB-CON-001",
+      "WDB-DES-001",
+      "WDB-DES-002",
+      "WDB-ENG-004",
+      "WDB-ENG-005",
+      "WDB-ENG-007",
+      "WDB-ERR-006",
+      "WDB-EXP-001",
+      "WDB-EXP-002",
+      "WDB-EXT-001",
+      "WDB-ID-004",
+      "WDB-IDX-001",
+      "WDB-IDX-002",
+      "WDB-IDX-003",
+      "WDB-OBS-001",
+      "WDB-OBS-002",
+      "WDB-OBS-004",
+      "WDB-OCC-001",
+      "WDB-OCC-002",
+      "WDB-OCC-003",
+      "WDB-PRG-001",
+      "WDB-PRG-002",
+      "WDB-REC-001",
+      "WDB-REC-002",
+      "WDB-REC-003",
+      "WDB-REC-004",
+      "WDB-REC-005",
+      "WDB-REF-001",
+      "WDB-REF-002",
+      "WDB-RES-006",
+      "WDB-SEN-002",
+      "WDB-STO-001",
+      "WDB-STO-002",
+      "WDB-STO-003",
+      "WDB-TYP-002",
+      "WDB-VAL-004",
+      "WDB-VAL-005",
+      "WDB-VAL-006",
+      "WDB-WAL-001",
+      "WDB-WAL-002",
+      "WDB-WAL-003",
+      "WDB-WAL-004",
+      "WDB-WAL-005",
+      "WDB-WIR-001",
+      "WDB-WIR-002",
+      "WDB-WIR-004",
+      "WDB-WIR-005"
+    ],
+    "remaining_guarded_gap_ids": [
+      "WDB-ENG-006",
+      "WDB-PER-001"
+    ],
+    "effective_open_hard_gap_count": 0,
+    "wdb_his_001": {
+      "status": "STRONGER_MASTER_RULE_CONFIRMED",
+      "source_register_statement_preserved": "Veröffentlichte Revisionen steigen monoton und sind eindeutig.",
+      "master_lines": [
+        73,
+        235
+      ],
+      "decision_record": "docs/contract/ADR-039-source-gap-resolution.md"
+    },
+    "corrected_locations": [
+      {
+        "invariant_id": "WDB-RES-006",
+        "original_main_locations": [
+          "§2.2"
+        ],
+        "corrected_main_locations": [
+          "§16",
+          "M0-02a supplement"
+        ]
+      },
+      {
+        "invariant_id": "WDB-VAL-004",
+        "original_main_locations": [
+          "§2.3",
+          "§12"
+        ],
+        "corrected_main_locations": [
+          "§3.2"
+        ]
+      },
+      {
+        "invariant_id": "WDB-WIR-005",
+        "original_main_locations": [
+          "§12"
+        ],
+        "corrected_main_locations": [
+          "§20.2"
+        ]
+      },
+      {
+        "invariant_id": "WDB-DES-001",
+        "original_main_locations": [
+          "§34.2"
+        ],
+        "corrected_main_locations": [
+          "ADR-018"
+        ]
+      },
+      {
+        "invariant_id": "WDB-DES-002",
+        "original_main_locations": [
+          "§34.2"
+        ],
+        "corrected_main_locations": [
+          "ADR-018"
+        ]
+      }
+    ]
+  },
   "verification_limits": [
     "This is a structural source comparison; a text reference is not a product test.",
-    "Open normative source gaps require an explicit M0-02a decision.",
+    "The two GUARDED gaps WDB-ENG-006 and WDB-PER-001 remain open; no HARD source gap remains open after M0-02a.",
     "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-    "The Entity/Perspective, Archive/HistorySpace, Constraint/Time, and Security Policy supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
+    "The M0 working-contract supplements are explicit contract additions, not a claim that the missing original v3.1 source was present."
   ]
 }

@@ -4,7 +4,7 @@
 
 **Decision record:** [ADR-035](ADR-035-correction-actions.md)
 
-**Scope:** completes Master §§2.2, 2.3.2, 5.3, 8, 17, and 31.2 for the `CorrectAssertion` command and the distinct event-correction command. It makes the preserved `LEGACY-AST-04` intent from the Consolidation Trace executable as explicit commands. It adds no persisted First-Class type or WDB invariant ID and leaves the M0-02a source gaps open.
+**Scope:** completes Master §§2.2, 2.3.2, 5.3, 8, 17, and 31.2 for the `CorrectAssertion` command and the distinct event-correction command. It makes the preserved `LEGACY-AST-04` intent from the Consolidation Trace executable as explicit commands. It adds no persisted First-Class type or WDB invariant ID and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
 
 ## 1. Command boundary and shared transaction
 

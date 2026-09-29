@@ -1,12 +1,12 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-14 wartet auf die spätere GitHub-Actions-Einrichtung und den macOS-Lauf; M0-02a wartet auf Produktentscheidungen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 und M0-02a abgeschlossen; M0-14 wartet auf die spätere GitHub-Actions-Einrichtung und den macOS-Lauf
 
 **Nächste Task:** `M0-14` (BLOCKED)
 
 **Letzter abgeschlossener Milestone:** keiner  
-**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001; M0-14 ist bis zur späteren GitHub-Actions-Einrichtung und dem externen macOS-Lauf zurückgestellt. Ein zweiter CI-Anbieter ist nicht nötig.
+**Offene Blocker:** M0-14 bleibt bis zum späteren GitHub-Actions-Lauf einschließlich macOS offen. Ein zweiter CI-Anbieter ist nicht erforderlich.
 
 **M0-01 Baseline-Commit:** `0bb3c85` (`chore: establish WorldDB source baseline`).
 
@@ -20,7 +20,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 |---|---|---|---|---|---|---|---|
 | M0-01 | DONE | `0bb3c85`; `docs/M0-01-verification.md` | ZIP-Test, 6 Bytevergleiche und Plancheck bestanden | Temporär veränderte Spiegeldatei mit Exitcode 1 abgewiesen | Nicht fällig (M0-01) | – | M0-02 READY |
 | M0-02 | DONE | `cc8b190`; `docs/M0-02-verification.md`; `docs/contract/source-errata.json`; `docs/contract/source_gaps.tsv` | `build_contract_sources.py --verify-only`, 253-ID-Abgleich, 149 Haupttextbindungen, Sourcecheck und Plancheck bestanden | Manipulierte Kopie von `source_gaps.tsv` mit Exitcode 1 abgewiesen | Noch nicht fällig | geprüft 2026-09-29T02:00:47+02:00 | M0-03 READY |
-| M0-02a | BLOCKED | `docs/contract/source_gaps.tsv`; `docs/contract/source-errata.json` | 54 Lücken präzise klassifiziert; Produktnormen nicht erfunden | Nicht fällig bis Entscheidung | Noch nicht fällig | 2026-09-29T02:00:47+02:00 | Produktentscheidung zu 52 HARD-Lücken und stärkerem WDB-HIS-001-Mastertext erforderlich |
+| M0-02a | DONE | docs/M0-02a-verification.md; ADR-039; source_gap_resolution.md; source_gap_bindings.tsv | 52 wortgleiche HARD-Bindungen; stärkere WDB-HIS-001-Regel bestätigt; fünf Fundstellen korrigiert/ergänzt | Bidirektionaler Linkcheck, exakte Statement-/Quell-/Testpflichtprüfung und Quellen-/Planchecks bestanden | Nicht fällig (Vertragsentscheidung; Produkttests folgen ihren Tasks) | geprüft 2026-09-29T12:47:25+02:00 | M0-14 bleibt bis GitHub/macOS-CI offen |
 | M0-03 | DONE | `c4cbe8f`; `docs/M0-03-verification.md`; `docs/contract/verify_contract_docs.py` | 22 Typen; Docs Verify sowie Quell- und Plancheck bestanden | Entferntes Pflichtfeld und unregistrierter Typ in temporären Fixtures mit Exitcode 1 abgewiesen | Noch nicht fällig | geprüft 2026-09-29T02:09:32+02:00 | M0-04 DONE |
 | M0-04 | DONE | `fa95531`; `docs/M0-04-verification.md`; `docs/contract/ADR-030-entity-perspective.md`; `docs/contract/entity_perspective_contract.md` | Erzeugung, typed references, Typzuweisung, Metadatenhistorie, Retirement und Actions spezifiziert; Master-/Quellabgleich bestanden | Zwei temporäre Fixtures ohne EntityRetirement-Variante bzw. perspective.use mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04) | geprüft 2026-09-29T02:29:05+02:00 | M0-04a READY |
 | M0-04a | DONE | `605d5e3`; `docs/M0-04a-verification.md`; `docs/contract/ADR-031-archive-transfer.md`; `docs/contract/archive_transfer_contract.md` | Archive-/Unarchive- und Transfervertrag mit Revisionen, ID-Maps, Provenienz, Kollisions- und Konfliktregeln spezifiziert; Master-/Quellabgleich bestanden | Drei temporäre Fixtures ohne ArchiveTransition, Relation-ID-Map bzw. Zielkonfliktregel mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04a) | geprüft 2026-09-29T02:47:33+02:00 | M0-04b DONE |
@@ -55,7 +55,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 
 ## Blocker
 
-**M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. `docs/M0-02a-decision-proposal.md` bündelt den Freigabevorschlag; `docs/M0-02a-candidate-crosswalk.tsv` ordnet alle 52 Aussagen Kandidatenstellen im Master und bestehende Prüfpflichten zu und markiert fünf Stellen mit besonderem Klärungsbedarf. Bis zur Produktfreigabe bleiben die Arbeitskopien vorläufig und M0-02a blockiert das M0-15-Gate.
+**M0-02a (DONE):** Der Product Owner hat alle 52 HARD-Aussagen wortgleich als Normintention und die stärkere WDB-HIS-001-Masterregel bestätigt. ADR-039, der beschlossene Master-Anhang und das Bindungsregister verankern Aussagen, Verantwortung, Quellgrenze und Testpflicht; fünf Fundstellen wurden korrigiert oder eng ergänzt. Die zwei GUARDED-Quellenlücken bleiben offen. M0-02a blockiert M0-15 nicht mehr; M0-14 bleibt wegen der zurückgestellten GitHub-/macOS-CI-Nachweise offen.
 
 **M0-14:** Saubere lokale Runnerläufe auf Windows und WSL2/Linux bestehen auf Commit `9e2d948` mit jeweils 27 PASS, 1 sichtbarem `ci-matrix`-SKIP und 0 FAIL; die Manifeste sind im Taskregister referenziert. `git remote -v` ist leer; es gibt keine Workflowdatei. GitHub Actions ist für später vorgesehen. Ein zweiter Anbieter ist nicht erforderlich. Die externe Pipeline, der Artefaktupload und ein macOS-Runner fehlen bis zur späteren GitHub-Einrichtung; bis dahin bleibt die Task `BLOCKED`.
 

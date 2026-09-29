@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import re
@@ -25,6 +26,10 @@ QUERY_TRANSPORT_SPEC_NAME = "query_transport_contract.md"
 QUERY_TRANSPORT_ADR_NAME = "ADR-034-query-transport.md"
 CORRECTION_SPEC_NAME = "correction_contract.md"
 CORRECTION_ADR_NAME = "ADR-035-correction-actions.md"
+GAP_BINDINGS_NAME = "source_gap_bindings.tsv"
+GAP_RESOLUTION_SPEC_NAME = "source_gap_resolution.md"
+GAP_RESOLUTION_ADR_NAME = "ADR-039-source-gap-resolution.md"
+GAPS_NAME = "source_gaps.tsv"
 ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
@@ -65,7 +70,6 @@ REQUIRED_CONTRACT_CLAUSES = (
     "`perspective.use`",
     "Master §§3.1/3.2",
     "`LifecycleTargetRef` itself is unchanged",
-    "52 HARD gaps in M0-02a remain open",
     "WDB-HIS-001",
 )
 REQUIRED_ARCHIVE_TRANSFER_CLAUSES = (
@@ -305,6 +309,148 @@ def master_type_rows(master_path: Path) -> list[dict[str, object]]:
     return rows
 
 
+def read_tsv(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def verify_m0_02a(root: Path, resolution_text: str) -> None:
+    contract_dir = root / "docs" / "contract"
+    bindings = read_tsv(contract_dir / GAP_BINDINGS_NAME)
+    gaps = read_tsv(contract_dir / GAPS_NAME)
+    gap_by_id = {row["invariant_id"]: row for row in gaps}
+    if len(gap_by_id) != 253 or len(gaps) != len(gap_by_id):
+        raise ValueError("M0-02a source-gap inventory must cover 253 unique invariants")
+
+    hard_bindings = [row for row in bindings if row.get("scope") == "HARD_SOURCE_GAP"]
+    his_bindings = [row for row in bindings if row.get("scope") == "HIS_STRONGER_MASTER_RULE"]
+    hard_gap_ids = {
+        row["invariant_id"]
+        for row in gaps
+        if row["class"] == "HARD" and row["anchor_status"] == "NORMATIVE_SOURCE_GAP"
+    }
+    if len(hard_bindings) != 52 or len({row["invariant_id"] for row in hard_bindings}) != 52:
+        raise ValueError("M0-02a must bind exactly 52 unique HARD source gaps")
+    if {row["invariant_id"] for row in hard_bindings} != hard_gap_ids:
+        raise ValueError("M0-02a bindings do not exactly cover the 52 original HARD source gaps")
+    if len(his_bindings) != 1 or his_bindings[0].get("invariant_id") != "WDB-HIS-001":
+        raise ValueError("M0-02a must contain exactly one WDB-HIS-001 stronger-rule reconciliation")
+    if len(bindings) != 53 or len({(row.get("scope"), row.get("invariant_id")) for row in bindings}) != 53:
+        raise ValueError("M0-02a binding registry contains duplicate or unexpected rows")
+
+    hard_headings = re.findall(r"(?m)^### (WDB-[A-Z]+-\d{3})\s*$", resolution_text)
+    expected_ids = {row["invariant_id"] for row in hard_bindings}
+    if len(hard_headings) != 52 or set(hard_headings) != expected_ids:
+        raise ValueError("M0-02a normative supplement headings do not match the 52 HARD bindings")
+
+    source_path_pattern = re.compile(r"^([^:]+):(\d+)$")
+    for row in hard_bindings:
+        invariant_id = row["invariant_id"]
+        gap = gap_by_id.get(invariant_id)
+        if gap is None or gap["class"] != "HARD" or gap["anchor_status"] != "NORMATIVE_SOURCE_GAP":
+            raise ValueError(f"M0-02a binding does not refer to an original HARD source gap: {invariant_id}")
+        if row["source_statement"] != gap["source_statement"]:
+            raise ValueError(f"M0-02a statement differs from source_gaps.tsv: {invariant_id}")
+        if row["approval_status"] != "APPROVED_2026-09-29;ADR-039":
+            raise ValueError(f"M0-02a binding lacks the accepted ADR-039 decision: {invariant_id}")
+        expected_anchor = f"{GAP_RESOLUTION_SPEC_NAME}#{invariant_id.lower()}"
+        if row["normative_anchor"] != expected_anchor:
+            raise ValueError(f"M0-02a normative anchor is incorrect: {invariant_id}")
+        required_values = (
+            "declared_master_sections",
+            "source_candidate_lines",
+            "source_context_refs",
+            "primary_task",
+            "evidence_classes",
+            "owner",
+            "test_obligation",
+            "source_boundary",
+        )
+        if any(not row.get(field, "").strip() for field in required_values):
+            raise ValueError(f"M0-02a binding is missing responsibility, scope, test, or source data: {invariant_id}")
+        section_match = re.search(
+            rf"(?ms)^### {re.escape(invariant_id)}\s*\n(.*?)(?=^### |^## |\Z)",
+            resolution_text,
+        )
+        if not section_match:
+            raise ValueError(f"M0-02a normative section is missing: {invariant_id}")
+        section = section_match.group(1)
+        if f"**Normintention (wortgleich):** {row['source_statement']}" not in section:
+            raise ValueError(f"M0-02a normative wording is not exact: {invariant_id}")
+        for field, label in (
+            ("owner", "**Verantwortlich:** "),
+            ("test_obligation", "**Testpflicht:** "),
+            ("source_boundary", "**Quellgrenze:** "),
+        ):
+            if label + row[field] not in section:
+                raise ValueError(f"M0-02a supplement omits {field} for {invariant_id}")
+        if invariant_id == "WDB-RES-006":
+            if "kanonischen typisierten Schlüssel sortiert" not in section:
+                raise ValueError("WDB-RES-006 does not bind canonical contributor ordering")
+            if "Die Outcome-Variante wird nicht gerangordnet" not in section:
+                raise ValueError("WDB-RES-006 changes Outcome ordering semantics")
+            if not any(reference.endswith(":561") for reference in row["source_context_refs"].split(";")):
+                raise ValueError("WDB-RES-006 lacks the Master §16 typed-key ordering source line")
+        refs = [part for part in row["source_context_refs"].split(";") if part]
+        if not refs:
+            raise ValueError(f"M0-02a source context is missing: {invariant_id}")
+        for reference in refs:
+            match = source_path_pattern.fullmatch(reference)
+            if not match:
+                raise ValueError(f"Malformed M0-02a source reference for {invariant_id}: {reference}")
+            path = root / Path(match.group(1))
+            if not path.is_file():
+                raise ValueError(f"M0-02a source reference does not exist: {reference}")
+            if int(match.group(2)) > len(path.read_text(encoding="utf-8").splitlines()):
+                raise ValueError(f"M0-02a source reference is out of range: {reference}")
+        if gap["m0_02a_status"] != "CLOSED_BY_M0_02A" or gap["effective_normative_anchor"] != expected_anchor:
+            raise ValueError(f"M0-02a gap status or effective anchor is missing: {invariant_id}")
+        if gap["decision_record"] != "ADR-039":
+            raise ValueError(f"M0-02a gap has no ADR-039 binding: {invariant_id}")
+
+    his = his_bindings[0]
+    his_gap = gap_by_id["WDB-HIS-001"]
+    if his["source_statement"] != his_gap["source_statement"]:
+        raise ValueError("WDB-HIS-001 source-register wording was not preserved")
+    if his_gap["m0_02a_status"] != "CONFIRMED_STRONGER_MASTER_RULE" or his_gap["decision_record"] != "ADR-039":
+        raise ValueError("WDB-HIS-001 stronger Master rule is not marked as confirmed")
+    source_master = (root / "docs" / "source" / MASTER_NAME).read_text(encoding="utf-8").splitlines()
+    working_master = (contract_dir / MASTER_NAME).read_text(encoding="utf-8")
+    for line_number in (73, 235):
+        exact_line = source_master[line_number - 1]
+        if "WDB-HIS-001" not in exact_line or exact_line not in working_master or exact_line not in resolution_text:
+            raise ValueError(f"WDB-HIS-001 confirmed source rule is not linked unchanged: line {line_number}")
+    if his["normative_anchor"] != f"{GAP_RESOLUTION_SPEC_NAME}#confirmed-wdb-his-001":
+        raise ValueError("WDB-HIS-001 confirmation anchor is incorrect")
+
+    guarded_open = {
+        row["invariant_id"]
+        for row in gaps
+        if row["class"] == "GUARDED" and row["m0_02a_status"] == "OPEN_GUARDED"
+    }
+    if guarded_open != {"WDB-ENG-006", "WDB-PER-001"}:
+        raise ValueError(f"M0-02a changed the wrong GUARDED source gaps: {sorted(guarded_open)}")
+    if any(
+        row["class"] == "HARD"
+        and row["m0_02a_status"] not in {"SOURCE_ANCHORED", "CLOSED_BY_M0_02A", "CONFIRMED_STRONGER_MASTER_RULE"}
+        for row in gaps
+    ):
+        raise ValueError("A HARD invariant remains without an effective normative anchor")
+
+    expected_locations = {
+        "WDB-DES-001": ["ADR-018"],
+        "WDB-DES-002": ["ADR-018"],
+        "WDB-RES-006": ["§16", "M0-02a supplement"],
+        "WDB-VAL-004": ["§3.2"],
+        "WDB-WIR-005": ["§20.2"],
+    }
+    data = tomllib.loads((contract_dir / TOML_NAME).read_text(encoding="utf-8"))
+    invariant_by_id = {row["id"]: row for row in data.get("invariant", [])}
+    for invariant_id, locations in expected_locations.items():
+        if invariant_by_id.get(invariant_id, {}).get("main_locations") != locations:
+            raise ValueError(f"Working invariant registry has an incorrect M0-02a location for {invariant_id}")
+
+
 def verify(root: Path) -> int:
     master_path = root / "docs" / "contract" / MASTER_NAME
     toml_path = root / "docs" / "contract" / TOML_NAME
@@ -320,6 +466,8 @@ def verify(root: Path) -> int:
     query_transport_adr_path = root / "docs" / "contract" / QUERY_TRANSPORT_ADR_NAME
     correction_spec_path = root / "docs" / "contract" / CORRECTION_SPEC_NAME
     correction_adr_path = root / "docs" / "contract" / CORRECTION_ADR_NAME
+    gap_resolution_spec_path = root / "docs" / "contract" / GAP_RESOLUTION_SPEC_NAME
+    gap_resolution_adr_path = root / "docs" / "contract" / GAP_RESOLUTION_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
     master_text = master_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8").strip()
@@ -334,6 +482,22 @@ def verify(root: Path) -> int:
     query_transport_adr_text = query_transport_adr_path.read_text(encoding="utf-8")
     correction_spec_text = correction_spec_path.read_text(encoding="utf-8").strip()
     correction_adr_text = correction_adr_path.read_text(encoding="utf-8")
+    gap_resolution_spec_text = gap_resolution_spec_path.read_text(encoding="utf-8").strip()
+    gap_resolution_adr_text = gap_resolution_adr_path.read_text(encoding="utf-8")
+    verify_m0_02a(root, gap_resolution_spec_text)
+
+    stale_m0_02a_claims = (
+        "52 HARD gaps in M0-02a remain open",
+        "M0-02a source gaps remain open",
+        "The 54 source gaps and M0-02a decisions remain open",
+        "M0-02a remains responsible for that decision",
+        "all unrelated M0-02a gaps remain unresolved",
+        "M0-02a source gap about exact Genesis",
+    )
+    for contract_markdown in (root / "docs" / "contract").glob("*.md"):
+        contract_text = contract_markdown.read_text(encoding="utf-8")
+        if any(claim in contract_text for claim in stale_m0_02a_claims):
+            raise ValueError(f"{contract_markdown.name} contains a stale open-M0-02a claim")
     missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
     if missing_clauses:
         raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
@@ -389,10 +553,12 @@ def verify(root: Path) -> int:
         + query_transport_spec_text
         + "\n\n"
         + correction_spec_text
+        + "\n\n"
+        + gap_resolution_spec_text
     )
     if not master_normalized.endswith(expected_suffix):
         raise ValueError(
-            "Master working copy does not end with the exact M0-04 through M0-04e supplements"
+            "Master working copy does not end with the exact M0-04 through M0-04e and M0-02a supplements"
         )
     for heading in (
         "## 2. Entity contract",
@@ -479,6 +645,20 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-035 is not marked accepted")
     if "[Correction actions supplement](correction_contract.md)" not in correction_adr_text:
         raise ValueError("ADR-035 does not link the normative supplement")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in gap_resolution_adr_text:
+        raise ValueError("ADR-039 is not marked accepted")
+    if "[source_gap_resolution.md](source_gap_resolution.md)" not in gap_resolution_adr_text:
+        raise ValueError("ADR-039 does not link the normative supplement")
+    for clause in (
+        "alle 52 source_statement-Aussagen",
+        "WDB-DES-001/002",
+        "WDB-VAL-004",
+        "WDB-WIR-005",
+        "WDB-RES-006",
+        "Die zwei GUARDED-Lücken WDB-ENG-006 und WDB-PER-001 bleiben offen",
+    ):
+        if clause not in gap_resolution_adr_text:
+            raise ValueError(f"ADR-039 is missing an approved M0-02a decision clause: {clause}")
 
     errata = json.loads(errata_path.read_text(encoding="utf-8"))
     expected_additions = {
@@ -488,6 +668,7 @@ def verify(root: Path) -> int:
         "M0-04c": (security_policy_spec_path, security_policy_adr_path),
         "M0-04d": (query_transport_spec_path, query_transport_adr_path),
         "M0-04e": (correction_spec_path, correction_adr_path),
+        "M0-02a": (gap_resolution_spec_path, gap_resolution_adr_path),
     }
     additions = {item.get("task"): item for item in errata.get("contract_additions", [])}
     for task, (addition_spec, addition_adr) in expected_additions.items():
@@ -506,9 +687,22 @@ def verify(root: Path) -> int:
         "ERR-M0-04C-SECURITY-POLICY",
         "ERR-M0-04D-QUERY-TRANSPORT",
         "ERR-M0-04E-CORRECTION-ACTIONS",
+        "ERR-M0-02A-REGISTER-LOCATIONS",
+        "ERR-M0-02A-NORMATIVE-GAPS",
     ):
         if correction_id not in correction_ids:
             raise ValueError(f"source-errata.json lacks {correction_id}")
+
+    decision = errata.get("m0_02a_resolution", {})
+    if (
+        decision.get("status") != "ACCEPTED"
+        or decision.get("confirmed_hard_gap_count") != 52
+        or decision.get("effective_open_hard_gap_count") != 0
+        or decision.get("wdb_his_001", {}).get("status") != "STRONGER_MASTER_RULE_CONFIRMED"
+        or decision.get("binding_registry_sha256")
+        != hashlib.sha256((root / "docs" / "contract" / GAP_BINDINGS_NAME).read_bytes()).hexdigest()
+    ):
+        raise ValueError("source-errata.json does not record the complete accepted M0-02a outcome")
 
     expected = master_type_rows(master_path)
     data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
@@ -590,7 +784,7 @@ def verify(root: Path) -> int:
         row = by_name.get(name)
         if row is None or any(row[field] != value for field, value in expected_fields.items()):
             raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
-    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04e supplements match the working Master")
+    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04e and M0-02a supplements match the working Master; 52 HARD gaps closed")
     return 0
 
 

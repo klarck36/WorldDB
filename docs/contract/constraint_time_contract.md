@@ -4,7 +4,7 @@
 
 **Decision record:** [ADR-032](ADR-032-constraint-time.md)
 
-**Scope:** completes Master §§2.1, 2.3, 12 and 31.3 for `ConstraintSet`, project `Timeline`/`TimeUnit` registration, and the schema/query/migration uses of `CalendarPeriod`. It adds no new WDB invariant IDs and leaves the M0-02a source gaps open.
+**Scope:** completes Master §§2.1, 2.3, 12 and 31.3 for `ConstraintSet`, project `Timeline`/`TimeUnit` registration, and the schema/query/migration uses of `CalendarPeriod`. It adds no new WDB invariant IDs and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
 
 ## 1. Closed `ConstraintSet`
 

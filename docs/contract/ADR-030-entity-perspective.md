@@ -24,7 +24,7 @@ Master §33 lists Entity and Perspective as First-Class types, but their creatio
 - `EntityRetirementId` and `PerspectiveRetirementId` extend the concrete lifecycle-ID set and `RecordRef`. Their target fields remain direct `EntityId` and `PerspectiveId` values; the existing closed `LifecycleTargetRef` is unchanged.
 - Entity retyping, retirement reactivation, identity reuse, silent default Perspectives, and implicit Perspective-to-Principal mapping are unavailable in 1.0.
 - Metadata/lifecycle histories share the common Revision and transaction commit; no new counter or temporal axis is introduced.
-- The specific `WDB-HIS-001` source discrepancy and all unrelated M0-02a gaps remain unresolved by this ADR.
+- ADR-039 later confirms the stronger WDB-HIS-001 rule and closes all 52 HARD source gaps; the two GUARDED gaps remain open.
 
 ## Verification obligations
 
