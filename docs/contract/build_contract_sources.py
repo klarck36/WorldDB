@@ -49,6 +49,8 @@ ENTITY_PERSPECTIVE_SPEC = "entity_perspective_contract.md"
 ENTITY_PERSPECTIVE_ADR = "ADR-030-entity-perspective.md"
 ARCHIVE_TRANSFER_SPEC = "archive_transfer_contract.md"
 ARCHIVE_TRANSFER_ADR = "ADR-031-archive-transfer.md"
+CONSTRAINT_TIME_SPEC = "constraint_time_contract.md"
+CONSTRAINT_TIME_ADR = "ADR-032-constraint-time.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -352,6 +354,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     addition_files = (
         ("M0-04", ENTITY_PERSPECTIVE_SPEC, ENTITY_PERSPECTIVE_ADR),
         ("M0-04a", ARCHIVE_TRANSFER_SPEC, ARCHIVE_TRANSFER_ADR),
+        ("M0-04b", CONSTRAINT_TIME_SPEC, CONSTRAINT_TIME_ADR),
     )
     addition_payloads = {
         name: (root / CONTRACT_DIR / name).read_bytes()
@@ -649,6 +652,19 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 ],
             },
             {
+                "id": "ERR-M0-04B-CONSTRAINT-TIME",
+                "file": MASTER_NAME,
+                "change": (
+                    "Appended the normative ConstraintSet, Timeline/TimeUnit, and CalendarPeriod "
+                    "supplement after the M0-04a Archive/HistorySpace transfer supplement."
+                ),
+                "authority": [
+                    f"docs/contract/{CONSTRAINT_TIME_SPEC}",
+                    f"docs/contract/{CONSTRAINT_TIME_ADR}",
+                    f"docs/source/{MASTER_NAME} §§2.1, 2.3, 12, 31.3–31.4",
+                ],
+            },
+            {
                 "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
                 "file": TOML_NAME,
                 "change": (
@@ -751,7 +767,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "This is a structural source comparison; a text reference is not a product test.",
             "Open normative source gaps require an explicit M0-02a decision.",
             "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-            "The Entity/Perspective and Archive/HistorySpace supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
+            "The Entity/Perspective, Archive/HistorySpace, and Constraint/Time supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
         ],
     }
     output_files[CONTRACT_DIR / ERRATA_NAME] = (
@@ -770,6 +786,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             ENTITY_PERSPECTIVE_ADR,
             ARCHIVE_TRANSFER_SPEC,
             ARCHIVE_TRANSFER_ADR,
+            CONSTRAINT_TIME_SPEC,
+            CONSTRAINT_TIME_ADR,
         }
         and path.name not in expected_names
     ]

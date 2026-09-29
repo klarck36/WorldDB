@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "448fe766ab2e305d5f7a9dc36c44ddd084789208443185abc32244de47eb830f",
+      "working_sha256": "4fffe2744847bf4f73902ae2d01bc13484ff1e4fe556a55f5db00095782dff03",
       "byte_identical": false
     },
     {
@@ -69,6 +69,14 @@
       "decision_record": "docs/contract/ADR-031-archive-transfer.md",
       "decision_record_sha256": "134d317bf6ee2e14642ec3962331ca1b3643a0987fca3c878e659f09a1ff1ecb",
       "status": "accepted working contract"
+    },
+    {
+      "task": "M0-04b",
+      "specification": "docs/contract/constraint_time_contract.md",
+      "specification_sha256": "035c738ddbc3bb29cdab2f1ca5ee49c5191091b212e5b3d7beb57edd8bbbda96",
+      "decision_record": "docs/contract/ADR-032-constraint-time.md",
+      "decision_record_sha256": "80c8253d7e4912e5b87938fafd0f673ecad7142a5ac34f1535f96afba112bba0",
+      "status": "accepted working contract"
     }
   ],
   "corrections": [
@@ -90,6 +98,16 @@
         "docs/contract/archive_transfer_contract.md",
         "docs/contract/ADR-031-archive-transfer.md",
         "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§2.1.1, 2.3.2, 15.2–15.3, 31.2, 31.4"
+      ]
+    },
+    {
+      "id": "ERR-M0-04B-CONSTRAINT-TIME",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Appended the normative ConstraintSet, Timeline/TimeUnit, and CalendarPeriod supplement after the M0-04a Archive/HistorySpace transfer supplement.",
+      "authority": [
+        "docs/contract/constraint_time_contract.md",
+        "docs/contract/ADR-032-constraint-time.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§2.1, 2.3, 12, 31.3–31.4"
       ]
     },
     {
@@ -442,6 +460,6 @@
     "This is a structural source comparison; a text reference is not a product test.",
     "Open normative source gaps require an explicit M0-02a decision.",
     "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-    "The Entity/Perspective and Archive/HistorySpace supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
+    "The Entity/Perspective, Archive/HistorySpace, and Constraint/Time supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
   ]
 }
