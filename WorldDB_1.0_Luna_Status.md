@@ -1,12 +1,12 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-14 wartet auf CI-Anbieter und macOS-Runner; M0-02a wartet auf Produktentscheidungen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-14 wartet auf die spätere GitHub-Actions-Einrichtung und den macOS-Lauf; M0-02a wartet auf Produktentscheidungen
 
 **Nächste Task:** `M0-14` (BLOCKED)
 
 **Letzter abgeschlossener Milestone:** keiner  
-**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001; M0-14 benötigt einen CI-Anbieter und einen macOS-Runner
+**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001; M0-14 ist bis zur späteren GitHub-Actions-Einrichtung und dem externen macOS-Lauf zurückgestellt. Ein zweiter CI-Anbieter ist nicht nötig.
 
 **M0-01 Baseline-Commit:** `0bb3c85` (`chore: establish WorldDB source baseline`).
 
@@ -37,7 +37,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-11 | DONE | `3b33821`; `docs/M0-11-verification.md`; `docs/architecture/M0-11-lint-policy.md`; `rustfmt.toml`; `policy/exceptions.tsv`; `tools/verify/steps.tsv` | 18 Verify-Schritte, Clippy, Workspace-Lints und 25 Tests bestanden | Unsafe außerhalb des Adapters, falscher Fachbegriff, abgelaufene Ausnahme und fehlende Adapterbelege werden abgewiesen; nur Windows nativ, Shell zusätzlich mit Git Bash geprüft | Noch nicht fällig (M0-12) | geprüft 2026-09-29T09:03:56+02:00 | M0-12 READY |
 | M0-12 | DONE | `107f822`; `docs/M0-12-verification.md`; `docs/architecture/M0-12-dependency-policy.md`; `.cargo/deny.toml`; `policy/`-Register; Verify-Manifest | 23 Verify-Schritte und 38 automatisierte Tests bestanden; cargo-deny prüft Advisories, Bans, Lizenzen und Quellen; alle drei lokalen Featureprofile bauen | `anyhow`, Default-Features ohne Freigabe und ein unzulässiges Featurepaar werden durch Negativproben abgewiesen; Lockfile enthält noch keine externen Packages; nur Windows nativ, Wrapper zusätzlich mit Git Bash | 23 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T09:33:24+02:00 | M0-13 READY |
 | M0-13 | DONE | `e538756`; `docs/M0-13-verification.md`; `docs/architecture/M0-13-testkit.md`; JSON-Schema und versioniertes Testkorpus | 24 Verify-Schritte und 10 Evidenzprüfungen bestanden; 7 Standard- und 8 Fault-Profil-Rusttests sowie 4 Corpus-Policytests; Beleg mit Quell-Snapshot | Seedfehler zweimal byteidentisch reproduziert; Fault-Marker/Probe fehlen im Releaseartefakt; Releasebuild mit Fault-Feature wird abgewiesen; Fixturehash-/Pfadmanipulationen scheitern | 24 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T10:08:16+02:00; Run `M0-13-20260929-final`; NTFS/Windows/Rust 1.85 | M0-14 BLOCKED |
-| M0-14 | BLOCKED | `docs/M0-14-environment-check.md`; `docs/M0-14-provider-options.md`; `docs/architecture/M0-14-ci-matrix.md`; `policy/ci-matrix.tsv`; Runner und JSON-Schema; Commit `a7dec86`; Fixturekorrektur `8e05029` | Saubere lokale Windows- und WSL2/Linux-Jobs auf `8e05029`: je 27 PASS, 1 sichtbarer `ci-matrix`-SKIP, 0 FAIL; Step-Manifest und Logs gehasht archiviert | 7 Matrixmutationstests und 6 Job-Validierungstests; `.gitattributes` verhindert CRLF-Hashbruch; GitLab.com Open Source empfohlen (macOS-Beta, öffentliche Gruppe nötig); kein Anbieter gewählt | Windows und WSL2: je 27 PASS, 1 SKIP, 0 FAIL | geprüft 2026-09-29T11:03:00+02:00; Nicht-GitHub-Optionen recherchiert | GitLab.com oder CircleCI festlegen und macOS-Runner bereitstellen |
+| M0-14 | BLOCKED | `docs/M0-14-environment-check.md`; `docs/M0-14-provider-options.md`; `docs/architecture/M0-14-ci-matrix.md`; `policy/ci-matrix.tsv`; Runner und JSON-Schema; Commit `a7dec86`; Fixturekorrektur `8e05029` | Saubere lokale Windows- und WSL2/Linux-Jobs auf `8e05029`: je 27 PASS, 1 sichtbarer `ci-matrix`-SKIP, 0 FAIL; Step-Manifest und Logs gehasht archiviert | 7 Matrixmutationstests und 6 Job-Validierungstests; `.gitattributes` verhindert CRLF-Hashbruch; GitHub Actions ist für später vorgesehen; kein zweiter Anbieter erforderlich | Windows und WSL2: je 27 PASS, 1 SKIP, 0 FAIL | geprüft 2026-09-29T11:03:00+02:00; Alternativen bei Bedarf recherchiert | GitHub später einrichten, Matrix samt macOS-Runner ausführen und Artefakte archivieren |
 
 ## Entscheidungs- und Release-Gates
 
@@ -57,7 +57,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 
 **M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. `docs/M0-02a-decision-proposal.md` bündelt den Freigabevorschlag; `docs/M0-02a-candidate-crosswalk.tsv` ordnet alle 52 Aussagen Kandidatenstellen im Master und bestehende Prüfpflichten zu und markiert fünf Stellen mit besonderem Klärungsbedarf. Bis zur Produktfreigabe bleiben die Arbeitskopien vorläufig und M0-02a blockiert das M0-15-Gate.
 
-**M0-14:** Saubere lokale Runnerläufe auf Windows und WSL2/Linux bestehen auf Commit `8e05029` mit jeweils 27 PASS, 1 sichtbarem `ci-matrix`-SKIP und 0 FAIL. `git remote -v` ist leer; es gibt keine Workflowdatei. GitHub wurde auf Nutzervorgabe zurückgestellt und kein anderer CI-Anbieter benannt. Die externe Anbieterpipeline, der Artefaktupload und ein macOS-Runner fehlen daher; bis dahin bleibt die Task `BLOCKED`.
+**M0-14:** Saubere lokale Runnerläufe auf Windows und WSL2/Linux bestehen auf Commit `8e05029` mit jeweils 27 PASS, 1 sichtbarem `ci-matrix`-SKIP und 0 FAIL. `git remote -v` ist leer; es gibt keine Workflowdatei. GitHub Actions ist für später vorgesehen. Ein zweiter Anbieter ist nicht erforderlich. Die externe Pipeline, der Artefaktupload und ein macOS-Runner fehlen bis zur späteren GitHub-Einrichtung; bis dahin bleibt die Task `BLOCKED`.
 
 **M0-09 Lizenzentscheidung:** Der Product Owner hat Open Source gewählt; ADR-038 setzt das als `MIT OR Apache-2.0` um. Dependency-Lizenzen und Lieferkettenregeln prüft M0-12.
 

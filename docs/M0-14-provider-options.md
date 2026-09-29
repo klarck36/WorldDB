@@ -1,21 +1,18 @@
-# M0-14 – Anbieteroptionen ohne GitHub
+# M0-14 – CI-Anbieter und Optionen
 
 **Geprüft:** 2026-09-29
 
-## Empfehlung: GitLab.com für Repository und CI
-
-GitLab.com passt am besten, wenn WorldDB öffentlich auf GitLab liegen darf: GitLab bietet für qualifizierte Open-Source-Projekte ein Open-Source-Programm mit GitLab-Ultimate-Funktionen und 50.000 Compute-Minuten. Die Anmeldung verlangt eine öffentlich sichtbare Gruppe und Quelltexte; jedes Projekt in der Gruppe muss eine OSI-anerkannte Lizenz tragen. Die Mitgliedschaft muss jährlich erneuert werden. [Programmbedingungen](https://about.gitlab.com/solutions/open-source/join/)
-
-GitLabs macOS-Runner sind direkt in GitLab CI/CD integriert, derzeit aber Beta. Sie stehen dem Open-Source-Programm sowie Premium-/Ultimate-Kunden zur Verfügung. Die dokumentierten Runner nutzen Apple-Silicon-VMs; bekannte Einschränkungen betreffen unter anderem Verfügbarkeit und gelegentlich hängende Jobs. Jobartefakte sind bereits im Free-Tier dokumentiert. [macOS-Runner](https://docs.gitlab.com/ci/runners/hosted_runners/macos/), [Jobartefakte](https://docs.gitlab.com/ci/jobs/job_artifacts/)
-
-Das Projekt hat `MIT OR Apache-2.0` beschlossen. Das erfüllt die Lizenzanforderung, aber noch nicht die öffentliche GitLab-Gruppen-/Quellcode-Anforderung. Es wurde kein GitLab-Projekt erstellt und nichts hochgeladen.
-
-## Alternative: CircleCI mit GitLab als Repository-Host
-
-CircleCI Cloud unterstützt GitLab.com als Repository-Anbieter, einen macOS-Executor und das Speichern von Jobartefakten. Für Open-Source-macOS-Builds nennt CircleCI im Free-Plan 30.000 Credits pro Monat. Das wäre eine Alternative, wenn das Repository bei GitLab liegt, die Pipeline aber bei CircleCI laufen soll. [GitLab-Integration](https://circleci.com/docs/guides/integration/version-control-system-integration-overview/), [macOS-Executor](https://circleci.com/docs/guides/execution-managed/using-macos/), [Open-Source-Credits](https://circleci.com/docs/guides/plans-pricing/credits/), [Artefakte](https://circleci.com/docs/guides/optimize/artifacts/)
-
 ## Entscheidung
 
-Für die kürzeste Route zu einem vollständigen M0-14 ist GitLab.com Open Source die Empfehlung, sofern eine öffentliche GitLab-Gruppe und jährliche Programmverlängerung akzeptabel sind. Andernfalls kann CircleCI mit einem unterstützten Repository-Host genutzt werden. Beide Optionen benötigen eine Kontoverknüpfung und ein echtes Anbieterprojekt; die macOS-Zelle muss dort ausgeführt und ihr Step-Manifest archiviert werden.
+Ein zweiter CI-Anbieter ist nicht erforderlich. GitHub Actions kann öffentliche Repositories auf Linux, Windows und macOS ausführen. Die Standard-Runner für öffentliche Repositories sind laut GitHub kostenlos und unbegrenzt verfügbar. GitHub Actions ist damit für die geplante Plattformmatrix ausreichend. [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 
-Bis der Anbieter gewählt und der externe Repository-/Kontozugriff bereitgestellt ist, bleibt M0-14 `BLOCKED`. Die lokale Matrix und der Runner bleiben anbieterneutral; es wurde kein Workflow für einen nicht ausgewählten Anbieter angelegt.
+GitHub wurde auf Nutzervorgabe auf später verschoben. Es wurde kein GitHub-Workflow angelegt, kein Repository erstellt und keine Kontoverknüpfung vorgenommen. Die anbieterneutrale Matrix und die lokalen Runnerläufe bleiben vorbereitet. M0-14 bleibt offen, bis GitHub später eingerichtet und die externe Matrix einschließlich macOS ausgeführt wurde.
+
+## Optionale Alternativen, falls GitHub nicht genutzt wird
+
+- **GitLab.com mit GitLab CI/CD:** Das Open-Source-Programm bietet bei erfüllten Voraussetzungen GitLab-Ultimate-Funktionen und 50.000 Compute-Minuten. Gruppe und Quellcode müssen öffentlich sein, jedes Projekt im Namespace eine OSI-anerkannte Lizenz haben und die Mitgliedschaft jährlich erneuert werden. Die macOS-Runner sind Beta; GitLab dokumentiert bekannte Warte- und Hängeprobleme. Das wäre eine mögliche Alternative, erfordert aber einen GitLab-Host und erfüllt denselben M0-14-Abnahmepunkt noch nicht ohne echte macOS-Ausführung. [Open-Source-Programm](https://about.gitlab.com/solutions/open-source/join/), [macOS-Runner](https://docs.gitlab.com/ci/runners/hosted_runners/macos/)
+- **CircleCI mit einem unterstützten Repository-Host:** CircleCI Cloud integriert unter anderem GitLab und bietet macOS-Ausführung. Für Open-Source-macOS-Builds nennt CircleCI derzeit 25.000 kostenlose Credits pro Monat mit höchstens zwei parallelen Jobs. Das wäre ein zusätzlicher Dienst samt eigener Integration und Konfiguration; für die geplante spätere GitHub-Actions-Nutzung ist es nicht nötig. [VCS-Integrationen](https://circleci.com/docs/guides/integration/version-control-system-integration-overview/), [Credits für Open Source](https://circleci.com/docs/guides/plans-pricing/credits/)
+
+## Stand der Matrix
+
+Saubere lokale Windows- und WSL2/Linux-Läufe sind dokumentiert. Ein externer Anbieterjob und ein macOS-Lauf fehlen weiterhin. Sobald GitHub später eingerichtet wird, kann die vorhandene Matrix dort ausgeführt und das Step-Manifest archiviert werden. Bis dahin bleibt M0-14 `BLOCKED`; ein weiterer Anbieter muss nicht ausgewählt werden.

@@ -51,7 +51,7 @@ Der Master enthält bereits die stärkere Regel als das gekürzte Register: ver�
 
 ## Nicht Teil dieser Entscheidung
 
-Die zwei `GUARDED`-Lücken WDB-ENG-006 und WDB-PER-001 sind nicht Teil der 52 HARD-Gates. Die Open-Source-Wahl ist bereits umgesetzt: ADR-038 legt `MIT OR Apache-2.0` fest. M0-14 ist davon getrennt und bleibt offen, bis ein CI-Anbieter außerhalb des vorerst zurückgestellten GitHub sowie ein macOS-Runner verfügbar sind.
+Die zwei `GUARDED`-Lücken WDB-ENG-006 und WDB-PER-001 sind nicht Teil der 52 HARD-Gates. Die Open-Source-Wahl ist bereits umgesetzt: ADR-038 legt `MIT OR Apache-2.0` fest. M0-14 ist davon getrennt. GitHub Actions reicht für die geplante Matrix aus und wird später eingerichtet; M0-14 bleibt bis zum externen Lauf einschließlich macOS offen. Ein zweiter CI-Anbieter ist nicht erforderlich.
 
 ## Antwortformat
 

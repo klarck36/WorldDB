@@ -21,11 +21,11 @@ Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgeb
 
 ## Konkreter Blocker
 
-Der Arbeitsplan verlangt Linux-, Windows- und macOS-Jobs aus sauberen Checkouts. Lokal bestehen Windows und WSL2/Linux. Es gibt weiterhin keinen macOS-Host, keinen ausgewählten CI-Anbieter und kein Git-Remote. GitHub wurde auf Nutzervorgabe zurückgestellt; ein anderer Anbieter wurde noch nicht ausgewählt. Die geprüften Alternativen stehen in [M0-14-provider-options.md](M0-14-provider-options.md): GitLab.com Open Source wird empfohlen, falls ein öffentliches GitLab-Projekt und die jährliche Programmverlängerung akzeptabel sind; CircleCI kann mit einem unterstützten Repository-Host betrieben werden. Damit fehlen weiter der echte Anbieterjob samt Artefaktupload und die macOS-Ausführung. `M0-14` bleibt `BLOCKED`.
+Der Arbeitsplan verlangt Linux-, Windows- und macOS-Jobs aus sauberen Checkouts. Lokal bestehen Windows und WSL2/Linux. GitHub Actions ist für später vorgesehen; GitHub wurde auf Nutzervorgabe noch nicht eingerichtet. Ein zweiter Anbieter ist nicht erforderlich. Damit fehlen bis zur späteren GitHub-Einrichtung weiterhin der externe Anbieterjob samt Artefaktupload und die macOS-Ausführung. `M0-14` bleibt `BLOCKED`. Optionale Alternativen, falls GitHub doch nicht genutzt wird, stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
 
 ## Zum Fortsetzen erforderlich
 
-1. Einen CI-Anbieter benennen, über den die providerneutralen Jobs gestartet und Jobartefakte archiviert werden.
-2. Einen macOS-Runner auf diesem Anbieter verfügbar machen.
+1. GitHub später für CI einrichten.
+2. Die Matrix einschließlich `macos-msrv` aus sauberen Checkouts laufen lassen und die Step-Manifeste archivieren.
 
 Danach muss `macos-msrv` aus einem sauberen Checkout laufen und der Anbieter die Step-Manifeste archivieren. Es wurde kein Anbieter-Workflow auf Verdacht angelegt.
