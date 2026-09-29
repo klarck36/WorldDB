@@ -12,4 +12,4 @@ Jeder CI-Job kann `python -B -X utf8 tools/run_ci_job.py --job-id <linux-msrv|wi
 
 ## Abnahmegrenze
 
-Matrixvertrag und Job-Einstieg sind lokal prüfbar und verwenden keine CI-Anbieter-Labels. Sie ersetzen weder eine aktive Pipelinekonfiguration noch echte saubere Anbieterjobs. Linux/WSL2 und Windows wurden lokal geprüft; die macOS-Zelle und der Upload auf einem ausgewählten CI-Dienst bleiben offen. Der sichtbare `ci-matrix`-Skip bleibt bis zu diesen Läufen bestehen, daher ist M0-14 weiterhin `BLOCKED`.
+Matrixvertrag und Job-Einstieg sind lokal prüfbar und verwenden keine CI-Anbieter-Labels. Saubere lokale Windows- und WSL2/Linux-Checkouts auf Commit `8e05029` bestanden jeweils mit 27 Verify-Schritten, einem sichtbaren `ci-matrix`-Skip und 0 Fehlern. Beide Läufe archivierten und hashten das Step-Manifest und die Logs. Sie ersetzen weder eine aktive Pipelinekonfiguration noch echte Anbieterjobs. Die macOS-Zelle und der Artefaktupload auf einem ausgewählten CI-Dienst bleiben offen. Der sichtbare `ci-matrix`-Skip bleibt bis zu diesen Läufen bestehen, daher ist M0-14 weiterhin `BLOCKED`.
