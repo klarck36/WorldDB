@@ -1,9 +1,9 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-04d abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-04e abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen
 
-**Nächste Task:** `M0-04e` (READY)
+**Nächste Task:** `M0-05` (READY)
 
 **Letzter abgeschlossener Milestone:** keiner  
 **Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001  
@@ -27,6 +27,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-04b | DONE | `6a5eb51`; `docs/M0-04b-verification.md`; `docs/contract/ADR-032-constraint-time.md`; `docs/contract/constraint_time_contract.md` | Geschlossene Constraintregeln, Timeline-/TimeUnit-Registrierung, Kalenderarithmetik sowie Schema-/Query-/Migrationsgrenzen spezifiziert; Master-, Quell- und Planchecks bestanden | Drei temporäre Fixtures zu Constraint-Parsing, Zeitregister-Eindeutigkeit und Migrationsparität mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04b) | geprüft 2026-09-29T03:06:51+02:00 | M0-04c DONE |
 | M0-04c | DONE | `576804b`; `docs/M0-04c-verification.md`; `docs/contract/ADR-033-security-policy.md`; `docs/contract/security_policy_contract.md` | PolicyRecords, geschlossene Capabilities, exakte Scope-/Deny-Regeln, SecurityEpoch und auditgebundene Historisierung spezifiziert; SecurityPolicyRecord als 23. First-Class-Typ registriert; Master-, Quell- und Planchecks bestanden | Vier temporäre Fixtures zu Deny-Präzedenz, FieldRead vor Candidate-Erzeugung, Epoch-Overflow und fehlendem SecurityPolicyRecord-Registereintrag mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04c) | geprüft 2026-09-29T03:32:20+02:00 | M0-04d READY |
 | M0-04d | DONE | `3269d04`; `docs/M0-04d-verification.md`; `docs/contract/ADR-034-query-transport.md`; `docs/contract/query_transport_contract.md` | Gemeinsame Query-DTOs, Filter, Search, Comparatoren, Cursorfortsetzung und versionierte CLI-/IPC-Envelope gegen Master spezifiziert; Quell-, Dokumentations- und Planchecks bestanden | Vier temporäre Fixtures zu MatchAll, FieldRead-Reihenfolge, IPC-Versionsaushandlung und EventTime-Sortierung mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04d) | geprüft 2026-09-29T03:53:12+02:00 | M0-04e READY |
+| M0-04e | DONE | `97d3894`; `docs/M0-04e-verification.md`; `docs/contract/ADR-035-correction-actions.md`; `docs/contract/correction_contract.md` | Assertion-Correct mit explizitem Retractionrecord und Corrects-Kante sowie Event-Correct ohne implizite Retraction; Rechte-, Atomizitäts-, Commit- und UI-Regeln spezifiziert; Master-, Quell-, Dokumentations- und Planchecks bestanden | Fünf temporäre Fixtures zu Retraction-Ziel, Event-Lifecycle, AssertionRetract-Recht, Drei-Datensatz-Atomizität und UI-Hinweis mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04e) | geprüft 2026-09-29T04:11:37+02:00 | M0-05 READY |
 
 ## Entscheidungs- und Release-Gates
 
