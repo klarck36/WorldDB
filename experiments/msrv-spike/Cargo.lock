@@ -512,6 +512,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "clap",
+ "getrandom 0.4.3",
  "proptest",
  "serde",
  "serde_json",
