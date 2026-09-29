@@ -1,12 +1,12 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-02a wartet auf Produktentscheidungen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-14 wartet auf CI-Anbieter und macOS-Runner; M0-02a wartet auf Produktentscheidungen
 
-**Nächste Task:** `M0-14` (READY)
+**Nächste Task:** `M0-14` (BLOCKED)
 
 **Letzter abgeschlossener Milestone:** keiner  
-**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001
+**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001; M0-14 benötigt einen CI-Anbieter und einen macOS-Runner
 
 **M0-01 Baseline-Commit:** `0bb3c85` (`chore: establish WorldDB source baseline`).
 
@@ -36,7 +36,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-10 | DONE | `ab987c5`; `docs/M0-10-verification.md`; `.cargo/config.toml`; `tools/verify/steps.tsv`; `scripts/verify.sh`; `scripts/verify.ps1` | `cargo xtask verify`: elf Schritte bestanden, vier Runner-Tests und beide Wrapper bestanden | Drei geplante M0-11/12/14-Schritte sichtbar übersprungen; explizites `--skip` protokolliert und gezählt; Unix-Wrapper auf Git Bash statt nativem Unix geprüft | Noch nicht fällig (M0-11) | geprüft 2026-09-29T08:40:40+02:00 | M0-11 DONE |
 | M0-11 | DONE | `3b33821`; `docs/M0-11-verification.md`; `docs/architecture/M0-11-lint-policy.md`; `rustfmt.toml`; `policy/exceptions.tsv`; `tools/verify/steps.tsv` | 18 Verify-Schritte, Clippy, Workspace-Lints und 25 Tests bestanden | Unsafe außerhalb des Adapters, falscher Fachbegriff, abgelaufene Ausnahme und fehlende Adapterbelege werden abgewiesen; nur Windows nativ, Shell zusätzlich mit Git Bash geprüft | Noch nicht fällig (M0-12) | geprüft 2026-09-29T09:03:56+02:00 | M0-12 READY |
 | M0-12 | DONE | `107f822`; `docs/M0-12-verification.md`; `docs/architecture/M0-12-dependency-policy.md`; `.cargo/deny.toml`; `policy/`-Register; Verify-Manifest | 23 Verify-Schritte und 38 automatisierte Tests bestanden; cargo-deny prüft Advisories, Bans, Lizenzen und Quellen; alle drei lokalen Featureprofile bauen | `anyhow`, Default-Features ohne Freigabe und ein unzulässiges Featurepaar werden durch Negativproben abgewiesen; Lockfile enthält noch keine externen Packages; nur Windows nativ, Wrapper zusätzlich mit Git Bash | 23 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T09:33:24+02:00 | M0-13 READY |
-| M0-13 | DONE | `e538756`; `docs/M0-13-verification.md`; `docs/architecture/M0-13-testkit.md`; JSON-Schema und versioniertes Testkorpus | 24 Verify-Schritte und 10 Evidenzprüfungen bestanden; 7 Standard- und 8 Fault-Profil-Rusttests sowie 4 Corpus-Policytests; Beleg mit Quell-Snapshot | Seedfehler zweimal byteidentisch reproduziert; Fault-Marker/Probe fehlen im Releaseartefakt; Releasebuild mit Fault-Feature wird abgewiesen; Fixturehash-/Pfadmanipulationen scheitern | 24 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T10:08:16+02:00; Run `M0-13-20260929-final`; NTFS/Windows/Rust 1.85 | M0-14 READY |
+| M0-13 | DONE | `e538756`; `docs/M0-13-verification.md`; `docs/architecture/M0-13-testkit.md`; JSON-Schema und versioniertes Testkorpus | 24 Verify-Schritte und 10 Evidenzprüfungen bestanden; 7 Standard- und 8 Fault-Profil-Rusttests sowie 4 Corpus-Policytests; Beleg mit Quell-Snapshot | Seedfehler zweimal byteidentisch reproduziert; Fault-Marker/Probe fehlen im Releaseartefakt; Releasebuild mit Fault-Feature wird abgewiesen; Fixturehash-/Pfadmanipulationen scheitern | 24 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T10:08:16+02:00; Run `M0-13-20260929-final`; NTFS/Windows/Rust 1.85 | M0-14 BLOCKED |
+| M0-14 | BLOCKED | `docs/M0-14-environment-check.md`; sauberer Klon `c2f9cec`; externer WSL-Lauf `M0-14-linux-wsl2-20260929` | Vollständiger Verify auf Windows/NTFS und WSL2/Linux/ext4 bestanden; MSRV 1.85 und drei Featureprofile auf beiden Profilen geprüft | Kein macOS-Host und kein ausgewählter CI-Anbieter; GitHub ist auf Nutzervorgabe vertagt; der CI-Matrix-SKIP bleibt sichtbar | Windows: 24 PASS, 1 SKIP, 0 FAIL; WSL2: 24 PASS, 1 SKIP, 0 FAIL | geprüft 2026-09-29T10:21:01+02:00; keine externe CI-Ausführung | CI-Anbieter und macOS-Runner benennen, danach M0-14 fortsetzen |
 
 ## Entscheidungs- und Release-Gates
 
@@ -55,6 +56,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 ## Blocker
 
 **M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. Bereits erledigt: vollständige Lückenklassifizierung und reproduzierbare Arbeitskopien aus M0-02. Nächster Schritt: Produktverantwortung entscheidet, ob die jeweilige Norm ergänzt, verworfen oder an eine konkrete Quellenstelle gebunden wird. M0-02a bleibt ein Blocker für das M0-15-Gate; die unabhängigen M0-Aufgaben können bis dahin bearbeitet werden. `BLOCKED` ist niemals `DONE`.
+
+**M0-14:** Die lokalen sauberen Läufe belegen Windows und WSL2/Linux, aber keine macOS-Ausführung und keinen CI-Dienst. `git remote -v` ist leer; es gibt keine Workflowdatei. GitHub wurde auf Nutzervorgabe zurückgestellt und kein anderer CI-Anbieter benannt. Für die Pflichtjobs und das Archivieren ihres Step-Manifests braucht M0-14 daher einen ausgewählten Anbieter mit macOS-Runner; bis dahin bleibt die Task `BLOCKED`.
 
 **M0-09 Lizenzentscheidung:** Der Product Owner hat Open Source gewählt; ADR-038 setzt das als `MIT OR Apache-2.0` um. Dependency-Lizenzen und Lieferkettenregeln prüft M0-12.
 
