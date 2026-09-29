@@ -876,6 +876,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             CORRECTION_ADR,
             "ADR-036-rust-msrv.md",
             "ADR-037-uuidv7-generator.md",
+            "ADR-038-project-license.md",
         }
         and path.name not in expected_names
     ]

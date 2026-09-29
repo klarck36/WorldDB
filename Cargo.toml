@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "crates/worlddb-core",
+    "crates/worlddb-storage-file",
+    "crates/worlddb-cli",
+    "crates/worlddb-testkit",
+    "xtask",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"

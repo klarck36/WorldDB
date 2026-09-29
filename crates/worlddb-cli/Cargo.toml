@@ -1,0 +1,11 @@
+[package]
+name = "worlddb-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+worlddb-core = { path = "../worlddb-core" }
+worlddb-storage-file = { path = "../worlddb-storage-file" }
