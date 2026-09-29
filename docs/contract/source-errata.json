@@ -8,14 +8,14 @@
     "source_inventory": "docs/source/source_manifest.json",
     "scope_note": "The original standalone v3.1 specification is not present in the supplied ZIP; this manifest covers only the supplied sources."
   },
-  "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only",
+  "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only; python -X utf8 docs/contract/verify_contract_docs.py",
   "working_copies": [
     {
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "byte_identical": true
+      "working_sha256": "03130234521fe5a3fed6ffa4090670f96a7050b1cfaca2660c665ff1880e88ef",
+      "byte_identical": false
     },
     {
       "working_file": "WorldDB_Consolidation_Trace.md",
@@ -49,11 +49,31 @@
       "working_file": "invariants_vNext.toml",
       "source_file": "docs/source/invariants_vNext.toml",
       "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
-      "working_sha256": "9308ce2dafad15e520f18c6a16bd041105d1acc04e8c90f5dcec84b98129c93b",
+      "working_sha256": "270135c173fdce224178fe7d067d6cfbb300c76cc8e936855bc2363e389e5521",
       "byte_identical": false
     }
   ],
+  "contract_additions": [
+    {
+      "task": "M0-04",
+      "specification": "docs/contract/entity_perspective_contract.md",
+      "specification_sha256": "0e63500a6bc044fb672c7b87224264697e25c32fd2efa2bdeff0070236bc90f2",
+      "decision_record": "docs/contract/ADR-030-entity-perspective.md",
+      "decision_record_sha256": "db366f5a63bf6e98c5797e5ba0ff4aa95f3174799ee4e9708edd20ba9ba0c04c",
+      "status": "accepted working contract"
+    }
+  ],
   "corrections": [
+    {
+      "id": "ERR-M0-04-ENTITY-PERSPECTIVE",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Clarified the Entity and Perspective rows in §33 and appended the M0-04 normative supplement after the source-bound main text.",
+      "authority": [
+        "docs/contract/entity_perspective_contract.md",
+        "docs/contract/ADR-030-entity-perspective.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §33"
+      ]
+    },
     {
       "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
       "file": "invariants_vNext.toml",
@@ -403,6 +423,7 @@
   "verification_limits": [
     "This is a structural source comparison; a text reference is not a product test.",
     "Open normative source gaps require an explicit M0-02a decision.",
-    "The Master line index is the immutable line-number basis identified by MAIN-L keys."
+    "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
+    "The Entity/Perspective supplement is an explicit M0-04 working-contract addition, not a claim that the missing original v3.1 source was present."
   ]
 }

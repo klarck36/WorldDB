@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 import tomllib
@@ -11,6 +13,9 @@ from pathlib import Path
 
 MASTER_NAME = "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md"
 TOML_NAME = "invariants_vNext.toml"
+SPEC_NAME = "entity_perspective_contract.md"
+ADR_NAME = "ADR-030-entity-perspective.md"
+ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
     "id_type",
@@ -34,6 +39,25 @@ EXPECTED_HEADER = [
     "Evidence/Provenance Eligibility",
 ]
 ID_PATTERN = re.compile(r"WDB-[A-Z]+-\d{3}")
+REQUIRED_CONTRACT_CLAUSES = (
+    "EntityCatalogEntry {",
+    "EntityTypeDefinition {",
+    "Assertion.Subject",
+    "Value::Entity",
+    "EntityRetirementId",
+    "RecordRef::EntityRetirement(EntityRetirementId)",
+    "PerspectiveDefinitionRevision {",
+    "PerspectiveScope::World",
+    "PerspectiveRetirementId",
+    "RecordRef::PerspectiveRetirement(PerspectiveRetirementId)",
+    "`entity.create`",
+    "`entity.reference`",
+    "`perspective.use`",
+    "Master §§3.1/3.2",
+    "`LifecycleTargetRef` itself is unchanged",
+    "52 HARD gaps in M0-02a remain open",
+    "WDB-HIS-001",
+)
 REFERENCE_PATTERN = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
 )
@@ -134,6 +158,52 @@ def master_type_rows(master_path: Path) -> list[dict[str, object]]:
 def verify(root: Path) -> int:
     master_path = root / "docs" / "contract" / MASTER_NAME
     toml_path = root / "docs" / "contract" / TOML_NAME
+    spec_path = root / "docs" / "contract" / SPEC_NAME
+    adr_path = root / "docs" / "contract" / ADR_NAME
+    errata_path = root / "docs" / "contract" / ERRATA_NAME
+    master_text = master_path.read_text(encoding="utf-8")
+    spec_text = spec_path.read_text(encoding="utf-8").strip()
+    adr_text = adr_path.read_text(encoding="utf-8")
+    missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
+    if missing_clauses:
+        raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
+    if not master_text.rstrip().endswith(spec_text):
+        raise ValueError("Master working copy does not end with the exact M0-04 supplement")
+    for heading in (
+        "## 2. Entity contract",
+        "## 3. Perspective contract",
+        "## 4. Authorization and operation boundary",
+        "## 5. Implementable commands and required outcomes",
+        "## 6. Existing-contract cross-check",
+    ):
+        if heading not in spec_text:
+            raise ValueError(f"M0-04 supplement is missing required section {heading!r}")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in adr_text:
+        raise ValueError("ADR-030 is not marked accepted")
+    if "[Entity/Perspective supplement](entity_perspective_contract.md)" not in adr_text:
+        raise ValueError("ADR-030 does not link the normative supplement")
+
+    errata = json.loads(errata_path.read_text(encoding="utf-8"))
+    addition = next(
+        (
+            item
+            for item in errata.get("contract_additions", [])
+            if item.get("task") == "M0-04"
+        ),
+        None,
+    )
+    if not addition:
+        raise ValueError("source-errata.json lacks the M0-04 contract addition")
+    if addition.get("specification_sha256") != hashlib.sha256(spec_path.read_bytes()).hexdigest():
+        raise ValueError("M0-04 supplement hash differs from source-errata.json")
+    if addition.get("decision_record_sha256") != hashlib.sha256(adr_path.read_bytes()).hexdigest():
+        raise ValueError("ADR-030 hash differs from source-errata.json")
+    if not any(
+        item.get("id") == "ERR-M0-04-ENTITY-PERSPECTIVE"
+        for item in errata.get("corrections", [])
+    ):
+        raise ValueError("source-errata.json lacks ERR-M0-04-ENTITY-PERSPECTIVE")
+
     expected = master_type_rows(master_path)
     data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
     registered = data.get("first_class_type")
@@ -185,6 +255,26 @@ def verify(root: Path) -> int:
                 f"TOML first_class_type record {index} ({register_row['name']}) "
                 "differs from its Master §33 row"
             )
+    by_name = {str(row["name"]): row for row in expected}
+    for name, expected_fields in {
+        "Entity": {
+            "main_section": "§§2.3, 3, M0-04 supplement",
+            "wire": "typed 16-byte EntityId + project catalog entry",
+            "storage": "immutable EntityId/EntityTypeId; entity facts are Assertions",
+            "lifecycle": "Active → Retired at shared Revision; no retype/delete/reuse",
+            "security": "entity action/reference + record/field policy",
+        },
+        "Perspective": {
+            "main_section": "§§2.1.2, 2.3.1, M0-04 supplement",
+            "wire": "typed 16-byte PerspectiveId",
+            "storage": "revisioned project definition; optional name/description",
+            "lifecycle": "Active → Retired at shared Revision",
+            "security": "perspective action/use policy; never Principal",
+        },
+    }.items():
+        row = by_name.get(name)
+        if row is None or any(row[field] != value for field, value in expected_fields.items()):
+            raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
     print(f"DOCS VERIFY OK: {len(registered)} First-Class types; required fields and Master §33 match")
     return 0
 

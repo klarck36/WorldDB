@@ -45,6 +45,8 @@ FIRST_CLASS_TYPE_HEADER = (
     "Security",
     "Evidence/Provenance Eligibility",
 )
+ENTITY_PERSPECTIVE_SPEC = "entity_perspective_contract.md"
+ENTITY_PERSPECTIVE_ADR = "ADR-030-entity-perspective.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -198,6 +200,57 @@ def first_class_toml(records: list[dict[str, str | list[str]]]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
+def m0_04_master_copy(source_master: str, supplement: str) -> str:
+    """Apply the two M0-04 table clarifications and append the versioned supplement."""
+    updates = {
+        "Entity": {
+            2: "§§2.3, 3, M0-04 supplement",
+            4: "typed 16-byte EntityId + project catalog entry",
+            5: "immutable EntityId/EntityTypeId; entity facts are Assertions",
+            6: "Active → Retired at shared Revision; no retype/delete/reuse",
+            7: "entity action/reference + record/field policy",
+        },
+        "Perspective": {
+            2: "§§2.1.2, 2.3.1, M0-04 supplement",
+            4: "typed 16-byte PerspectiveId",
+            5: "revisioned project definition; optional name/description",
+            6: "Active → Retired at shared Revision",
+            7: "perspective action/use policy; never Principal",
+        },
+    }
+    lines = source_master.splitlines(keepends=True)
+    heading_index = next(
+        (index for index, line in enumerate(lines) if line.strip() == "## 33. First-Class-Strukturregister"),
+        None,
+    )
+    if heading_index is None:
+        raise ValueError("Cannot apply M0-04 without the Master §33 register")
+    changed: set[str] = set()
+    for index in range(heading_index + 1, len(lines)):
+        line = lines[index]
+        if not line.strip().startswith("|"):
+            if changed:
+                break
+            continue
+        cells = split_markdown_table_row(line)
+        if not cells or cells[0] not in updates:
+            continue
+        name = cells[0]
+        if name in changed or len(cells) != 9:
+            raise ValueError(f"Unexpected or duplicate Master §33 row for {name}")
+        for field_index, value in updates[name].items():
+            cells[field_index] = value
+        line_ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+        lines[index] = "| " + " | ".join(cells) + " |" + line_ending
+        changed.add(name)
+    if changed != set(updates):
+        raise ValueError(f"M0-04 could not update Master §33 rows: {sorted(set(updates) - changed)}")
+    master = "".join(lines).rstrip("\r\n")
+    separator = "\r\n\r\n" if "\r\n" in source_master else "\n\n"
+    supplement_text = supplement.replace("\r\n", "\n").replace("\n", "\r\n" if "\r\n" in source_master else "\n")
+    return master + separator + supplement_text.strip("\r\n") + ("\r\n" if "\r\n" in source_master else "\n")
+
+
 def replace_toml_field(block: str, field: str, value: str) -> str:
     pattern = re.compile(rf"(?m)^{re.escape(field)}\s*=\s*.*$")
     replacement = f"{field} = {value}"
@@ -289,9 +342,17 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         if row["source_statement"] != source["statement"]:
             raise ValueError(f"Source statement mismatch between TSV and Markdown: {invariant_id}")
 
-    master_text = source_files[MASTER_NAME].decode("utf-8")
-    master_lines = master_text.splitlines()
-    first_class_types = first_class_types_from_master(master_text)
+    source_master_text = source_files[MASTER_NAME].decode("utf-8")
+    master_lines = source_master_text.splitlines()
+    supplement_path = root / CONTRACT_DIR / ENTITY_PERSPECTIVE_SPEC
+    adr_path = root / CONTRACT_DIR / ENTITY_PERSPECTIVE_ADR
+    supplement_bytes = supplement_path.read_bytes()
+    adr_bytes = adr_path.read_bytes()
+    supplement_text = supplement_bytes.decode("utf-8")
+    working_master_text = m0_04_master_copy(source_master_text, supplement_text)
+    first_class_types = first_class_types_from_master(working_master_text)
+    contract_files: dict[str, bytes] = dict(source_files)
+    contract_files[MASTER_NAME] = working_master_text.encode("utf-8")
     unknown_type_invariants = sorted(
         {
             invariant_id
@@ -329,7 +390,6 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         if invariant_id != "WDB-LAY-011" and toml_row["statement"] != row["source_statement"]:
             raise ValueError(f"Unexpected TOML statement mismatch: {invariant_id}")
 
-    contract_files: dict[str, bytes] = dict(source_files)
     toml_text = source_files[TOML_NAME].decode("utf-8")
     sections = list(re.finditer(r"(?m)^\[\[", toml_text))
     boundaries = [match.start() for match in sections] + [len(toml_text)]
@@ -536,9 +596,32 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 "this manifest covers only the supplied sources."
             ),
         },
-        "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only",
+        "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only; python -X utf8 docs/contract/verify_contract_docs.py",
         "working_copies": source_items,
+        "contract_additions": [
+            {
+                "task": "M0-04",
+                "specification": f"docs/contract/{ENTITY_PERSPECTIVE_SPEC}",
+                "specification_sha256": sha256(supplement_bytes),
+                "decision_record": f"docs/contract/{ENTITY_PERSPECTIVE_ADR}",
+                "decision_record_sha256": sha256(adr_bytes),
+                "status": "accepted working contract",
+            }
+        ],
         "corrections": [
+            {
+                "id": "ERR-M0-04-ENTITY-PERSPECTIVE",
+                "file": MASTER_NAME,
+                "change": (
+                    "Clarified the Entity and Perspective rows in §33 and appended the M0-04 "
+                    "normative supplement after the source-bound main text."
+                ),
+                "authority": [
+                    f"docs/contract/{ENTITY_PERSPECTIVE_SPEC}",
+                    f"docs/contract/{ENTITY_PERSPECTIVE_ADR}",
+                    f"docs/source/{MASTER_NAME} §33",
+                ],
+            },
             {
                 "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
                 "file": TOML_NAME,
@@ -642,6 +725,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "This is a structural source comparison; a text reference is not a product test.",
             "Open normative source gaps require an explicit M0-02a decision.",
             "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
+            "The Entity/Perspective supplement is an explicit M0-04 working-contract addition, not a claim that the missing original v3.1 source was present.",
         ],
     }
     output_files[CONTRACT_DIR / ERRATA_NAME] = (
@@ -652,7 +736,13 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     unexpected = [
         path.name
         for path in (root / CONTRACT_DIR).iterdir()
-        if path.name not in {Path(__file__).name, "verify_contract_docs.py"}
+        if path.name
+        not in {
+            Path(__file__).name,
+            "verify_contract_docs.py",
+            ENTITY_PERSPECTIVE_SPEC,
+            ENTITY_PERSPECTIVE_ADR,
+        }
         and path.name not in expected_names
     ]
     if unexpected:

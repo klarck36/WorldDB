@@ -3,7 +3,7 @@ M0-01	M0	Quellen inventarisieren		DONE	Luna				artifact:docs/M0-01-verification.
 M0-02	M0	Quellenregister mechanisch reparieren und Lücken klassifizieren	M0-01	DONE	Luna		2026-09-29T02:00:47+02:00		artifact:docs/M0-02-verification.md;artifact:docs/contract/source-errata.json;artifact:docs/contract/source_gaps.tsv;test:python -X utf8 docs/contract/build_contract_sources.py --verify-only;test:temporary tampered source_gaps.tsv rejected with exit 1
 M0-02a	M0	Normative Quellenlücken entscheiden	M0-02	BLOCKED	Produktverantwortung + Luna		2026-09-29T02:00:47+02:00		blocker:52-HARD-normative-source-gaps-and-WDB-HIS-001-product-decision-required
 M0-03	M0	First-Class-Register maschinenlesbar machen	M0-02	DONE	Luna		2026-09-29T02:09:32+02:00		artifact:docs/M0-03-verification.md;artifact:docs/contract/verify_contract_docs.py;artifact:docs/contract/invariants_vNext.toml;test:python -X utf8 docs/contract/verify_contract_docs.py;test:negative required field rejected;test:negative unregistered type rejected
-M0-04	M0	Entity-/Perspective-Vertrag schließen	M0-03	READY	Luna		2026-09-29T02:09:32+02:00		
+M0-04	M0	Entity-/Perspective-Vertrag schließen	M0-03	RUNNING	Luna		2026-09-29T02:10:30+02:00		
 M0-04a	M0	Archive und expliziten HistorySpace-Transfer spezifizieren	M0-04	PLANNED	Luna				
 M0-04b	M0	Constraints und Zeitrepräsentation präzisieren	M0-04a	PLANNED	Luna				
 M0-04c	M0	Security-Policy-Vertrag präzisieren	M0-04b	PLANNED	Luna				
