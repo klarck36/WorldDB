@@ -31,7 +31,7 @@ Der finale, reproduzierbare Beleg wird beim abgeschlossenen Lauf mit fester Run-
 
 ## Grenzen
 
-Der Lauf wurde nativ nur auf Windows/NTFS geprüft. Native Linux-/macOS-Jobs gehören zu M0-14. Die Fuzz-Seeds sind ein kleines versioniertes Startkorpus; lange Fuzzläufe und Crash-/Core-Dumps verbleiben außerhalb des synchronisierten Repositorys. Der M0-02a-Blocker mit 52 offenen HARD-Quellenlücken und zwei GUARDED-Lücken bleibt unverändert und verhindert weiterhin das M0-15-Gate.
+Der Lauf wurde nativ nur auf Windows/NTFS geprüft. Native Linux-/macOS-Jobs gehören zu M0-14. Die Fuzz-Seeds sind ein kleines versioniertes Startkorpus; lange Fuzzläufe und Crash-/Core-Dumps verbleiben außerhalb des synchronisierten Repositorys. M0-02a hat die 52 HARD-Quellenlücken inzwischen mit ADR-039 geschlossen. Die zwei GUARDED-Lücken WDB-ENG-006 und WDB-PER-001 bleiben ausdrücklich registriert und verhindern das lokale M0-15-Gate nicht. Die fehlende externe CI-Matrix bleibt als M0-14-Blocker bestehen.
 
 ## Reproduktion
 

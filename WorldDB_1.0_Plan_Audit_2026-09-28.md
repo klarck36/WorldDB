@@ -70,3 +70,9 @@ Der Product Owner bestätigte, dass Git/GitHub wegen eigener Probleme, die währ
 - M9-13b und M10-10 hängen direkt von M0-14 ab. Dadurch können M1–M8 lokal vorbereitet und geprüft werden, während RC-Gate und Veröffentlichung bis zum externen Matrixnachweis gesperrt bleiben.
 - Das M0-Vorfreigabe-Kriterium verlangt keine offene HARD-Quellenlücke oder unregistrierte Ausnahme. Die zwei ausdrücklich in ADR-039 registrierten GUARDED-Lücken WDB-ENG-006 und WDB-PER-001 bleiben offen und werden nicht durch diese Reihenfolgeänderung als erledigt behauptet.
 - `WorldDB_1.0_Plancheck.py` prüft die Ausnahme exakt: M0-15 lässt nur M0-14 offen, die CI-Invariante WDB-ENG-005 wird nur vor M9 zurückgestellt, und M9-13b/M10-10 müssen M0-14 als direkte Dependency führen.
+
+## Abschlussreview M0-15 am 29. September 2026
+
+Der lokale Vorfreigabepunkt M0-15 bestand auf Basis des Implementierungsstands `493506c7e144c5c1763ff560ac8aba35c5fc3118`. Saubere Windows- und WSL2/Linux-Checkouts bestanden jeweils den gelockten Offline-Build und `cargo xtask verify` mit 27 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. Die 22 Artefakte des M0-13-Evidenzmanifests sowie die Artefakte der beiden Runner-Manifeste stimmten mit ihren SHA-256-Werten überein. Das Gateprotokoll steht in `docs/gates/M0.md`.
+
+Der abschließende Verify-Lauf nach dem Eintragen von Gateprotokoll, Taskregister und Status bestand ebenfalls mit 27 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. M0-15 ist DONE; M1-01 ist READY. M0-14 und WDB-ENG-005 bleiben offen, M0 ist nicht abgeschlossen. GitHub-/Anbieter-CI einschließlich macOS wird nach der vom Product Owner angekündigten späteren Git-Integration vor M9-13b, RC und M10-10 nachgeholt.

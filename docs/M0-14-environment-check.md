@@ -4,14 +4,18 @@
 
 **Geprüft:** 2026-09-29T13:58:29+02:00
 
-**Basis:** aktuelle saubere Läufe auf Commit `9e2d94894806112099efc560c4d524cb22e51470`; frühere Baseline-Läufe auf `8e0502961b46a26733c5342008df1227bec2874e`
+**Historischer Stand:** ursprüngliche saubere Läufe auf Commit `9e2d94894806112099efc560c4d524cb22e51470`; frühere Baseline-Läufe auf `8e0502961b46a26733c5342008df1227bec2874e`. Der neueste lokale Vorfreigabebeleg steht in `docs/gates/M0.md`.
 
-## Saubere lokale Jobläufe auf dem aktuellen Commit
+## Frühere saubere lokale Jobläufe
 
 - Windows x86_64 MSVC, Rust/Cargo 1.85.0: Der `windows-msrv`-Job lief mit `checkout_clean_before=true` und `checkout_clean_after=true`. `cargo xtask verify` meldete **27 PASS, 1 sichtbaren `ci-matrix`-SKIP und 0 FAIL**. Das Manifest und die gehashten Artefakte liegen unter `C:\Users\wedde\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\WorldDB\ci-jobs\windows-fixed\M0-14-windows-msrv-20260929T092026Z-c87c8d0f\ci-job.json`.
 - Linux x86_64 GNU unter WSL2, Rust/Cargo 1.85.0: Der `linux-msrv`-Job lief aus einem sauberen Linux-Checkout mit `checkout_clean_before=true` und `checkout_clean_after=true`. Ergebnis ebenfalls **27 PASS, 1 sichtbarer `ci-matrix`-SKIP und 0 FAIL**. Manifest und gehashte Artefakte: `/home/wedde/WorldDB/ci-jobs/linux-fixed/M0-14-linux-msrv-20260929T092111Z-2ad8af7b/ci-job.json`.
 
 Beide Manifeste beziehen sich auf Commit `9e2d94894806112099efc560c4d524cb22e51470`, bestätigen die Profile `no-default`, `default` und `all-features`, archivieren das zugehörige `steps.tsv`, stdout und stderr und prüfen die SHA-256-Werte. Das sind erfolgreiche lokale Runnerläufe auf Windows und WSL2, keine externen CI-Ausführungen. Der sichtbare `ci-matrix`-Skip bleibt deshalb bestehen.
+
+## Aktuelle lokale Läufe für M0-15
+
+Auf dem sauberen Commit `493506c7e144c5c1763ff560ac8aba35c5fc3118` bestanden Windows x86_64 MSVC und WSL2/Linux x86_64 GNU erneut jeweils mit Rust/Cargo 1.85.0. Beide `cargo xtask verify`-Läufe meldeten 27 PASS, 1 sichtbaren `ci-matrix`-SKIP und 0 FAIL; beide Checkouts waren davor und danach sauber. Die anbieterneutralen Runner-Manifeste und sämtliche Artefakthashes sind in [M0-Gateprotokoll](gates/M0.md) eingetragen. Diese Läufe belegen den lokalen M0-15-Vorfreigabepunkt, aber keinen externen CI-Job; M0-14 bleibt `BLOCKED`.
 
 Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgebundenen TSV-Testfixtures in CRLF umschrieb. `.gitattributes` setzt `crates/worlddb-testkit/testdata/m0-13/**` nun auf bytegetreue Auschecke (`-text`). Der danach erneut angelegte Windows-Klon bestand vollständig.
 
