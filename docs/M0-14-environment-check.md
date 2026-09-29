@@ -2,7 +2,7 @@
 
 **Status:** BLOCKED
 
-**Geprüft:** 2026-09-29T10:41:00+02:00
+**Geprüft:** 2026-09-29T11:03:00+02:00
 
 **Basis:** sauberer Commit `8e0502961b46a26733c5342008df1227bec2874e`
 
@@ -21,7 +21,7 @@ Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgeb
 
 ## Konkreter Blocker
 
-Der Arbeitsplan verlangt Linux-, Windows- und macOS-Jobs aus sauberen Checkouts. Lokal bestehen Windows und WSL2/Linux. Es gibt weiterhin keinen macOS-Host, keinen ausgewählten CI-Anbieter und kein Git-Remote. GitHub wurde auf Nutzervorgabe zurückgestellt; ein anderer Anbieter wurde nicht ausgewählt. Damit fehlen der echte Anbieterjob samt Artefaktupload und die macOS-Ausführung. `M0-14` bleibt `BLOCKED`.
+Der Arbeitsplan verlangt Linux-, Windows- und macOS-Jobs aus sauberen Checkouts. Lokal bestehen Windows und WSL2/Linux. Es gibt weiterhin keinen macOS-Host, keinen ausgewählten CI-Anbieter und kein Git-Remote. GitHub wurde auf Nutzervorgabe zurückgestellt; ein anderer Anbieter wurde noch nicht ausgewählt. Die geprüften Alternativen stehen in [M0-14-provider-options.md](M0-14-provider-options.md): GitLab.com Open Source wird empfohlen, falls ein öffentliches GitLab-Projekt und die jährliche Programmverlängerung akzeptabel sind; CircleCI kann mit einem unterstützten Repository-Host betrieben werden. Damit fehlen weiter der echte Anbieterjob samt Artefaktupload und die macOS-Ausführung. `M0-14` bleibt `BLOCKED`.
 
 ## Zum Fortsetzen erforderlich
 
