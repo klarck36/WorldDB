@@ -1,9 +1,9 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-04 abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen  
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-04a abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen  
 
-**Nächste Task:** `M0-04a`  
+**Nächste Task:** `M0-04b`  
 
 **Letzter abgeschlossener Milestone:** keiner  
 **Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001  
@@ -23,7 +23,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-02a | BLOCKED | `docs/contract/source_gaps.tsv`; `docs/contract/source-errata.json` | 54 Lücken präzise klassifiziert; Produktnormen nicht erfunden | Nicht fällig bis Entscheidung | Noch nicht fällig | 2026-09-29T02:00:47+02:00 | Produktentscheidung zu 52 HARD-Lücken und stärkerem WDB-HIS-001-Mastertext erforderlich |
 | M0-03 | DONE | `c4cbe8f`; `docs/M0-03-verification.md`; `docs/contract/verify_contract_docs.py` | 22 Typen; Docs Verify sowie Quell- und Plancheck bestanden | Entferntes Pflichtfeld und unregistrierter Typ in temporären Fixtures mit Exitcode 1 abgewiesen | Noch nicht fällig | geprüft 2026-09-29T02:09:32+02:00 | M0-04 DONE |
 | M0-04 | DONE | `fa95531`; `docs/M0-04-verification.md`; `docs/contract/ADR-030-entity-perspective.md`; `docs/contract/entity_perspective_contract.md` | Erzeugung, typed references, Typzuweisung, Metadatenhistorie, Retirement und Actions spezifiziert; Master-/Quellabgleich bestanden | Zwei temporäre Fixtures ohne EntityRetirement-Variante bzw. perspective.use mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04) | geprüft 2026-09-29T02:29:05+02:00 | M0-04a READY |
-| M0-04a | RUNNING | – | – | – | Noch nicht fällig | Start 2026-09-29T02:43:06+02:00 | Archive/HistorySpace-Transfer-Vertrag anhand Master §§2.1.1, 2.3.2, 15.2–15.3 und 31 prüfen |
+| M0-04a | DONE | `605d5e3`; `docs/M0-04a-verification.md`; `docs/contract/ADR-031-archive-transfer.md`; `docs/contract/archive_transfer_contract.md` | Archive-/Unarchive- und Transfervertrag mit Revisionen, ID-Maps, Provenienz, Kollisions- und Konfliktregeln spezifiziert; Master-/Quellabgleich bestanden | Drei temporäre Fixtures ohne ArchiveTransition, Relation-ID-Map bzw. Zielkonfliktregel mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04a) | geprüft 2026-09-29T02:47:33+02:00 | M0-04b READY |
+| M0-04b | READY | – | – | Noch nicht fällig | Noch nicht fällig | bereit geprüft 2026-09-29T02:47:33+02:00 | Constraint-/Zeitrepräsentationsvertrag präzisieren |
 
 ## Entscheidungs- und Release-Gates
 
@@ -40,7 +41,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 
 ## Blocker
 
-**M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. Bereits erledigt: vollständige Lückenklassifizierung und reproduzierbare Arbeitskopien aus M0-02. Nächster Schritt: Produktverantwortung entscheidet, ob die jeweilige Norm ergänzt, verworfen oder an eine konkrete Quellenstelle gebunden wird. M0-04 ist abgeschlossen; M0-04a und M0-06 bleiben unabhängig von diesem Blocker ausführbar. `BLOCKED` ist niemals `DONE`.
+**M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. Bereits erledigt: vollständige Lückenklassifizierung und reproduzierbare Arbeitskopien aus M0-02. Nächster Schritt: Produktverantwortung entscheidet, ob die jeweilige Norm ergänzt, verworfen oder an eine konkrete Quellenstelle gebunden wird. M0-04a ist abgeschlossen; M0-04b und M0-06 bleiben unabhängig von diesem Blocker ausführbar. `BLOCKED` ist niemals `DONE`.
 
 ## Zusatzauftrag GitHub
 
