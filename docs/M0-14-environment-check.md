@@ -2,7 +2,7 @@
 
 **Status:** BLOCKED
 
-**Geprüft:** 2026-09-29T11:21:16+02:00
+**Geprüft:** 2026-09-29T13:58:29+02:00
 
 **Basis:** aktuelle saubere Läufe auf Commit `9e2d94894806112099efc560c4d524cb22e51470`; frühere Baseline-Läufe auf `8e0502961b46a26733c5342008df1227bec2874e`
 
@@ -21,11 +21,11 @@ Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgeb
 
 ## Konkreter Blocker
 
-Der Arbeitsplan verlangt Linux-, Windows- und macOS-Jobs aus sauberen Checkouts. Lokal bestehen Windows und WSL2/Linux. GitHub Actions ist für später vorgesehen; GitHub wurde auf Nutzervorgabe noch nicht eingerichtet. Ein zweiter Anbieter ist nicht erforderlich. Damit fehlen bis zur späteren GitHub-Einrichtung weiterhin der externe Anbieterjob samt Artefaktupload und die macOS-Ausführung. `M0-14` bleibt `BLOCKED`. Optionale Alternativen, falls GitHub doch nicht genutzt wird, stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
+Der Product Owner hat am 2026-09-29 mitgeteilt, dass Git/GitHub wegen eigener Kontoprobleme, die während dieses Arbeitslaufs nicht behoben werden können, nachträglich integriert wird. Es gibt daher aktuell kein Remote und keine `.github/workflows`-Datei; es wird kein Anbieterzugang vorgetäuscht und keine Pipeline ins Leere eingerichtet. Lokal bestehen Windows und WSL2/Linux; externer Anbieterjob, macOS-Ausführung und Artefaktarchivierung fehlen weiter. `M0-14` bleibt `BLOCKED`, hält aber nur den vollständigen M0-Abschluss und spätere RC-/Release-Gates zurück. Nach dem lokalen Vorfreigabepunkt M0-15 darf M1–M8 lokal fortgesetzt werden. M0-14 ist zwingend vor M9-13b und M10-10 abzuschließen; WDB-ENG-005 bleibt bis zu diesem Nachweis offen. Ein zweiter Anbieter ist nicht erforderlich. Optionale Alternativen stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
 
 ## Zum Fortsetzen erforderlich
 
-1. GitHub später für CI einrichten.
-2. Die Matrix einschließlich `macos-msrv` aus sauberen Checkouts laufen lassen und die Step-Manifeste archivieren.
+1. Nach Behebung des Kontoproblems Git/GitHub nachträglich integrieren und CI aktivieren.
+2. Vor M9-13b die Matrix auf dem aktuellen Produktstand einschließlich `macos-msrv` aus sauberen Checkouts laufen lassen und die Step-Manifeste archivieren.
 
 Danach muss `macos-msrv` aus einem sauberen Checkout laufen und der Anbieter die Step-Manifeste archivieren. Es wurde kein Anbieter-Workflow auf Verdacht angelegt.

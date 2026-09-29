@@ -152,12 +152,22 @@ def main() -> int:
         visit(task_id)
 
     for milestone, ids in by_milestone.items():
-        if milestone != "M10" and set(dep_graph[ids[-1]]) != set(ids[:-1]):
-            errors.append(f"{milestone}: gate must depend on every other milestone task")
+        expected_gate_dependencies = set(ids[:-1])
+        if milestone == "M0":
+            # M0-15 is an explicit local development pre-gate; external CI remains
+            # mandatory before the RC architecture audit and final publication.
+            expected_gate_dependencies.discard("M0-14")
+        if milestone != "M10" and set(dep_graph[ids[-1]]) != expected_gate_dependencies:
+            errors.append(f"{milestone}: gate dependencies differ from the declared milestone gate scope")
         if milestone != "M0":
             prior = f"M{int(milestone[1:]) - 1}"
             if by_milestone[prior][-1] not in dep_graph[ids[0]]:
                 errors.append(f"{milestone}: first task must depend on previous gate")
+
+    if "M0-14" not in dep_graph.get("M9-13b", []):
+        errors.append("M9-13b must wait for the deferred M0-14 CI matrix before the RC architecture audit")
+    if "M0-14" not in dep_graph.get("M10-10", []):
+        errors.append("M10-10 must wait for the deferred M0-14 CI matrix before publication")
 
     gate_ids = {ids[-1] for milestone, ids in by_milestone.items() if milestone != "M10"}
 
@@ -222,8 +232,15 @@ def main() -> int:
         milestone_ids = by_milestone[args.gate_precheck]
         gate_id = milestone_ids[-1]
         gate_position = task_position[gate_id]
+        m0_14_status = task_by_id.get("M0-14", {}).get("status")
+        deferred_ci = (
+            int(args.gate_precheck[1:]) < 9
+            and m0_14_status in {"BLOCKED", "WAITING_EXTERNAL"}
+        )
         for task_id in milestone_ids[:-1]:
             if task_by_id[task_id]["status"] != "DONE":
+                if args.gate_precheck == "M0" and task_id == "M0-14" and deferred_ci:
+                    continue
                 errors.append(f"{args.gate_precheck}: prerequisite task {task_id} is not DONE")
         if args.gate_precheck != "M0":
             prior_gate = by_milestone[f"M{int(args.gate_precheck[1:]) - 1}"][-1]
@@ -232,6 +249,8 @@ def main() -> int:
         for row in invariant_rows:
             primary = row["primary_task"]
             if primary in task_position and task_position[primary] < gate_position:
+                if deferred_ci and row["invariant_id"] == "WDB-ENG-005":
+                    continue
                 if row["status"] != "DONE" or not (
                     concrete_refs(row["positive_evidence"]) and concrete_refs(row["negative_evidence"])
                 ):
@@ -258,6 +277,8 @@ def main() -> int:
     )
     if args.gate_precheck:
         print("GATE PRECHECK ONLY: test/run/artifact existence, outcomes and semantic effectiveness are not verified here")
+        if deferred_ci:
+            print("DEFERRED RELEASE PREREQUISITE: M0-14 and WDB-ENG-005 remain open; M9-13b and M10-10 are blocked until CI passes")
     return 0
 
 

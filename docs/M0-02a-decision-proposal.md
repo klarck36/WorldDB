@@ -20,4 +20,4 @@ Der Product Owner bestätigte: „M0-02a: alle 52 Aussagen in source_gaps.tsv al
 - [Quellenlückenregister](contract/source_gaps.tsv) bewahrt die ursprüngliche Herkunftsklassifikation und weist den Beschlussstatus je ID separat aus.
 - [Kandidaten-Crosswalk](M0-02a-candidate-crosswalk.tsv) bleibt als historischer Kandidatenstand erhalten; der beschlossene Bindungsstand ist das neue Register.
 
-M0-02a ist damit abgeschlossen. M0-14 und M0-15 bleiben wegen der vom Nutzer zurückgestellten GitHub-/macOS-CI-Nachweise offen.
+M0-02a ist damit abgeschlossen. M0-15 ist als lokaler Entwicklungs-Vorfreigabepunkt wieder aufgenommen. M0-14 bleibt wegen der nachträglich vorgesehenen Git-/GitHub-Integration und des noch ausstehenden macOS-Laufs offen; es sperrt weiterhin RC- und Releasefreigabe.

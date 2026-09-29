@@ -60,3 +60,13 @@ Weitere präzise Abnahmen betreffen Terminologie-Lint, konkrete Ressourcenprofil
 ## Offene Voraussetzungen
 
 Unabhängige Aufgaben sind abarbeitbar, aber die Software ist noch nicht implementiert. M0-02a und spätere Produkt-/Releasefreigaben können echte externe Entscheidungen erfordern; ein automatischer Abschluss ist damit nicht zugesichert. Lizenz, Toolchain, CI-Hosts, Signierung/Notarisierung, reale Dateisystemprofile sowie die fachlichen Lücken zu Entity/Perspective werden in M0 erhoben oder entschieden. Bis dahin sind weder Plattform- noch Durability- oder Release-Claims bewiesen.
+
+## Ausführungsreihenfolge am 29. September 2026
+
+Der Product Owner bestätigte, dass Git/GitHub wegen eigener Probleme, die während dieses Arbeitslaufs nicht behoben werden können, nachträglich integriert wird. Das ändert keine Norm, Plattformanforderung oder Release-Abnahme.
+
+- M0-15 wird als lokaler Entwicklungs-Vorfreigabepunkt ausgeführt; seine Dependencies umfassen alle lokalen M0-Tasks außer M0-14. Der Punkt prüft weiterhin den realen Offline-Clean-Checkout-Build, MSRV, Policies, Quellen, ODEs und die vorhandenen lokalen Windows-/WSL2-Nachweise. Er schließt M0 nicht vollständig.
+- M0-14 bleibt `BLOCKED`; WDB-ENG-005 bleibt bis zu realer CI-Evidenz offen. Die geplanten Anbieterjobs einschließlich macOS müssen nach der Git-Integration auf dem dann aktuellen RC-Stand erfolgreich laufen.
+- M9-13b und M10-10 hängen direkt von M0-14 ab. Dadurch können M1–M8 lokal vorbereitet und geprüft werden, während RC-Gate und Veröffentlichung bis zum externen Matrixnachweis gesperrt bleiben.
+- Das M0-Vorfreigabe-Kriterium verlangt keine offene HARD-Quellenlücke oder unregistrierte Ausnahme. Die zwei ausdrücklich in ADR-039 registrierten GUARDED-Lücken WDB-ENG-006 und WDB-PER-001 bleiben offen und werden nicht durch diese Reihenfolgeänderung als erledigt behauptet.
+- `WorldDB_1.0_Plancheck.py` prüft die Ausnahme exakt: M0-15 lässt nur M0-14 offen, die CI-Invariante WDB-ENG-005 wird nur vor M9 zurückgestellt, und M9-13b/M10-10 müssen M0-14 als direkte Dependency führen.
