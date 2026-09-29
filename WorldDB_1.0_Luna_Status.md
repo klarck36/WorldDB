@@ -1,9 +1,9 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-05 abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-06 abgeschlossen; M0-02a wartet auf Produktentscheidungen; Software-Implementierung hat noch nicht begonnen
 
-**Nächste Task:** `M0-06` (READY)
+**Nächste Task:** `M0-07` (READY)
 
 **Letzter abgeschlossener Milestone:** keiner  
 **Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001  
@@ -29,6 +29,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-04d | DONE | `3269d04`; `docs/M0-04d-verification.md`; `docs/contract/ADR-034-query-transport.md`; `docs/contract/query_transport_contract.md` | Gemeinsame Query-DTOs, Filter, Search, Comparatoren, Cursorfortsetzung und versionierte CLI-/IPC-Envelope gegen Master spezifiziert; Quell-, Dokumentations- und Planchecks bestanden | Vier temporäre Fixtures zu MatchAll, FieldRead-Reihenfolge, IPC-Versionsaushandlung und EventTime-Sortierung mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04d) | geprüft 2026-09-29T03:53:12+02:00 | M0-04e READY |
 | M0-04e | DONE | `97d3894`; `docs/M0-04e-verification.md`; `docs/contract/ADR-035-correction-actions.md`; `docs/contract/correction_contract.md` | Assertion-Correct mit explizitem Retractionrecord und Corrects-Kante sowie Event-Correct ohne implizite Retraction; Rechte-, Atomizitäts-, Commit- und UI-Regeln spezifiziert; Master-, Quell-, Dokumentations- und Planchecks bestanden | Fünf temporäre Fixtures zu Retraction-Ziel, Event-Lifecycle, AssertionRetract-Recht, Drei-Datensatz-Atomizität und UI-Hinweis mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04e) | geprüft 2026-09-29T04:11:37+02:00 | M0-05 READY |
 | M0-05 | DONE | `ab6355b`; `docs/M0-05-verification.md`; `docs/product/product_workflows.md` | Zwölf Kernabläufe jeweils mit Desktop-/CLI-API-Einstieg und Abnahmeschritt; initiale GM-/Player-Rechte und Commit-/Konflikt-/Backup-Grenzen spezifiziert; Contract-, Quell- und Planchecks bestanden | Erfolgs- und Ablehnungs-/Faultfälle pro Ablauf dokumentiert; nicht gegen Laufzeit ausgeführt (Produktvertrag, M0-05) | Nicht fällig (kein Code; M0-05) | geprüft 2026-09-29T04:21:24+02:00 | M0-06 READY |
+| M0-06 | DONE | `bf3ab10`; `docs/M0-06-verification.md`; `docs/M0-06-environment-inventory.md` | Reproduzierbare Repo-Baseline, Lizenz-/CI-/Toolchainstand, drei Plattformprofile, unbesetzte Rollen mit Fälligkeiten und validierter nicht synchronisierter Laufzeitpfad inventarisiert; Quellen-, Vertrags- und Planchecks bestanden | Nur Windows/NTFS-Umgebung vorhanden; kein Rust-Workspace, keine macOS-/Linux-Hosts; keine DB-/Crash-/Performance-Runs; Lizenz und CI offen | Nicht fällig (kein Code; M0-06) | geprüft 2026-09-29T04:29:44+02:00 | M0-07 READY |
 
 ## Entscheidungs- und Release-Gates
 
