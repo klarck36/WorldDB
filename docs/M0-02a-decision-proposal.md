@@ -8,6 +8,10 @@
 
 Die Entscheidung betrifft alle folgenden 52 IDs. Eine einzelne Ausnahme kann durch Nennung der ID und einer Ersatzentscheidung zurückgegeben werden; ohne Ersatz bleiben HARD-Lücken offen und das M0-Gate gesperrt. Der [Kandidaten-Crosswalk](M0-02a-candidate-crosswalk.tsv) führt pro ID die derzeit deklarierte Masterstelle, konkrete Zeilenkandidaten in der Quelldatei sowie vorhandene primäre Task- und Evidenzklassen aus `WorldDB_1.0_Invariantenabdeckung.tsv` auf. Er ist ausdrücklich keine bestätigte Bindung.
 
+### Mechanische Crosswalk-Prüfung
+
+Am 29. September 2026 wurde der Crosswalk mechanisch gegen `source_gaps.tsv`, `WorldDB_1.0_Invariantenabdeckung.tsv` und die Quelldatei geprüft. Die 52 eindeutigen Crosswalk-IDs entsprechen den 52 HARD-Lücken unter insgesamt 54 normativen Lücken; Aussagen, primäre Tasks und Evidenzklassen stimmen mit den Registern überein. Alle 61 physischen Kandidatenzeilen liegen innerhalb der Quelldatei mit 2.171 Zeilen. Alle Einträge bleiben als unbestätigte Kandidaten markiert. Dieser Check belegt Registergleichheit und gültige Zeilengrenzen, keine fachliche Freigabe oder semantische Richtigkeit der Kandidaten.
+
 | Bereich | Anzahl | IDs |
 |---|---:|---|
 | API | 5 | WDB-API-001–005 |
@@ -36,7 +40,7 @@ Die Entscheidung betrifft alle folgenden 52 IDs. Eine einzelne Ausnahme kann dur
 
 Für den Großteil der Aussagen gibt es bereits passende normative Sätze im Master; die Lücke besteht dort vor allem darin, dass die konkrete WDB-ID nicht an die Satzstelle gebunden ist. Diese Verknüpfung ändert die vorhandene Norm nicht. Der Crosswalk markiert jede Stelle als ungeprüften Kandidaten, bis die beschlossene Arbeitskopie erstellt und der bidirektionale Linkcheck bestanden ist.
 
-Vier Stellen brauchen besondere Prüfung:
+Vier Problemgruppen mit fünf betroffenen IDs brauchen besondere Prüfung:
 
 - `WDB-DES-001/002`: Der Registerverweis zeigt auf §34.2, während die passenden Beschlüsse in ADR-018 auf Quellzeilen 2010–2011 stehen. Zu bestätigen ist, ADR-018 als normative Stelle zu binden und den Registerverweis zu berichtigen.
 - `WDB-VAL-004`: Die Regel „kein globales fachliches `Ord` für `Value`“ steht in §3.2, Quellzeile 239; das Register nennt derzeit §§2.3 und 12.
