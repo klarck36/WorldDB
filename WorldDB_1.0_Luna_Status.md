@@ -1,12 +1,12 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-08 abgeschlossen; M0-02a wartet auf Produktentscheidungen; Produktimplementierung hat noch nicht begonnen (MSRV- und UUIDv7-Spikes)
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-09 abgeschlossen; M0-02a wartet auf Produktentscheidungen
 
-**Nächste Task:** `M0-09` (READY)
+**Nächste Task:** `M0-10` (READY)
 
 **Letzter abgeschlossener Milestone:** keiner  
-**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001  
+**Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001
 
 **M0-01 Baseline-Commit:** `0bb3c85` (`chore: establish WorldDB source baseline`).
 
@@ -31,7 +31,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-05 | DONE | `ab6355b`; `docs/M0-05-verification.md`; `docs/product/product_workflows.md` | Zwölf Kernabläufe jeweils mit Desktop-/CLI-API-Einstieg und Abnahmeschritt; initiale GM-/Player-Rechte und Commit-/Konflikt-/Backup-Grenzen spezifiziert; Contract-, Quell- und Planchecks bestanden | Erfolgs- und Ablehnungs-/Faultfälle pro Ablauf dokumentiert; nicht gegen Laufzeit ausgeführt (Produktvertrag, M0-05) | Nicht fällig (kein Code; M0-05) | geprüft 2026-09-29T04:21:24+02:00 | M0-06 READY |
 | M0-06 | DONE | `bf3ab10`; `docs/M0-06-verification.md`; `docs/M0-06-environment-inventory.md` | Reproduzierbare Repo-Baseline, Lizenz-/CI-/Toolchainstand, drei Plattformprofile, unbesetzte Rollen mit Fälligkeiten und validierter nicht synchronisierter Laufzeitpfad inventarisiert; Quellen-, Vertrags- und Planchecks bestanden | Nur Windows/NTFS-Umgebung vorhanden; kein Rust-Workspace, keine macOS-/Linux-Hosts; keine DB-/Crash-/Performance-Runs; Lizenz und CI offen | Nicht fällig (kein Code; M0-06) | geprüft 2026-09-29T04:29:44+02:00 | M0-07 READY |
 | M0-07 | DONE | `42f7ec5`; `docs/M0-07-verification.md`; `docs/contract/ADR-036-rust-msrv.md`; `experiments/msrv-spike/` | MSRV 1.85.0 mit Edition 2024 und Resolver 3 gewählt; gelockter Spike unter Rust 1.85 gebaut und getestet; Änderungspolitik bis 2027-03-29 dokumentiert | Keine deklarierte Dependency-MSRV über 1.85; drei Crates ohne Metadaten unter 1.85 gebaut; nur Windows x86_64 MSVC geprüft, kein Produktworkspace | Noch nicht fällig (CI-Test folgt M0-14) | geprüft 2026-09-29T04:54:50+02:00 | M0-08 READY |
-| M0-08 | DONE | `adfaa57`; `docs/M0-08-verification.md`; `docs/contract/ADR-037-uuidv7-generator.md` | Fallible UUIDv7-Generatorwahl belegt; RFC-Vektor, 4.096 Property-Fälle und 4.096 CSPRNG-IDs geprüft; zehn Tests, gelockter Build und Strukturchecks bestanden | Uhr-/Entropiefehler und Zeitstempelgrenze negativ geprüft; gleicher Millisekundenzeitpunkt garantiert keine Reihenfolge; nur Windows x86_64 MSVC gebaut | Noch nicht fällig (CI-Test folgt M0-14) | geprüft 2026-09-29T05:18:22+02:00 | M0-09 READY |
+| M0-08 | DONE | `adfaa57`; `docs/M0-08-verification.md`; `docs/contract/ADR-037-uuidv7-generator.md` | Fallible UUIDv7-Generatorwahl belegt; RFC-Vektor, 4.096 Property-Fälle und 4.096 CSPRNG-IDs geprüft; zehn Tests, gelockter Build und Strukturchecks bestanden | Uhr-/Entropiefehler und Zeitstempelgrenze negativ geprüft; gleicher Millisekundenzeitpunkt garantiert keine Reihenfolge; nur Windows x86_64 MSVC gebaut | Noch nicht fällig (CI-Test folgt M0-14) | geprüft 2026-09-29T05:18:22+02:00 | M0-09 DONE |
+| M0-09 | DONE | `66bfb37`; `docs/M0-09-verification.md`; `docs/architecture/M0-09-boundary-gate.md`; `docs/contract/ADR-038-project-license.md`; `LICENSE-MIT`; `LICENSE-APACHE` | Fünfcrate-Workspace mit Edition 2024/MSRV 1.85 und Dual-Lizenz; gelockter Build, echter Crategraph und Strukturchecks bestanden | Core-Rückkante, externe Dependency und ungegate Crate-Extraktion in drei Negativtests abgewiesen; nur Windows x86_64 MSVC gebaut | Noch nicht fällig (M0-10) | geprüft 2026-09-29T08:25:23+02:00 | M0-10 READY |
 
 ## Entscheidungs- und Release-Gates
 
@@ -39,6 +40,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 |---|---|---|---|
 | ODE-001 Rust-MSRV | M0 | DECIDED | `docs/contract/ADR-036-rust-msrv.md` |
 | ODE-005 UUIDv7-Implementierung | M0/M1 | DECIDED | `docs/contract/ADR-037-uuidv7-generator.md` |
+| Projektlizenz | M0-09 | DECIDED | `docs/contract/ADR-038-project-license.md` |
 | ODE-006 macOS Machine-Durability | vor M5 | OPEN | – |
 | ODE-003 Performance-/Ressourcenbudgets | M6 | OPEN | – |
 | ODE-002 Desktop in-process oder Sidecar | vor Desktopausbau M8 | OPEN | – |
@@ -49,6 +51,8 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 ## Blocker
 
 **M0-02a:** Es fehlen ausdrückliche Produktentscheidungen für die 52 `HARD`-IDs in `docs/contract/source_gaps.tsv` sowie zur stärkeren Masterregel für `WDB-HIS-001` (lückenlose Revisionen, Genesis = 0, erster Commit = 1, `Revision::MAX` reservieren). Kein Normtext wurde erfunden. Bereits erledigt: vollständige Lückenklassifizierung und reproduzierbare Arbeitskopien aus M0-02. Nächster Schritt: Produktverantwortung entscheidet, ob die jeweilige Norm ergänzt, verworfen oder an eine konkrete Quellenstelle gebunden wird. M0-02a bleibt ein Blocker für das M0-15-Gate; die unabhängigen M0-Aufgaben können bis dahin bearbeitet werden. `BLOCKED` ist niemals `DONE`.
+
+**M0-09 Lizenzentscheidung:** Der Product Owner hat Open Source gewählt; ADR-038 setzt das als `MIT OR Apache-2.0` um. Dependency-Lizenzen und Lieferkettenregeln prüft M0-12.
 
 ## Zusatzauftrag GitHub
 

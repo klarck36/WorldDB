@@ -246,7 +246,7 @@ WDB-ENG-003	HARD	Produktionspfade paniken nicht auf falliblen Fremddaten.	M3-14	
 WDB-ENG-004	HARD	`unsafe` ist außerhalb des genehmigten Plattformadapters verboten.	M0-11	ST	M9-13b			PLANNED	
 WDB-ENG-005	HARD	Der kanonische Verify-Pfad ist lokal und in CI identisch.	M0-14	NI,ST	M9-13b			PLANNED	
 WDB-ENG-006	GUARDED	Lokale Lint-Ausnahme besitzt ID, Owner, Grund und Ablaufdatum.	M0-11	ST	M9-13b			PLANNED	
-WDB-ENG-007	HARD	Crates werden nur nach bestandenem Boundary-Gate extrahiert; der Repositorybaum ist Zielhypothese.	M0-09	CR,ST	M9-13b			PLANNED	
+WDB-ENG-007	HARD	Crates werden nur nach bestandenem Boundary-Gate extrahiert; der Repositorybaum ist Zielhypothese.	M0-09	CR,ST	M9-13b	artifact:docs/architecture/M0-09-boundary-gate.md;test:test_crate_graph.CrateGraphPolicyTests.test_initial_workspace_graph_is_allowed	test:test_crate_graph.CrateGraphPolicyTests.test_core_cannot_depend_on_file_storage;test:test_crate_graph.CrateGraphPolicyTests.test_unreviewed_external_dependency_is_rejected;test:test_crate_graph.CrateGraphPolicyTests.test_unapproved_crate_extraction_is_rejected	DONE	Der reale Startgraph ist geprüft; weitere Crate-Extraktionen brauchen ein eigenes Boundary-Gate.
 WDB-DEP-001	HARD	Releasebuilds verwenden Lockfile und genehmigte Sources/Lizenzen.	M9-09	ST				PLANNED	
 WDB-DEP-002	HARD	Dependencytypen leaken nicht unabsichtlich in stabile Public API.	M8-01	ST				PLANNED	
 WDB-EXT-001	HARD	1.0 führt keinen untrusted Extensioncode in-process aus.	M7-13a	NI,E2E				PLANNED	
