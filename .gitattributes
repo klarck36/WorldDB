@@ -1,3 +1,4 @@
 *.zip binary
 docs/source/* -text
 docs/contract/* -text
+crates/worlddb-testkit/testdata/m0-13/** -text
