@@ -1,0 +1,19 @@
+# WorldDB verify manifest v1; tab-separated records.
+# profile<TAB>name<TAB>default|available<TAB>description
+# step<TAB>profile<TAB>id<TAB>run|skip<TAB>program<TAB>space-separated arguments<TAB>skip reason
+# Run steps use '-' as the reason field; skipped steps require an explanatory reason.
+profile	dev	default	Local development verification on the declared MSRV
+step	dev	format-check	run	cargo	fmt --all -- --check	-
+step	dev	workspace-check	run	cargo	check --locked --workspace --all-targets	-
+step	dev	dependency-tree	run	cargo	tree --locked	-
+step	dev	crate-graph	run	python	-B -X utf8 tools/check_crate_graph.py	-
+step	dev	crate-graph-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_crate_graph.py -v	-
+step	dev	contract-sources	run	python	-B -X utf8 docs/contract/build_contract_sources.py --verify-only	-
+step	dev	contract-docs	run	python	-B -X utf8 docs/contract/verify_contract_docs.py	-
+step	dev	source-check	run	python	-B -X utf8 WorldDB_1.0_Sourcecheck.py	-
+step	dev	plan-check	run	python	-B -X utf8 WorldDB_1.0_Plancheck.py	-
+step	dev	xtask-tests	run	cargo	test --locked --package xtask	-
+step	dev	working-tree-whitespace	run	git	diff --check HEAD	-
+step	dev	clippy-unsafe-policy	skip			Added by M0-11.
+step	dev	dependency-policy	skip			Added by M0-12.
+step	dev	ci-matrix	skip			Added by M0-14.
