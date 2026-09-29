@@ -2766,3 +2766,245 @@ invariant_ids = ["WDB-SEC-001", "WDB-SEC-002", "WDB-SEC-003", "WDB-SEC-004", "WD
 key = "MAIN-L1173"
 statement = "AuditRecord | AuditRecordId | §§18.2, 31.6 | WDB-AUD-001–013 | audit-only format | separate append-only audit log | retention/purge policy | audit capability | never Domain Evidence/Provenance target"
 invariant_ids = ["WDB-AUD-001", "WDB-AUD-002", "WDB-AUD-003", "WDB-AUD-004", "WDB-AUD-005", "WDB-AUD-006", "WDB-AUD-007", "WDB-AUD-008", "WDB-AUD-009", "WDB-AUD-010", "WDB-AUD-011", "WDB-AUD-012", "WDB-AUD-013"]
+
+[[first_class_type]]
+name = "Entity"
+id_type = "EntityId"
+main_section = "§§2.3, 3"
+invariant_ids = ["WDB-ID-001", "WDB-ID-002", "WDB-SCH-005"]
+wire = "typed 16-byte ID + schema record"
+storage = "immutable identity + schema metadata"
+lifecycle = "schema-defined active state"
+security = "record/field policy"
+eligibility = "Evidence: über Assertions; Provenance: über konkrete Records"
+
+[[first_class_type]]
+name = "PredicateDefinition"
+id_type = "PredicateId"
+main_section = "§§2.4, 31.3"
+invariant_ids = ["WDB-SCH-001", "WDB-SCH-002", "WDB-SCH-003", "WDB-SCH-004", "WDB-SCH-005", "WDB-SCH-006", "WDB-SCH-007", "WDB-SCH-008", "WDB-SCH-009", "WDB-SCH-010", "WDB-SCH-011", "WDB-SCH-012", "WDB-SCH-013", "WDB-SCH-014", "WDB-SCH-015", "WDB-SCH-016", "WDB-SCH-017"]
+wire = "tagged schema record"
+storage = "normative schema history"
+lifecycle = "Active/Deprecated/Retired"
+security = "schema-admin capability"
+eligibility = "separate schema provenance enum"
+
+[[first_class_type]]
+name = "Assertion"
+id_type = "AssertionId"
+main_section = "§§2.2–2.3.2"
+invariant_ids = ["WDB-AST-001", "WDB-AST-002", "WDB-AST-003"]
+wire = "RecordRef tag + record"
+storage = "immutable history record"
+lifecycle = "closure/retraction"
+security = "context + field policy"
+eligibility = "Evidence J; alle drei Provenancearten nach Matrix"
+
+[[first_class_type]]
+name = "Mask"
+id_type = "MaskId"
+main_section = "§§2.1.2, 2.3.2"
+invariant_ids = ["WDB-MSK-001", "WDB-MSK-002", "WDB-MSK-003", "WDB-MSK-004", "WDB-MSK-005"]
+wire = "RecordRef tag + selector"
+storage = "immutable directive"
+lifecycle = "closure/retraction"
+security = "context/layer policy"
+eligibility = "Evidence J; Corrects/DerivedTo J"
+
+[[first_class_type]]
+name = "ReplacementBoundary"
+id_type = "ReplacementBoundaryId"
+main_section = "§2.3.2"
+invariant_ids = ["WDB-RES-004", "WDB-RES-005"]
+wire = "RecordRef tag"
+storage = "immutable directive"
+lifecycle = "closure/retraction"
+security = "context/layer policy"
+eligibility = "Evidence J; Corrects/DerivedTo J"
+
+[[first_class_type]]
+name = "Event"
+id_type = "EventId"
+main_section = "§§2.3.2, 31.1"
+invariant_ids = ["WDB-EVT-001", "WDB-EVT-002", "WDB-EVT-003", "WDB-EVT-004", "WDB-EVT-005", "WDB-EVT-006", "WDB-EVT-007", "WDB-EVT-008", "WDB-EVT-009", "WDB-EVT-010", "WDB-EVT-011", "WDB-EVT-012", "WDB-EVT-013", "WDB-EVT-014", "WDB-EVT-015", "WDB-EVT-016", "WDB-EVT-017", "WDB-EVT-018"]
+wire = "RecordRef tag + EventTime"
+storage = "immutable history record"
+lifecycle = "span closure/retraction"
+security = "historyspace/layer/record"
+eligibility = "Evidence J; Corrects/Derived/Resulted J"
+
+[[first_class_type]]
+name = "EventRelation"
+id_type = "EventRelationId"
+main_section = "§31.1"
+invariant_ids = ["WDB-EVT-014", "WDB-EVT-015", "WDB-EVT-016", "WDB-EVT-017", "WDB-EVT-018", "WDB-EVT-019", "WDB-EVT-020", "WDB-EVT-021", "WDB-EVT-022", "WDB-EVT-023"]
+wire = "canonical Before/SameTime/Causes tag"
+storage = "immutable edge"
+lifecycle = "retraction"
+security = "endpoint-intersection"
+eligibility = "separate closed event-relation provenance"
+
+[[first_class_type]]
+name = "EventMask"
+id_type = "EventMaskId"
+main_section = "§§2.3.2, 31.1"
+invariant_ids = ["WDB-EVT-003", "WDB-EVT-013"]
+wire = "RecordRef tag"
+storage = "immutable directive"
+lifecycle = "retraction"
+security = "context/layer policy"
+eligibility = "Evidence J; Corrects/DerivedTo J"
+
+[[first_class_type]]
+name = "Source"
+id_type = "SourceId"
+main_section = "§§2.3.2, 31.2"
+invariant_ids = ["WDB-SRC-001", "WDB-SRC-002"]
+wire = "RecordRef tag"
+storage = "project meta-history"
+lifecycle = "immutable/superseded"
+security = "field policy"
+eligibility = "Corrects/Derived J; not EvidenceTarget"
+
+[[first_class_type]]
+name = "Evidence"
+id_type = "EvidenceId"
+main_section = "§31.2"
+invariant_ids = ["WDB-EVI-001", "WDB-EVI-002", "WDB-EVI-003", "WDB-EVI-004", "WDB-EVI-005", "WDB-EVI-006", "WDB-EVI-007"]
+wire = "closed target tag"
+storage = "project meta-history edge"
+lifecycle = "retraction"
+security = "endpoint-intersection"
+eligibility = "Corrects/Derived J; not EvidenceTarget"
+
+[[first_class_type]]
+name = "ProvenanceEdge"
+id_type = "ProvenanceId"
+main_section = "§31.2"
+invariant_ids = ["WDB-PRV-001", "WDB-PRV-002", "WDB-PRV-003", "WDB-PRV-004", "WDB-PRV-005", "WDB-PRV-006", "WDB-PRV-007", "WDB-PRV-008", "WDB-PRV-009", "WDB-PRV-010", "WDB-PRV-011", "WDB-PRV-012", "WDB-PRV-013"]
+wire = "relation + closed endpoints"
+storage = "project meta-history graph"
+lifecycle = "retraction"
+security = "endpoint-intersection"
+eligibility = "EvidenceTarget J; Corrects/Derived J"
+
+[[first_class_type]]
+name = "LayerDefinition"
+id_type = "LayerId"
+main_section = "§2.1.2"
+invariant_ids = ["WDB-LAY-001", "WDB-LAY-002", "WDB-LAY-003", "WDB-LAY-004", "WDB-LAY-005", "WDB-LAY-006", "WDB-LAY-007", "WDB-LAY-008", "WDB-LAY-009", "WDB-LAY-010", "WDB-LAY-011"]
+wire = "schema ID/definition incl. base designation"
+storage = "schema history"
+lifecycle = "Active/Deprecated/Retired"
+security = "layer capability"
+eligibility = "schema provenance only"
+
+[[first_class_type]]
+name = "HistorySpace"
+id_type = "HistorySpaceId"
+main_section = "§2.1.1"
+invariant_ids = ["WDB-BRA-001", "WDB-BRA-002", "WDB-BRA-003", "WDB-BRA-004", "WDB-BRA-005"]
+wire = "typed ID + parent/base"
+storage = "immutable ancestry metadata"
+lifecycle = "no implicit merge/delete"
+security = "space capability"
+eligibility = "administrative provenance only"
+
+[[first_class_type]]
+name = "Perspective"
+id_type = "PerspectiveId"
+main_section = "§§2.1.2, 2.3.1"
+invariant_ids = ["WDB-EPI-001", "WDB-EPI-002", "WDB-EPI-003"]
+wire = "typed ID"
+storage = "project definition"
+lifecycle = "explicit records"
+security = "never Principal"
+eligibility = "through assertions"
+
+[[first_class_type]]
+name = "Schema records"
+id_type = "concrete Schema ID"
+main_section = "§§2.4, 31.3"
+invariant_ids = ["WDB-SCH-001", "WDB-SCH-002", "WDB-SCH-003", "WDB-SCH-004", "WDB-SCH-005", "WDB-SCH-006", "WDB-SCH-007", "WDB-SCH-008", "WDB-SCH-009", "WDB-SCH-010", "WDB-SCH-011", "WDB-SCH-012", "WDB-SCH-013", "WDB-SCH-014", "WDB-SCH-015", "WDB-SCH-016", "WDB-SCH-017"]
+wire = "tagged definitions"
+storage = "normative schema history"
+lifecycle = "A/D/R"
+security = "schema-admin"
+eligibility = "separate closed schema provenance"
+
+[[first_class_type]]
+name = "Migration records"
+id_type = "MigrationId/RunId/StepId"
+main_section = "§31.4"
+invariant_ids = ["WDB-MIG-001", "WDB-MIG-002", "WDB-MIG-003", "WDB-MIG-004", "WDB-MIG-005", "WDB-MIG-006", "WDB-MIG-007", "WDB-MIG-008", "WDB-MIG-009", "WDB-MIG-010", "WDB-MIG-011", "WDB-MIG-012", "WDB-MIG-013", "WDB-MIG-014", "WDB-MIG-015", "WDB-MIG-016", "WDB-MIG-017", "WDB-MIG-018", "WDB-MIG-019", "WDB-MIG-020", "WDB-MIG-021", "WDB-MIG-022", "WDB-MIG-023"]
+wire = "plan/run DTO tags"
+storage = "plans + coordination journal"
+lifecycle = "planned/running/completed/failed"
+security = "admin"
+eligibility = "explicit migration provenance"
+
+[[first_class_type]]
+name = "Lifecycle records"
+id_type = "concrete lifecycle ID"
+main_section = "§2.3.2"
+invariant_ids = ["WDB-LFC-001", "WDB-LFC-002"]
+wire = "concrete RecordRef tag"
+storage = "immutable history record"
+lifecycle = "none; correction via new record"
+security = "target-derived"
+eligibility = "Evidence J; Corrects/DerivedTo J"
+
+[[first_class_type]]
+name = "Transaction"
+id_type = "TransactionId"
+main_section = "§8"
+invariant_ids = ["WDB-TX-001", "WDB-TX-002", "WDB-TX-003", "WDB-TX-004", "WDB-TX-005", "WDB-TX-006"]
+wire = "IPC handle/receipt only"
+storage = "WAL metadata"
+lifecycle = "state machine"
+security = "operation authorization"
+eligibility = "not Evidence/Provenance target"
+
+[[first_class_type]]
+name = "Snapshot"
+id_type = "SnapshotId"
+main_section = "§10"
+invariant_ids = ["WDB-SNP-001", "WDB-SNP-002", "WDB-SNP-003", "WDB-SNP-004"]
+wire = "sessionlocal handle"
+storage = "pin registry"
+lifecycle = "lease/expiry"
+security = "AuthorizationNow"
+eligibility = "not Evidence/Provenance target"
+
+[[first_class_type]]
+name = "Job"
+id_type = "JobId"
+main_section = "§19"
+invariant_ids = ["WDB-CON-003", "WDB-CON-004"]
+wire = "job DTO"
+storage = "resumable metadata"
+lifecycle = "queued/running/terminal"
+security = "owner/capability"
+eligibility = "not Evidence/Provenance target"
+
+[[first_class_type]]
+name = "Principal"
+id_type = "PrincipalId"
+main_section = "§17"
+invariant_ids = ["WDB-SEC-001", "WDB-SEC-002", "WDB-SEC-003", "WDB-SEC-004", "WDB-SEC-005"]
+wire = "security DTO"
+storage = "security history"
+lifecycle = "policy-defined"
+security = "root of authorization"
+eligibility = "not Domain Provenance target"
+
+[[first_class_type]]
+name = "AuditRecord"
+id_type = "AuditRecordId"
+main_section = "§§18.2, 31.6"
+invariant_ids = ["WDB-AUD-001", "WDB-AUD-002", "WDB-AUD-003", "WDB-AUD-004", "WDB-AUD-005", "WDB-AUD-006", "WDB-AUD-007", "WDB-AUD-008", "WDB-AUD-009", "WDB-AUD-010", "WDB-AUD-011", "WDB-AUD-012", "WDB-AUD-013"]
+wire = "audit-only format"
+storage = "separate append-only audit log"
+lifecycle = "retention/purge policy"
+security = "audit capability"
+eligibility = "never Domain Evidence/Provenance target"

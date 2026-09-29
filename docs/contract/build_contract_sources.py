@@ -23,6 +23,28 @@ ARCHIVE_NAME = "WorldDB_vNext_Lossless_Consolidation_Audit.zip"
 CONTRACT_DIR = Path("docs/contract")
 GAPS_NAME = "source_gaps.tsv"
 ERRATA_NAME = "source-errata.json"
+FIRST_CLASS_TYPE_FIELDS = (
+    "name",
+    "id_type",
+    "main_section",
+    "invariant_ids",
+    "wire",
+    "storage",
+    "lifecycle",
+    "security",
+    "eligibility",
+)
+FIRST_CLASS_TYPE_HEADER = (
+    "First-Class Type",
+    "ID Type",
+    "Main Section",
+    "Invariant IDs",
+    "Wire",
+    "Storage",
+    "Lifecycle",
+    "Security",
+    "Evidence/Provenance Eligibility",
+)
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -112,6 +134,68 @@ def normalized_master_line(master_lines: list[str], line_number: int) -> str:
     line = master_lines[line_number - 1].strip()
     cells = split_markdown_table_row(line)
     return " | ".join(cells) if cells else line
+
+
+def first_class_types_from_master(master_text: str) -> list[dict[str, str | list[str]]]:
+    """Read the complete §33 register without inventing fields or type rules."""
+    lines = master_text.splitlines()
+    heading = next(
+        (index for index, line in enumerate(lines) if line.strip() == "## 33. First-Class-Strukturregister"),
+        None,
+    )
+    if heading is None:
+        raise ValueError("Master §33 First-Class-Strukturregister is missing")
+
+    header_index = next(
+        (index for index in range(heading + 1, len(lines)) if lines[index].strip().startswith("|")),
+        None,
+    )
+    if header_index is None or tuple(split_markdown_table_row(lines[header_index])) != FIRST_CLASS_TYPE_HEADER:
+        raise ValueError("Master §33 First-Class-Strukturregister has an unexpected header")
+
+    records: list[dict[str, str | list[str]]] = []
+    for line in lines[header_index + 1 :]:
+        if not line.strip().startswith("|"):
+            break
+        cells = split_markdown_table_row(line)
+        if len(cells) != len(FIRST_CLASS_TYPE_HEADER):
+            raise ValueError(f"Master §33 row has {len(cells)} cells; expected 9: {line}")
+        if all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        if not all(cell.strip() for cell in cells):
+            raise ValueError(f"Master §33 row contains a blank required value: {line}")
+        invariant_ids = expand_references(cells[3])
+        if not invariant_ids:
+            raise ValueError(f"Master §33 row has no invariant IDs: {cells[0]}")
+        records.append(
+            {
+                "name": cells[0],
+                "id_type": cells[1],
+                "main_section": cells[2],
+                "invariant_ids": invariant_ids,
+                "wire": cells[4],
+                "storage": cells[5],
+                "lifecycle": cells[6],
+                "security": cells[7],
+                "eligibility": cells[8],
+            }
+        )
+    names = [str(record["name"]) for record in records]
+    if len(records) != 22 or len(set(names)) != 22:
+        raise ValueError(f"Master §33 must contain 22 uniquely named types; found {len(records)}")
+    return records
+
+
+def first_class_toml(records: list[dict[str, str | list[str]]]) -> str:
+    blocks: list[str] = []
+    for record in records:
+        lines = ["[[first_class_type]]"]
+        for field in FIRST_CLASS_TYPE_FIELDS:
+            value = record[field]
+            serialized = toml_string_array(value) if isinstance(value, list) else toml_string(value)
+            lines.append(f"{field} = {serialized}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) + "\n"
 
 
 def replace_toml_field(block: str, field: str, value: str) -> str:
@@ -207,7 +291,20 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
 
     master_text = source_files[MASTER_NAME].decode("utf-8")
     master_lines = master_text.splitlines()
+    first_class_types = first_class_types_from_master(master_text)
+    unknown_type_invariants = sorted(
+        {
+            invariant_id
+            for record in first_class_types
+            for invariant_id in record["invariant_ids"]
+            if invariant_id not in matrix
+        }
+    )
+    if unknown_type_invariants:
+        raise ValueError(f"Master §33 references unknown invariant IDs: {unknown_type_invariants}")
     source_toml = tomllib.loads(source_files[TOML_NAME].decode("utf-8"))
+    if source_toml.get("first_class_type"):
+        raise ValueError("Immutable source TOML unexpectedly defines first_class_type; update M0-03 derivation")
     invariant_by_id = {row["id"]: row for row in source_toml.get("invariant", [])}
     if len(invariant_by_id) != 253 or set(invariant_by_id) != set(matrix):
         raise ValueError("TOML invariant IDs differ from the 253-ID source matrix")
@@ -326,7 +423,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         raise ValueError("Not all main_rule_binding TOML tables were visited")
     if not corrected_layout:
         raise ValueError("Expected WDB-LAY-011 source-field correction was not applied")
-    corrected_toml = "".join(chunks)
+    corrected_toml = "".join(chunks).rstrip() + "\n\n" + first_class_toml(first_class_types)
     corrected_doc = tomllib.loads(corrected_toml)
     corrected_invariants = {row["id"]: row for row in corrected_doc["invariant"]}
     for invariant_id, row in matrix.items():
@@ -339,6 +436,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     bindings = corrected_doc.get("main_rule_binding", [])
     if len(bindings) != 149 or len({row["key"] for row in bindings}) != 149:
         raise ValueError("Corrected TOML must contain 149 unique main_rule_binding entries")
+    if corrected_doc.get("first_class_type") != first_class_types:
+        raise ValueError("Generated first_class_type registry differs from the Master §33 table")
 
     anchors: dict[str, list[str]] = {invariant_id: [] for invariant_id in matrix}
     for row in bindings:
@@ -440,6 +539,15 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         "reproduction": "python -X utf8 docs/contract/build_contract_sources.py; python -X utf8 docs/contract/build_contract_sources.py --verify-only",
         "working_copies": source_items,
         "corrections": [
+            {
+                "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
+                "file": TOML_NAME,
+                "change": (
+                    "Added the 22 first_class_type records as a machine-readable transcription "
+                    "of the immutable Master §33 table, including expanded invariant ID ranges."
+                ),
+                "authority": f"docs/source/{MASTER_NAME} §33",
+            },
             {
                 "id": "ERR-M0-02-LAY-011",
                 "file": TOML_NAME,
@@ -544,7 +652,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     unexpected = [
         path.name
         for path in (root / CONTRACT_DIR).iterdir()
-        if path.name != Path(__file__).name and path.name not in expected_names
+        if path.name not in {Path(__file__).name, "verify_contract_docs.py"}
+        and path.name not in expected_names
     ]
     if unexpected:
         raise ValueError(f"Unexpected file(s) in docs/contract: {sorted(unexpected)}")
@@ -552,6 +661,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
     metrics = {
         "invariant_ids": 253,
         "main_rule_binding_entries": len(bindings),
+        "first_class_types": len(first_class_types),
         "original_binding_rows_with_omissions": len(original_binding_omissions),
         "original_omitted_id_references": sum(
             len(values) for _, values in original_binding_omissions

@@ -49,11 +49,17 @@
       "working_file": "invariants_vNext.toml",
       "source_file": "docs/source/invariants_vNext.toml",
       "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
-      "working_sha256": "9a42ee49668dd81f901d6c745e803eeb2b2b848635b87abe74489f657760f7f3",
+      "working_sha256": "9308ce2dafad15e520f18c6a16bd041105d1acc04e8c90f5dcec84b98129c93b",
       "byte_identical": false
     }
   ],
   "corrections": [
+    {
+      "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
+      "file": "invariants_vNext.toml",
+      "change": "Added the 22 first_class_type records as a machine-readable transcription of the immutable Master §33 table, including expanded invariant ID ranges.",
+      "authority": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §33"
+    },
     {
       "id": "ERR-M0-02-LAY-011",
       "file": "invariants_vNext.toml",

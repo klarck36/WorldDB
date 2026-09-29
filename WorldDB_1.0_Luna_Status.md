@@ -21,7 +21,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-01 | DONE | `0bb3c85`; `docs/M0-01-verification.md` | ZIP-Test, 6 Bytevergleiche und Plancheck bestanden | Temporär veränderte Spiegeldatei mit Exitcode 1 abgewiesen | Nicht fällig (M0-01) | – | M0-02 READY |
 | M0-02 | DONE | `cc8b190`; `docs/M0-02-verification.md`; `docs/contract/source-errata.json`; `docs/contract/source_gaps.tsv` | `build_contract_sources.py --verify-only`, 253-ID-Abgleich, 149 Haupttextbindungen, Sourcecheck und Plancheck bestanden | Manipulierte Kopie von `source_gaps.tsv` mit Exitcode 1 abgewiesen | Noch nicht fällig | geprüft 2026-09-29T02:00:47+02:00 | M0-03 READY |
 | M0-02a | BLOCKED | `docs/contract/source_gaps.tsv`; `docs/contract/source-errata.json` | 54 Lücken präzise klassifiziert; Produktnormen nicht erfunden | Nicht fällig bis Entscheidung | Noch nicht fällig | 2026-09-29T02:00:47+02:00 | Produktentscheidung zu 52 HARD-Lücken und stärkerem WDB-HIS-001-Mastertext erforderlich |
-| M0-03 | READY | – | – | – | Noch nicht fällig | – | 22 Typen aus Master §33 erfassen und eigenständigen Docs-Verify bauen |
+| M0-03 | RUNNING | – | – | – | Noch nicht fällig | Start 2026-09-29T02:00:47+02:00 | 22 Typen aus Master §33 erfassen und eigenständigen Docs-Verify bauen |
 
 ## Entscheidungs- und Release-Gates
 
