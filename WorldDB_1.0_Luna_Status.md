@@ -1,9 +1,9 @@
 # WorldDB 1.0 – Arbeitsstatus
 
 **Stand:** 29. September 2026  
-**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-12 abgeschlossen; M0-02a wartet auf Produktentscheidungen
+**Gesamtstatus:** IN PROGRESS – M0-01 bis M0-13 abgeschlossen; M0-02a wartet auf Produktentscheidungen
 
-**Nächste Task:** `M0-13` (READY)
+**Nächste Task:** `M0-14` (READY)
 
 **Letzter abgeschlossener Milestone:** keiner  
 **Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001
@@ -36,6 +36,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-10 | DONE | `ab987c5`; `docs/M0-10-verification.md`; `.cargo/config.toml`; `tools/verify/steps.tsv`; `scripts/verify.sh`; `scripts/verify.ps1` | `cargo xtask verify`: elf Schritte bestanden, vier Runner-Tests und beide Wrapper bestanden | Drei geplante M0-11/12/14-Schritte sichtbar übersprungen; explizites `--skip` protokolliert und gezählt; Unix-Wrapper auf Git Bash statt nativem Unix geprüft | Noch nicht fällig (M0-11) | geprüft 2026-09-29T08:40:40+02:00 | M0-11 DONE |
 | M0-11 | DONE | `3b33821`; `docs/M0-11-verification.md`; `docs/architecture/M0-11-lint-policy.md`; `rustfmt.toml`; `policy/exceptions.tsv`; `tools/verify/steps.tsv` | 18 Verify-Schritte, Clippy, Workspace-Lints und 25 Tests bestanden | Unsafe außerhalb des Adapters, falscher Fachbegriff, abgelaufene Ausnahme und fehlende Adapterbelege werden abgewiesen; nur Windows nativ, Shell zusätzlich mit Git Bash geprüft | Noch nicht fällig (M0-12) | geprüft 2026-09-29T09:03:56+02:00 | M0-12 READY |
 | M0-12 | DONE | `107f822`; `docs/M0-12-verification.md`; `docs/architecture/M0-12-dependency-policy.md`; `.cargo/deny.toml`; `policy/`-Register; Verify-Manifest | 23 Verify-Schritte und 38 automatisierte Tests bestanden; cargo-deny prüft Advisories, Bans, Lizenzen und Quellen; alle drei lokalen Featureprofile bauen | `anyhow`, Default-Features ohne Freigabe und ein unzulässiges Featurepaar werden durch Negativproben abgewiesen; Lockfile enthält noch keine externen Packages; nur Windows nativ, Wrapper zusätzlich mit Git Bash | 23 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T09:33:24+02:00 | M0-13 READY |
+| M0-13 | DONE | `e538756`; `docs/M0-13-verification.md`; `docs/architecture/M0-13-testkit.md`; JSON-Schema und versioniertes Testkorpus | 24 Verify-Schritte und 10 Evidenzprüfungen bestanden; 7 Standard- und 8 Fault-Profil-Rusttests sowie 4 Corpus-Policytests; Beleg mit Quell-Snapshot | Seedfehler zweimal byteidentisch reproduziert; Fault-Marker/Probe fehlen im Releaseartefakt; Releasebuild mit Fault-Feature wird abgewiesen; Fixturehash-/Pfadmanipulationen scheitern | 24 PASS, 1 sichtbarer M0-14-SKIP, 0 FAIL | geprüft 2026-09-29T10:08:16+02:00; Run `M0-13-20260929-final`; NTFS/Windows/Rust 1.85 | M0-14 READY |
 
 ## Entscheidungs- und Release-Gates
 
