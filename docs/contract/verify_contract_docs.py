@@ -19,6 +19,8 @@ ARCHIVE_TRANSFER_SPEC_NAME = "archive_transfer_contract.md"
 ARCHIVE_TRANSFER_ADR_NAME = "ADR-031-archive-transfer.md"
 CONSTRAINT_TIME_SPEC_NAME = "constraint_time_contract.md"
 CONSTRAINT_TIME_ADR_NAME = "ADR-032-constraint-time.md"
+SECURITY_POLICY_SPEC_NAME = "security_policy_contract.md"
+SECURITY_POLICY_ADR_NAME = "ADR-033-security-policy.md"
 ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
@@ -106,6 +108,37 @@ REQUIRED_CONSTRAINT_TIME_CLAUSES = (
     "1970-01-01T00:00:00Z",
     "start < end",
     "Gregorian leap/month-end arithmetic",
+)
+REQUIRED_SECURITY_POLICY_CLAUSES = (
+    "SecurityPolicyRecord {",
+    "SecurityPolicyRecordId",
+    "SecurityPolicyChange =",
+    "security_epoch_after: SecurityEpoch",
+    "Exactly one SecurityPolicyRecord contains",
+    "PrincipalStateChanged",
+    "RoleAssignmentRevoked",
+    "CapabilityRuleAdded",
+    "Capability =",
+    "AdminRawRead",
+    "deny from any matching Principal or Role rule wins over every grant",
+    "PolicyScope {",
+    "HistorySpace scope matches the owning HistorySpace",
+    "FieldSelector =",
+    "AssertionValue(PredicateId)",
+    "SourceLocator",
+    "RelationshipSelector =",
+    "RelationshipRead | RelationshipCreate | RelationshipRetract",
+    "AuthorizationNow",
+    "AuthorizationAtRevision(r)",
+    "SecurityEpoch",
+    "SecurityEpochExhausted",
+    "SecurityPolicyManage",
+    "required AuditRecord",
+    "same atomic durability unit",
+    "no persistent superuser path",
+    "operation boundaries in M0-04",
+    "FieldRead before candidate creation",
+    "Every field required to evaluate a candidate",
 )
 REFERENCE_PATTERN = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -199,8 +232,8 @@ def master_type_rows(master_path: Path) -> list[dict[str, object]]:
             }
         )
     names = [str(row["name"]) for row in rows]
-    if len(rows) != 22 or len(set(names)) != len(rows):
-        raise ValueError(f"Master §33 must contain 22 uniquely named types; found {len(rows)}")
+    if len(rows) != 23 or len(set(names)) != len(rows):
+        raise ValueError(f"Master §33 must contain 23 uniquely named types; found {len(rows)}")
     return rows
 
 
@@ -213,6 +246,8 @@ def verify(root: Path) -> int:
     archive_transfer_adr_path = root / "docs" / "contract" / ARCHIVE_TRANSFER_ADR_NAME
     constraint_time_spec_path = root / "docs" / "contract" / CONSTRAINT_TIME_SPEC_NAME
     constraint_time_adr_path = root / "docs" / "contract" / CONSTRAINT_TIME_ADR_NAME
+    security_policy_spec_path = root / "docs" / "contract" / SECURITY_POLICY_SPEC_NAME
+    security_policy_adr_path = root / "docs" / "contract" / SECURITY_POLICY_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
     master_text = master_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8").strip()
@@ -221,6 +256,8 @@ def verify(root: Path) -> int:
     archive_transfer_adr_text = archive_transfer_adr_path.read_text(encoding="utf-8")
     constraint_time_spec_text = constraint_time_spec_path.read_text(encoding="utf-8").strip()
     constraint_time_adr_text = constraint_time_adr_path.read_text(encoding="utf-8")
+    security_policy_spec_text = security_policy_spec_path.read_text(encoding="utf-8").strip()
+    security_policy_adr_text = security_policy_adr_path.read_text(encoding="utf-8")
     missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
     if missing_clauses:
         raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
@@ -238,13 +275,28 @@ def verify(root: Path) -> int:
         raise ValueError(
             f"M0-04b supplement is missing required contract clauses: {missing_time_clauses}"
         )
+    missing_security_clauses = [
+        clause
+        for clause in REQUIRED_SECURITY_POLICY_CLAUSES
+        if clause not in security_policy_spec_text
+    ]
+    if missing_security_clauses:
+        raise ValueError(
+            f"M0-04c supplement is missing required contract clauses: {missing_security_clauses}"
+        )
     master_normalized = master_text.replace("\r\n", "\n").rstrip()
     expected_suffix = (
-        spec_text + "\n\n" + archive_transfer_spec_text + "\n\n" + constraint_time_spec_text
+        spec_text
+        + "\n\n"
+        + archive_transfer_spec_text
+        + "\n\n"
+        + constraint_time_spec_text
+        + "\n\n"
+        + security_policy_spec_text
     )
     if not master_normalized.endswith(expected_suffix):
         raise ValueError(
-            "Master working copy does not end with the exact M0-04, M0-04a, and M0-04b supplements"
+            "Master working copy does not end with the exact M0-04, M0-04a, M0-04b, and M0-04c supplements"
         )
     for heading in (
         "## 2. Entity contract",
@@ -287,12 +339,28 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-032 is not marked accepted")
     if "[Constraints and time registration supplement](constraint_time_contract.md)" not in constraint_time_adr_text:
         raise ValueError("ADR-032 does not link the normative supplement")
+    for heading in (
+        "## 1. Security history records",
+        "## 2. Closed capability catalog and scopes",
+        "## 3. Effective capability evaluation",
+        "## 4. Record, field, relationship, and query enforcement",
+        "## 5. Historical policy and `SecurityEpoch`",
+        "## 6. Policy mutations, audit, and operations",
+        "## 7. Existing-contract cross-check",
+    ):
+        if heading not in security_policy_spec_text:
+            raise ValueError(f"M0-04c supplement is missing required section {heading!r}")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in security_policy_adr_text:
+        raise ValueError("ADR-033 is not marked accepted")
+    if "[Security policy supplement](security_policy_contract.md)" not in security_policy_adr_text:
+        raise ValueError("ADR-033 does not link the normative supplement")
 
     errata = json.loads(errata_path.read_text(encoding="utf-8"))
     expected_additions = {
         "M0-04": (spec_path, adr_path),
         "M0-04a": (archive_transfer_spec_path, archive_transfer_adr_path),
         "M0-04b": (constraint_time_spec_path, constraint_time_adr_path),
+        "M0-04c": (security_policy_spec_path, security_policy_adr_path),
     }
     additions = {item.get("task"): item for item in errata.get("contract_additions", [])}
     for task, (addition_spec, addition_adr) in expected_additions.items():
@@ -308,6 +376,7 @@ def verify(root: Path) -> int:
         "ERR-M0-04-ENTITY-PERSPECTIVE",
         "ERR-M0-04A-ARCHIVE-TRANSFER",
         "ERR-M0-04B-CONSTRAINT-TIME",
+        "ERR-M0-04C-SECURITY-POLICY",
     ):
         if correction_id not in correction_ids:
             raise ValueError(f"source-errata.json lacks {correction_id}")
@@ -379,11 +448,20 @@ def verify(root: Path) -> int:
             "lifecycle": "Active → Retired at shared Revision",
             "security": "perspective action/use policy; never Principal",
         },
+        "SecurityPolicyRecord": {
+            "id_type": "SecurityPolicyRecordId",
+            "main_section": "§§17–18.2, 31.6, M0-04c supplement",
+            "wire": "typed security-policy record; separate namespace, not RecordRef",
+            "storage": "append-only security history at shared Revision; policy/audit co-commit",
+            "lifecycle": "immutable; state/revocation changes append records",
+            "security": "SecurityPolicyManage; history requires SecurityPolicyRead",
+            "eligibility": "not a Domain Evidence/Provenance target",
+        },
     }.items():
         row = by_name.get(name)
         if row is None or any(row[field] != value for field, value in expected_fields.items()):
             raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
-    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04, M0-04a, and M0-04b contracts match Master §33")
+    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04c contracts match Master §33")
     return 0
 
 

@@ -2999,6 +2999,17 @@ security = "root of authorization"
 eligibility = "not Domain Provenance target"
 
 [[first_class_type]]
+name = "SecurityPolicyRecord"
+id_type = "SecurityPolicyRecordId"
+main_section = "§§17–18.2, 31.6, M0-04c supplement"
+invariant_ids = ["WDB-SEC-001", "WDB-SEC-002", "WDB-SEC-003", "WDB-SEC-004", "WDB-SEC-005", "WDB-AUD-001", "WDB-AUD-003"]
+wire = "typed security-policy record; separate namespace, not RecordRef"
+storage = "append-only security history at shared Revision; policy/audit co-commit"
+lifecycle = "immutable; state/revocation changes append records"
+security = "SecurityPolicyManage; history requires SecurityPolicyRead"
+eligibility = "not a Domain Evidence/Provenance target"
+
+[[first_class_type]]
 name = "AuditRecord"
 id_type = "AuditRecordId"
 main_section = "§§18.2, 31.6"

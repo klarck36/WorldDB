@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "4fffe2744847bf4f73902ae2d01bc13484ff1e4fe556a55f5db00095782dff03",
+      "working_sha256": "9c022ac6014d90bb6b225c70e736eb7112e0e45cd15d74c28c0ba3abc36bd468",
       "byte_identical": false
     },
     {
@@ -49,7 +49,7 @@
       "working_file": "invariants_vNext.toml",
       "source_file": "docs/source/invariants_vNext.toml",
       "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
-      "working_sha256": "270135c173fdce224178fe7d067d6cfbb300c76cc8e936855bc2363e389e5521",
+      "working_sha256": "083704e5ce5e9805d4a3f943d5880da357007a571890779ed6e4fb9788dc92fc",
       "byte_identical": false
     }
   ],
@@ -76,6 +76,14 @@
       "specification_sha256": "035c738ddbc3bb29cdab2f1ca5ee49c5191091b212e5b3d7beb57edd8bbbda96",
       "decision_record": "docs/contract/ADR-032-constraint-time.md",
       "decision_record_sha256": "80c8253d7e4912e5b87938fafd0f673ecad7142a5ac34f1535f96afba112bba0",
+      "status": "accepted working contract"
+    },
+    {
+      "task": "M0-04c",
+      "specification": "docs/contract/security_policy_contract.md",
+      "specification_sha256": "a43b4a5b1e84678bc0b3e8cbb3a2c4e3d9934bc272b4fd890a1ebc2aef52c2a3",
+      "decision_record": "docs/contract/ADR-033-security-policy.md",
+      "decision_record_sha256": "733dec3b571a5a68887216eb69374309e8d9e4dc4122439e3415459463ad77f7",
       "status": "accepted working contract"
     }
   ],
@@ -108,6 +116,16 @@
         "docs/contract/constraint_time_contract.md",
         "docs/contract/ADR-032-constraint-time.md",
         "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§2.1, 2.3, 12, 31.3–31.4"
+      ]
+    },
+    {
+      "id": "ERR-M0-04C-SECURITY-POLICY",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Added SecurityPolicyRecord to Master §33 and appended the normative capability evaluation, scope, historical authorization, and SecurityEpoch supplement after M0-04b.",
+      "authority": [
+        "docs/contract/security_policy_contract.md",
+        "docs/contract/ADR-033-security-policy.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§6–8, 14, 17–18, 31.5–31.6, 33"
       ]
     },
     {
@@ -460,6 +478,6 @@
     "This is a structural source comparison; a text reference is not a product test.",
     "Open normative source gaps require an explicit M0-02a decision.",
     "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-    "The Entity/Perspective, Archive/HistorySpace, and Constraint/Time supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
+    "The Entity/Perspective, Archive/HistorySpace, Constraint/Time, and Security Policy supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
   ]
 }

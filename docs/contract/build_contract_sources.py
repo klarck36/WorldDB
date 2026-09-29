@@ -51,6 +51,8 @@ ARCHIVE_TRANSFER_SPEC = "archive_transfer_contract.md"
 ARCHIVE_TRANSFER_ADR = "ADR-031-archive-transfer.md"
 CONSTRAINT_TIME_SPEC = "constraint_time_contract.md"
 CONSTRAINT_TIME_ADR = "ADR-032-constraint-time.md"
+SECURITY_POLICY_SPEC = "security_policy_contract.md"
+SECURITY_POLICY_ADR = "ADR-033-security-policy.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -187,8 +189,8 @@ def first_class_types_from_master(master_text: str) -> list[dict[str, str | list
             }
         )
     names = [str(record["name"]) for record in records]
-    if len(records) != 22 or len(set(names)) != 22:
-        raise ValueError(f"Master §33 must contain 22 uniquely named types; found {len(records)}")
+    if len(records) != 23 or len(set(names)) != 23:
+        raise ValueError(f"Master §33 must contain 23 uniquely named types; found {len(records)}")
     return records
 
 
@@ -205,7 +207,7 @@ def first_class_toml(records: list[dict[str, str | list[str]]]) -> str:
 
 
 def m0_04_master_copy(source_master: str, supplements: list[str]) -> str:
-    """Apply the M0-04 §33 clarifications and append versioned M0 contract supplements."""
+    """Apply M0 §33 clarifications and append the versioned M0 contract supplements."""
     updates = {
         "Entity": {
             2: "§§2.3, 3, M0-04 supplement",
@@ -249,6 +251,37 @@ def m0_04_master_copy(source_master: str, supplements: list[str]) -> str:
         changed.add(name)
     if changed != set(updates):
         raise ValueError(f"M0-04 could not update Master §33 rows: {sorted(set(updates) - changed)}")
+    security_record_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if (cells := split_markdown_table_row(line)) and cells[0] == "SecurityPolicyRecord"
+    ]
+    if security_record_indexes:
+        raise ValueError("Source Master already contains the M0-04c SecurityPolicyRecord row")
+    principal_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if (cells := split_markdown_table_row(line)) and cells[0] == "Principal"
+        ),
+        None,
+    )
+    if principal_index is None:
+        raise ValueError("Cannot add SecurityPolicyRecord without the Master §33 Principal row")
+    principal_line = lines[principal_index]
+    line_ending = "\r\n" if principal_line.endswith("\r\n") else "\n" if principal_line.endswith("\n") else ""
+    security_record_cells = (
+        "SecurityPolicyRecord",
+        "SecurityPolicyRecordId",
+        "§§17–18.2, 31.6, M0-04c supplement",
+        "WDB-SEC-001–005, WDB-AUD-001/003",
+        "typed security-policy record; separate namespace, not RecordRef",
+        "append-only security history at shared Revision; policy/audit co-commit",
+        "immutable; state/revocation changes append records",
+        "SecurityPolicyManage; history requires SecurityPolicyRead",
+        "not a Domain Evidence/Provenance target",
+    )
+    lines.insert(principal_index + 1, "| " + " | ".join(security_record_cells) + " |" + line_ending)
     master = "".join(lines).rstrip("\r\n")
     separator = "\r\n\r\n" if "\r\n" in source_master else "\n\n"
     normalized_supplements = [
@@ -355,6 +388,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         ("M0-04", ENTITY_PERSPECTIVE_SPEC, ENTITY_PERSPECTIVE_ADR),
         ("M0-04a", ARCHIVE_TRANSFER_SPEC, ARCHIVE_TRANSFER_ADR),
         ("M0-04b", CONSTRAINT_TIME_SPEC, CONSTRAINT_TIME_ADR),
+        ("M0-04c", SECURITY_POLICY_SPEC, SECURITY_POLICY_ADR),
     )
     addition_payloads = {
         name: (root / CONTRACT_DIR / name).read_bytes()
@@ -665,6 +699,19 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 ],
             },
             {
+                "id": "ERR-M0-04C-SECURITY-POLICY",
+                "file": MASTER_NAME,
+                "change": (
+                    "Added SecurityPolicyRecord to Master §33 and appended the normative capability "
+                    "evaluation, scope, historical authorization, and SecurityEpoch supplement after M0-04b."
+                ),
+                "authority": [
+                    f"docs/contract/{SECURITY_POLICY_SPEC}",
+                    f"docs/contract/{SECURITY_POLICY_ADR}",
+                    f"docs/source/{MASTER_NAME} §§6–8, 14, 17–18, 31.5–31.6, 33",
+                ],
+            },
+            {
                 "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
                 "file": TOML_NAME,
                 "change": (
@@ -767,7 +814,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "This is a structural source comparison; a text reference is not a product test.",
             "Open normative source gaps require an explicit M0-02a decision.",
             "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-            "The Entity/Perspective, Archive/HistorySpace, and Constraint/Time supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
+            "The Entity/Perspective, Archive/HistorySpace, Constraint/Time, and Security Policy supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
         ],
     }
     output_files[CONTRACT_DIR / ERRATA_NAME] = (
@@ -788,6 +835,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             ARCHIVE_TRANSFER_ADR,
             CONSTRAINT_TIME_SPEC,
             CONSTRAINT_TIME_ADR,
+            SECURITY_POLICY_SPEC,
+            SECURITY_POLICY_ADR,
         }
         and path.name not in expected_names
     ]
