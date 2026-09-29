@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "9c022ac6014d90bb6b225c70e736eb7112e0e45cd15d74c28c0ba3abc36bd468",
+      "working_sha256": "81559aa1ae20f4f1f4a4f2d861594adbfbc570b1a76dcca49ef54109fb46e8db",
       "byte_identical": false
     },
     {
@@ -85,6 +85,14 @@
       "decision_record": "docs/contract/ADR-033-security-policy.md",
       "decision_record_sha256": "733dec3b571a5a68887216eb69374309e8d9e4dc4122439e3415459463ad77f7",
       "status": "accepted working contract"
+    },
+    {
+      "task": "M0-04d",
+      "specification": "docs/contract/query_transport_contract.md",
+      "specification_sha256": "081b41693636573c8a893a246f58aab8e7bc1a37ab1df7524a9161685490d3e6",
+      "decision_record": "docs/contract/ADR-034-query-transport.md",
+      "decision_record_sha256": "04a97e5336df7588d1d041630350385e17835a94e8b46aa1f1f9c8939392361c",
+      "status": "accepted working contract"
     }
   ],
   "corrections": [
@@ -126,6 +134,16 @@
         "docs/contract/security_policy_contract.md",
         "docs/contract/ADR-033-security-policy.md",
         "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§6–8, 14, 17–18, 31.5–31.6, 33"
+      ]
+    },
+    {
+      "id": "ERR-M0-04D-QUERY-TRANSPORT",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Appended the normative query filter, search, sorting, page DTO, and versioned CLI/IPC transport supplement after the M0-04c Security Policy supplement.",
+      "authority": [
+        "docs/contract/query_transport_contract.md",
+        "docs/contract/ADR-034-query-transport.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§12, 16, 17, 31.5"
       ]
     },
     {

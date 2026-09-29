@@ -21,6 +21,8 @@ CONSTRAINT_TIME_SPEC_NAME = "constraint_time_contract.md"
 CONSTRAINT_TIME_ADR_NAME = "ADR-032-constraint-time.md"
 SECURITY_POLICY_SPEC_NAME = "security_policy_contract.md"
 SECURITY_POLICY_ADR_NAME = "ADR-033-security-policy.md"
+QUERY_TRANSPORT_SPEC_NAME = "query_transport_contract.md"
+QUERY_TRANSPORT_ADR_NAME = "ADR-034-query-transport.md"
 ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
@@ -140,6 +142,45 @@ REQUIRED_SECURITY_POLICY_CLAUSES = (
     "FieldRead before candidate creation",
     "Every field required to evaluate a candidate",
 )
+REQUIRED_QUERY_TRANSPORT_CLAUSES = (
+    "QueryRequest {",
+    "QueryContextDto {",
+    "Projection = OperationDefault | Only(NonEmptySet<FieldSelector>)",
+    "AuthorizationNow | AuthorizationAtRevision(Revision)",
+    "FilterExpr = MatchAll",
+    "All(NonEmptyList<FilterExpr>)",
+    "at most 32 levels of nesting and 256 total tests",
+    "max_candidates: UInt64, max_work_units: UInt64, max_results: UInt64",
+    "FieldRead checks before a candidate is created",
+    "The operation Capability is also mandatory",
+    "SearchToken",
+    "ASCII whitespace bytes `0x09..0x0D` and `0x20`",
+    "Search has no implicit relevance order or score sort",
+    "ResultKey ASC",
+    "EventTime` sorts by variant tag (`Instant` before `Span`)",
+    "missing` applies only to an absent value and its First/Last placement is independent of sort direction",
+    "fixed 1.0 variant tag order",
+    "PageRequest { limit: UInt32, cursor: Option<OpaqueCursor> }",
+    "canonical QueryHash",
+    "QueryFullText",
+    "RawHistoryRead",
+    "ExistingRelationshipKind = the closed typed relationship-kind variants",
+    "GraphSpec {",
+    "GroupedCount { group_by: NonEmptySet<FieldSelector> }",
+    "FullTextExpr = Token(SearchToken)",
+    "Projection::OperationDefault` expands to the one protocol-defined standard result shape",
+    "supported_versions: NonEmptySet<ProtocolVersion>",
+    "HandshakeRequest {",
+    "RequestOperation = Query(QueryRequest) | Cancel",
+    "ProtocolFeature = FullTextSearch",
+    "CancellationSignalled | AlreadyTerminal",
+    "adjacent JSON tagging with a stable `type` snake_case tag",
+    "JSON Lines output",
+    "Number.MAX_SAFE_INTEGER",
+    "CursorInvalidated",
+    "`PublicErrorDto` contains only the code, a retryability flag",
+    "No new WDB invariant IDs or First-Class persisted types are introduced",
+)
 REFERENCE_PATTERN = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
 )
@@ -248,6 +289,8 @@ def verify(root: Path) -> int:
     constraint_time_adr_path = root / "docs" / "contract" / CONSTRAINT_TIME_ADR_NAME
     security_policy_spec_path = root / "docs" / "contract" / SECURITY_POLICY_SPEC_NAME
     security_policy_adr_path = root / "docs" / "contract" / SECURITY_POLICY_ADR_NAME
+    query_transport_spec_path = root / "docs" / "contract" / QUERY_TRANSPORT_SPEC_NAME
+    query_transport_adr_path = root / "docs" / "contract" / QUERY_TRANSPORT_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
     master_text = master_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8").strip()
@@ -258,6 +301,8 @@ def verify(root: Path) -> int:
     constraint_time_adr_text = constraint_time_adr_path.read_text(encoding="utf-8")
     security_policy_spec_text = security_policy_spec_path.read_text(encoding="utf-8").strip()
     security_policy_adr_text = security_policy_adr_path.read_text(encoding="utf-8")
+    query_transport_spec_text = query_transport_spec_path.read_text(encoding="utf-8").strip()
+    query_transport_adr_text = query_transport_adr_path.read_text(encoding="utf-8")
     missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
     if missing_clauses:
         raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
@@ -284,6 +329,14 @@ def verify(root: Path) -> int:
         raise ValueError(
             f"M0-04c supplement is missing required contract clauses: {missing_security_clauses}"
         )
+    missing_query_transport_clauses = [
+        clause for clause in REQUIRED_QUERY_TRANSPORT_CLAUSES if clause not in query_transport_spec_text
+    ]
+    if missing_query_transport_clauses:
+        raise ValueError(
+            "M0-04d supplement is missing required contract clauses: "
+            f"{missing_query_transport_clauses}"
+        )
     master_normalized = master_text.replace("\r\n", "\n").rstrip()
     expected_suffix = (
         spec_text
@@ -293,10 +346,12 @@ def verify(root: Path) -> int:
         + constraint_time_spec_text
         + "\n\n"
         + security_policy_spec_text
+        + "\n\n"
+        + query_transport_spec_text
     )
     if not master_normalized.endswith(expected_suffix):
         raise ValueError(
-            "Master working copy does not end with the exact M0-04, M0-04a, M0-04b, and M0-04c supplements"
+            "Master working copy does not end with the exact M0-04 through M0-04d supplements"
         )
     for heading in (
         "## 2. Entity contract",
@@ -354,6 +409,20 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-033 is not marked accepted")
     if "[Security policy supplement](security_policy_contract.md)" not in security_policy_adr_text:
         raise ValueError("ADR-033 does not link the normative supplement")
+    for heading in (
+        "## 1. One semantic request across adapters",
+        "## 2. Closed filters and field comparisons",
+        "## 3. Search and deterministic sorting",
+        "## 4. Pagination and result DTOs",
+        "## 5. Versioned CLI and IPC envelopes",
+        "## 6. Existing-contract cross-check",
+    ):
+        if heading not in query_transport_spec_text:
+            raise ValueError(f"M0-04d supplement is missing required section {heading!r}")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in query_transport_adr_text:
+        raise ValueError("ADR-034 is not marked accepted")
+    if "[Query and transport supplement](query_transport_contract.md)" not in query_transport_adr_text:
+        raise ValueError("ADR-034 does not link the normative supplement")
 
     errata = json.loads(errata_path.read_text(encoding="utf-8"))
     expected_additions = {
@@ -361,6 +430,7 @@ def verify(root: Path) -> int:
         "M0-04a": (archive_transfer_spec_path, archive_transfer_adr_path),
         "M0-04b": (constraint_time_spec_path, constraint_time_adr_path),
         "M0-04c": (security_policy_spec_path, security_policy_adr_path),
+        "M0-04d": (query_transport_spec_path, query_transport_adr_path),
     }
     additions = {item.get("task"): item for item in errata.get("contract_additions", [])}
     for task, (addition_spec, addition_adr) in expected_additions.items():
@@ -377,6 +447,7 @@ def verify(root: Path) -> int:
         "ERR-M0-04A-ARCHIVE-TRANSFER",
         "ERR-M0-04B-CONSTRAINT-TIME",
         "ERR-M0-04C-SECURITY-POLICY",
+        "ERR-M0-04D-QUERY-TRANSPORT",
     ):
         if correction_id not in correction_ids:
             raise ValueError(f"source-errata.json lacks {correction_id}")
@@ -461,7 +532,7 @@ def verify(root: Path) -> int:
         row = by_name.get(name)
         if row is None or any(row[field] != value for field, value in expected_fields.items()):
             raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
-    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04c contracts match Master §33")
+    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 through M0-04d supplements match the working Master")
     return 0
 
 

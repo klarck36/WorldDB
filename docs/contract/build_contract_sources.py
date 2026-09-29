@@ -53,6 +53,8 @@ CONSTRAINT_TIME_SPEC = "constraint_time_contract.md"
 CONSTRAINT_TIME_ADR = "ADR-032-constraint-time.md"
 SECURITY_POLICY_SPEC = "security_policy_contract.md"
 SECURITY_POLICY_ADR = "ADR-033-security-policy.md"
+QUERY_TRANSPORT_SPEC = "query_transport_contract.md"
+QUERY_TRANSPORT_ADR = "ADR-034-query-transport.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -389,6 +391,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         ("M0-04a", ARCHIVE_TRANSFER_SPEC, ARCHIVE_TRANSFER_ADR),
         ("M0-04b", CONSTRAINT_TIME_SPEC, CONSTRAINT_TIME_ADR),
         ("M0-04c", SECURITY_POLICY_SPEC, SECURITY_POLICY_ADR),
+        ("M0-04d", QUERY_TRANSPORT_SPEC, QUERY_TRANSPORT_ADR),
     )
     addition_payloads = {
         name: (root / CONTRACT_DIR / name).read_bytes()
@@ -712,6 +715,19 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                 ],
             },
             {
+                "id": "ERR-M0-04D-QUERY-TRANSPORT",
+                "file": MASTER_NAME,
+                "change": (
+                    "Appended the normative query filter, search, sorting, page DTO, and versioned "
+                    "CLI/IPC transport supplement after the M0-04c Security Policy supplement."
+                ),
+                "authority": [
+                    f"docs/contract/{QUERY_TRANSPORT_SPEC}",
+                    f"docs/contract/{QUERY_TRANSPORT_ADR}",
+                    f"docs/source/{MASTER_NAME} §§12, 16, 17, 31.5",
+                ],
+            },
+            {
                 "id": "ERR-M0-03-FIRST-CLASS-REGISTER",
                 "file": TOML_NAME,
                 "change": (
@@ -837,6 +853,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             CONSTRAINT_TIME_ADR,
             SECURITY_POLICY_SPEC,
             SECURITY_POLICY_ADR,
+            QUERY_TRANSPORT_SPEC,
+            QUERY_TRANSPORT_ADR,
         }
         and path.name not in expected_names
     ]
