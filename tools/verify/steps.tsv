@@ -5,6 +5,13 @@
 profile	dev	default	Local development verification on the declared MSRV
 step	dev	format-check	run	cargo	fmt --all -- --check	-
 step	dev	workspace-check	run	cargo	check --locked --workspace --all-targets	-
+step	dev	clippy-unsafe-policy	run	cargo	clippy --locked --workspace --all-targets -- -D warnings	-
+step	dev	workspace-lint-configuration	run	python	-B -X utf8 tools/check_workspace_lints.py	-
+step	dev	unsafe-boundary-policy	run	python	-B -X utf8 tools/check_unsafe_policy.py	-
+step	dev	exception-policy	run	python	-B -X utf8 tools/check_exceptions.py	-
+step	dev	terminology-policy	run	python	-B -X utf8 tools/check_terminology.py	-
+step	dev	lint-policy-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_lint_policy.py -v	-
+step	dev	unsafe-negative-test	run	python	-B -X utf8 -m unittest discover -s tools -p test_unsafe_policy.py -v	-
 step	dev	dependency-tree	run	cargo	tree --locked	-
 step	dev	crate-graph	run	python	-B -X utf8 tools/check_crate_graph.py	-
 step	dev	crate-graph-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_crate_graph.py -v	-
@@ -14,6 +21,5 @@ step	dev	source-check	run	python	-B -X utf8 WorldDB_1.0_Sourcecheck.py	-
 step	dev	plan-check	run	python	-B -X utf8 WorldDB_1.0_Plancheck.py	-
 step	dev	xtask-tests	run	cargo	test --locked --package xtask	-
 step	dev	working-tree-whitespace	run	git	diff --check HEAD	-
-step	dev	clippy-unsafe-policy	skip			Added by M0-11.
 step	dev	dependency-policy	skip			Added by M0-12.
 step	dev	ci-matrix	skip			Added by M0-14.

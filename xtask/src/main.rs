@@ -89,7 +89,12 @@ fn run() -> Result<()> {
                 skipped += 1;
             }
             StepState::Run => {
-                let program = resolve_program(step.program.as_deref().unwrap_or_default());
+                let Some(command_program) = step.program.as_deref() else {
+                    eprintln!("[FAIL] {} (manifest command is missing)", step.id);
+                    failed += 1;
+                    continue;
+                };
+                let program = resolve_program(command_program);
                 let command_line = std::iter::once(program.as_str())
                     .chain(step.args.iter().map(String::as_str))
                     .collect::<Vec<_>>()
@@ -146,7 +151,7 @@ fn parse_cli(args: Vec<String>) -> Result<CliAction> {
     let mut skips = HashSet::new();
     let mut index = 1;
     while index < args.len() {
-        match args[index].as_str() {
+        match args.get(index).map(String::as_str).unwrap_or_default() {
             "--profile" => {
                 index += 1;
                 let value = args
@@ -200,8 +205,10 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
         let fields = line.split('\t').collect::<Vec<_>>();
         match fields.first().copied() {
             Some("profile") if fields.len() == 4 => {
-                let name = fields[1];
-                let is_default = match fields[2] {
+                let name = manifest_field(&fields, 1, line_index)?;
+                let profile_state = manifest_field(&fields, 2, line_index)?;
+                let description = manifest_field(&fields, 3, line_index)?;
+                let is_default = match profile_state {
                     "default" => true,
                     "available" => false,
                     value => {
@@ -211,7 +218,7 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
                         ));
                     }
                 };
-                if name.is_empty() || fields[3].is_empty() {
+                if name.is_empty() || description.is_empty() {
                     return Err(manifest_error(
                         line_index,
                         "profile name and description must be non-empty".to_owned(),
@@ -229,46 +236,53 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
                     Profile {
                         name: name.to_owned(),
                         is_default,
-                        description: fields[3].to_owned(),
+                        description: description.to_owned(),
                         steps: Vec::new(),
                     },
                 );
             }
             Some("step") if fields.len() == 7 => {
-                let profile_name = fields[1];
+                let profile_name = manifest_field(&fields, 1, line_index)?;
                 let profile = profiles.get_mut(profile_name).ok_or_else(|| {
                     manifest_error(
                         line_index,
                         format!("step references unknown or undeclared profile {profile_name:?}"),
                     )
                 })?;
-                let id = fields[2];
+                let id = manifest_field(&fields, 2, line_index)?;
                 if id.is_empty() || profile.steps.iter().any(|step| step.id == id) {
                     return Err(manifest_error(
                         line_index,
                         format!("empty or duplicate step id {id:?} in profile {profile_name:?}"),
                     ));
                 }
-                let (state, program) = match fields[3] {
+                let state_field = manifest_field(&fields, 3, line_index)?;
+                let program_field = manifest_field(&fields, 4, line_index)?;
+                let args_field = manifest_field(&fields, 5, line_index)?;
+                let reason_field = manifest_field(&fields, 6, line_index)?;
+                let (state, program) = match state_field {
                     "run" => {
-                        if fields[4].is_empty() || fields[6] != "-" {
+                        if program_field.is_empty() || reason_field != "-" {
                             return Err(manifest_error(
                                 line_index,
                                 "run steps require a program and '-' as their reason field"
                                     .to_owned(),
                             ));
                         }
-                        (StepState::Run, Some(fields[4].to_owned()))
+                        (StepState::Run, Some(program_field.to_owned()))
                     }
                     "skip" => {
-                        if !fields[4].is_empty() || !fields[5].is_empty() || fields[6].is_empty() {
+                        if !program_field.is_empty()
+                            || !args_field.is_empty()
+                            || reason_field.is_empty()
+                        {
                             return Err(manifest_error(
                                 line_index,
                                 "skipped steps require empty command fields and a visible reason"
                                     .to_owned(),
                             ));
                         }
-                        (StepState::Skip(fields[6].to_owned()), None)
+                        (StepState::Skip(reason_field.to_owned()), None)
                     }
                     value => {
                         return Err(manifest_error(
@@ -277,7 +291,7 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
                         ));
                     }
                 };
-                let args = fields[5]
+                let args = args_field
                     .split_whitespace()
                     .map(str::to_owned)
                     .collect::<Vec<_>>();
@@ -294,7 +308,7 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
                     format!("unknown record or wrong field count for {record:?}"),
                 ));
             }
-            None => unreachable!("split always returns at least one field"),
+            None => return Err(manifest_error(line_index, "empty record".to_owned())),
         }
     }
 
@@ -310,6 +324,13 @@ fn parse_manifest(input: &str) -> Result<Vec<Profile>> {
         return Err("every verification profile must contain at least one step".to_owned());
     }
     Ok(profiles.into_values().collect())
+}
+
+fn manifest_field<'a>(fields: &[&'a str], index: usize, line_index: usize) -> Result<&'a str> {
+    fields
+        .get(index)
+        .copied()
+        .ok_or_else(|| manifest_error(line_index, format!("record is missing field {}", index + 1)))
 }
 
 fn manifest_error(line_index: usize, message: String) -> String {
@@ -379,6 +400,8 @@ fn print_help() {
 mod tests {
     use super::*;
 
+    type TestResult = std::result::Result<(), String>;
+
     const VALID_MANIFEST: &str = "\
 profile\tdev\tdefault\tLocal checks\n\
 profile\tci\tavailable\tContinuous integration checks\n\
@@ -387,44 +410,52 @@ step\tdev\tdependency-audit\tskip\t\t\tAdded by M0-12.\n\
 step\tci\tformat\trun\tcargo\tfmt --all -- --check\t-\n";
 
     #[test]
-    fn manifest_exposes_default_profile_and_visible_skips() {
-        let profiles = parse_manifest(VALID_MANIFEST).unwrap();
-        let profile = select_profile(&profiles, None).unwrap();
+    fn manifest_exposes_default_profile_and_visible_skips() -> TestResult {
+        let profiles = parse_manifest(VALID_MANIFEST)?;
+        let profile = select_profile(&profiles, None)?;
         assert_eq!(profile.name, "dev");
-        assert!(matches!(profile.steps[1].state, StepState::Skip(_)));
+        let skipped_step = profile
+            .steps
+            .get(1)
+            .ok_or_else(|| "expected a manifest skip row".to_owned())?;
+        assert!(matches!(&skipped_step.state, StepState::Skip(_)));
+        Ok(())
     }
 
     #[test]
-    fn skipped_manifest_step_requires_a_reason() {
+    fn skipped_manifest_step_requires_a_reason() -> TestResult {
         let input = "profile\tdev\tdefault\tLocal checks\nstep\tdev\taudit\tskip\t\t\t\n";
-        assert!(
-            parse_manifest(input)
-                .unwrap_err()
-                .contains("visible reason")
-        );
+        let error = match parse_manifest(input) {
+            Err(error) => error,
+            Ok(_) => return Err("accepted skipped step without a reason".to_owned()),
+        };
+        assert!(error.contains("visible reason"));
+        Ok(())
     }
 
     #[test]
-    fn duplicate_step_ids_are_rejected() {
+    fn duplicate_step_ids_are_rejected() -> TestResult {
         let input = "profile\tdev\tdefault\tLocal checks\n\
 step\tdev\tformat\trun\tcargo\tfmt --all\t-\n\
 step\tdev\tformat\trun\tcargo\tfmt --all\t-\n";
-        assert!(
-            parse_manifest(input)
-                .unwrap_err()
-                .contains("duplicate step id")
-        );
+        let error = match parse_manifest(input) {
+            Err(error) => error,
+            Ok(_) => return Err("accepted duplicate step ids".to_owned()),
+        };
+        assert!(error.contains("duplicate step id"));
+        Ok(())
     }
 
     #[test]
-    fn explicit_skip_must_name_a_required_step_in_the_selected_profile() {
-        let profiles = parse_manifest(VALID_MANIFEST).unwrap();
-        let profile = select_profile(&profiles, Some("dev")).unwrap();
+    fn explicit_skip_must_name_a_required_step_in_the_selected_profile() -> TestResult {
+        let profiles = parse_manifest(VALID_MANIFEST)?;
+        let profile = select_profile(&profiles, Some("dev"))?;
         assert!(validate_requested_skips(profile, &HashSet::from(["format".to_owned()])).is_ok());
         assert!(validate_requested_skips(profile, &HashSet::from(["missing".to_owned()])).is_err());
         assert!(
             validate_requested_skips(profile, &HashSet::from(["dependency-audit".to_owned()]))
                 .is_err()
         );
+        Ok(())
     }
 }

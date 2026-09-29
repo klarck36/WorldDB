@@ -3,7 +3,7 @@
 **Stand:** 29. September 2026  
 **Gesamtstatus:** IN PROGRESS – M0-01 bis M0-10 abgeschlossen; M0-02a wartet auf Produktentscheidungen
 
-**Nächste Task:** `M0-11` (READY)
+**Nächste Task:** `M0-11` (RUNNING)
 
 **Letzter abgeschlossener Milestone:** keiner  
 **Offene Blocker:** M0-02a benötigt Produktentscheidungen zu 52 HARD-Quellenlücken und WDB-HIS-001
@@ -34,6 +34,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-08 | DONE | `adfaa57`; `docs/M0-08-verification.md`; `docs/contract/ADR-037-uuidv7-generator.md` | Fallible UUIDv7-Generatorwahl belegt; RFC-Vektor, 4.096 Property-Fälle und 4.096 CSPRNG-IDs geprüft; zehn Tests, gelockter Build und Strukturchecks bestanden | Uhr-/Entropiefehler und Zeitstempelgrenze negativ geprüft; gleicher Millisekundenzeitpunkt garantiert keine Reihenfolge; nur Windows x86_64 MSVC gebaut | Noch nicht fällig (CI-Test folgt M0-14) | geprüft 2026-09-29T05:18:22+02:00 | M0-09 DONE |
 | M0-09 | DONE | `66bfb37`; `docs/M0-09-verification.md`; `docs/architecture/M0-09-boundary-gate.md`; `docs/contract/ADR-038-project-license.md`; `LICENSE-MIT`; `LICENSE-APACHE` | Fünfcrate-Workspace mit Edition 2024/MSRV 1.85 und Dual-Lizenz; gelockter Build, echter Crategraph und Strukturchecks bestanden | Core-Rückkante, externe Dependency und ungegate Crate-Extraktion in drei Negativtests abgewiesen; nur Windows x86_64 MSVC gebaut | Noch nicht fällig (M0-10) | geprüft 2026-09-29T08:25:23+02:00 | M0-10 READY |
 | M0-10 | DONE | `ab987c5`; `docs/M0-10-verification.md`; `.cargo/config.toml`; `tools/verify/steps.tsv`; `scripts/verify.sh`; `scripts/verify.ps1` | `cargo xtask verify`: elf Schritte bestanden, vier Runner-Tests und beide Wrapper bestanden | Drei geplante M0-11/12/14-Schritte sichtbar übersprungen; explizites `--skip` protokolliert und gezählt; Unix-Wrapper auf Git Bash statt nativem Unix geprüft | Noch nicht fällig (M0-11) | geprüft 2026-09-29T08:40:40+02:00 | M0-11 READY |
+| M0-11 | RUNNING | – | – | – | Ausführung folgt (M0-11) | begonnen 2026-09-29T08:46:56+02:00 | Lints, Ausnahme-Register und Terminologie-Guard implementieren |
 
 ## Entscheidungs- und Release-Gates
 
