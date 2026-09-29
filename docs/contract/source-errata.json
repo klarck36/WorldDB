@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "03130234521fe5a3fed6ffa4090670f96a7050b1cfaca2660c665ff1880e88ef",
+      "working_sha256": "448fe766ab2e305d5f7a9dc36c44ddd084789208443185abc32244de47eb830f",
       "byte_identical": false
     },
     {
@@ -61,6 +61,14 @@
       "decision_record": "docs/contract/ADR-030-entity-perspective.md",
       "decision_record_sha256": "db366f5a63bf6e98c5797e5ba0ff4aa95f3174799ee4e9708edd20ba9ba0c04c",
       "status": "accepted working contract"
+    },
+    {
+      "task": "M0-04a",
+      "specification": "docs/contract/archive_transfer_contract.md",
+      "specification_sha256": "d270f0f7dcaf9a07ee5c5ef450ff5250a5e63b5a7d6e710c634ea8a8d3ebbc3f",
+      "decision_record": "docs/contract/ADR-031-archive-transfer.md",
+      "decision_record_sha256": "134d317bf6ee2e14642ec3962331ca1b3643a0987fca3c878e659f09a1ff1ecb",
+      "status": "accepted working contract"
     }
   ],
   "corrections": [
@@ -72,6 +80,16 @@
         "docs/contract/entity_perspective_contract.md",
         "docs/contract/ADR-030-entity-perspective.md",
         "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §33"
+      ]
+    },
+    {
+      "id": "ERR-M0-04A-ARCHIVE-TRANSFER",
+      "file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
+      "change": "Appended the normative Archive and explicit HistorySpace transfer supplement after the M0-04 Entity/Perspective supplement.",
+      "authority": [
+        "docs/contract/archive_transfer_contract.md",
+        "docs/contract/ADR-031-archive-transfer.md",
+        "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md §§2.1.1, 2.3.2, 15.2–15.3, 31.2, 31.4"
       ]
     },
     {
@@ -424,6 +442,6 @@
     "This is a structural source comparison; a text reference is not a product test.",
     "Open normative source gaps require an explicit M0-02a decision.",
     "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-    "The Entity/Perspective supplement is an explicit M0-04 working-contract addition, not a claim that the missing original v3.1 source was present."
+    "The Entity/Perspective and Archive/HistorySpace supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present."
   ]
 }

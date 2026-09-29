@@ -15,6 +15,8 @@ MASTER_NAME = "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md"
 TOML_NAME = "invariants_vNext.toml"
 SPEC_NAME = "entity_perspective_contract.md"
 ADR_NAME = "ADR-030-entity-perspective.md"
+ARCHIVE_TRANSFER_SPEC_NAME = "archive_transfer_contract.md"
+ARCHIVE_TRANSFER_ADR_NAME = "ADR-031-archive-transfer.md"
 ERRATA_NAME = "source-errata.json"
 REQUIRED_FIELDS = {
     "name",
@@ -57,6 +59,24 @@ REQUIRED_CONTRACT_CLAUSES = (
     "`LifecycleTargetRef` itself is unchanged",
     "52 HARD gaps in M0-02a remain open",
     "WDB-HIS-001",
+)
+REQUIRED_ARCHIVE_TRANSFER_CLAUSES = (
+    "ArchiveTransition {",
+    "ArchiveTargetRef",
+    "RecordRef::ArchiveTransition(ArchiveTransitionId)",
+    "ArchiveVisibility::Operational",
+    "Raw History",
+    "HistorySpaceContentRef",
+    "selected_event_relations",
+    "record_id_map",
+    "CopyEffectiveLifecycle",
+    "PreserveArchiveState",
+    "relation: DerivedFrom",
+    "expected_target_head",
+    "TransactionConflict",
+    "never adds a parent",
+    "EventRelation itself is not admitted to generic `ProvenanceEndpointRef`",
+    "Master §§3.1/3.2",
 )
 REFERENCE_PATTERN = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -160,15 +180,28 @@ def verify(root: Path) -> int:
     toml_path = root / "docs" / "contract" / TOML_NAME
     spec_path = root / "docs" / "contract" / SPEC_NAME
     adr_path = root / "docs" / "contract" / ADR_NAME
+    archive_transfer_spec_path = root / "docs" / "contract" / ARCHIVE_TRANSFER_SPEC_NAME
+    archive_transfer_adr_path = root / "docs" / "contract" / ARCHIVE_TRANSFER_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
     master_text = master_path.read_text(encoding="utf-8")
     spec_text = spec_path.read_text(encoding="utf-8").strip()
     adr_text = adr_path.read_text(encoding="utf-8")
+    archive_transfer_spec_text = archive_transfer_spec_path.read_text(encoding="utf-8").strip()
+    archive_transfer_adr_text = archive_transfer_adr_path.read_text(encoding="utf-8")
     missing_clauses = [clause for clause in REQUIRED_CONTRACT_CLAUSES if clause not in spec_text]
     if missing_clauses:
         raise ValueError(f"M0-04 supplement is missing required contract clauses: {missing_clauses}")
-    if not master_text.rstrip().endswith(spec_text):
-        raise ValueError("Master working copy does not end with the exact M0-04 supplement")
+    missing_transfer_clauses = [
+        clause for clause in REQUIRED_ARCHIVE_TRANSFER_CLAUSES if clause not in archive_transfer_spec_text
+    ]
+    if missing_transfer_clauses:
+        raise ValueError(
+            f"M0-04a supplement is missing required contract clauses: {missing_transfer_clauses}"
+        )
+    master_normalized = master_text.replace("\r\n", "\n").rstrip()
+    expected_suffix = spec_text + "\n\n" + archive_transfer_spec_text
+    if not master_normalized.endswith(expected_suffix):
+        raise ValueError("Master working copy does not end with the exact M0-04 and M0-04a supplements")
     for heading in (
         "## 2. Entity contract",
         "## 3. Perspective contract",
@@ -182,27 +215,38 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-030 is not marked accepted")
     if "[Entity/Perspective supplement](entity_perspective_contract.md)" not in adr_text:
         raise ValueError("ADR-030 does not link the normative supplement")
+    for heading in (
+        "## 1. Archive state and record form",
+        "## 2. Operational visibility and raw history",
+        "## 3. HistorySpace transfer plan",
+        "## 4. Transaction, conflict, and outcome rules",
+        "## 5. HistorySpace and invariants cross-check",
+    ):
+        if heading not in archive_transfer_spec_text:
+            raise ValueError(f"M0-04a supplement is missing required section {heading!r}")
+    if "**Status:** Accepted for the WorldDB 1.0 working contract" not in archive_transfer_adr_text:
+        raise ValueError("ADR-031 is not marked accepted")
+    if "[Archive and HistorySpace transfer supplement](archive_transfer_contract.md)" not in archive_transfer_adr_text:
+        raise ValueError("ADR-031 does not link the normative supplement")
 
     errata = json.loads(errata_path.read_text(encoding="utf-8"))
-    addition = next(
-        (
-            item
-            for item in errata.get("contract_additions", [])
-            if item.get("task") == "M0-04"
-        ),
-        None,
-    )
-    if not addition:
-        raise ValueError("source-errata.json lacks the M0-04 contract addition")
-    if addition.get("specification_sha256") != hashlib.sha256(spec_path.read_bytes()).hexdigest():
-        raise ValueError("M0-04 supplement hash differs from source-errata.json")
-    if addition.get("decision_record_sha256") != hashlib.sha256(adr_path.read_bytes()).hexdigest():
-        raise ValueError("ADR-030 hash differs from source-errata.json")
-    if not any(
-        item.get("id") == "ERR-M0-04-ENTITY-PERSPECTIVE"
-        for item in errata.get("corrections", [])
-    ):
-        raise ValueError("source-errata.json lacks ERR-M0-04-ENTITY-PERSPECTIVE")
+    expected_additions = {
+        "M0-04": (spec_path, adr_path),
+        "M0-04a": (archive_transfer_spec_path, archive_transfer_adr_path),
+    }
+    additions = {item.get("task"): item for item in errata.get("contract_additions", [])}
+    for task, (addition_spec, addition_adr) in expected_additions.items():
+        addition = additions.get(task)
+        if not addition:
+            raise ValueError(f"source-errata.json lacks the {task} contract addition")
+        if addition.get("specification_sha256") != hashlib.sha256(addition_spec.read_bytes()).hexdigest():
+            raise ValueError(f"{task} specification hash differs from source-errata.json")
+        if addition.get("decision_record_sha256") != hashlib.sha256(addition_adr.read_bytes()).hexdigest():
+            raise ValueError(f"{task} decision record hash differs from source-errata.json")
+    correction_ids = {item.get("id") for item in errata.get("corrections", [])}
+    for correction_id in ("ERR-M0-04-ENTITY-PERSPECTIVE", "ERR-M0-04A-ARCHIVE-TRANSFER"):
+        if correction_id not in correction_ids:
+            raise ValueError(f"source-errata.json lacks {correction_id}")
 
     expected = master_type_rows(master_path)
     data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
@@ -275,7 +319,7 @@ def verify(root: Path) -> int:
         row = by_name.get(name)
         if row is None or any(row[field] != value for field, value in expected_fields.items()):
             raise ValueError(f"Master §33 {name} row does not reflect the M0-04 contract")
-    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; required fields and Master §33 match")
+    print(f"DOCS VERIFY OK: {len(registered)} First-Class types; M0-04 and M0-04a contracts match Master §33")
     return 0
 
 

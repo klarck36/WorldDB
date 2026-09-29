@@ -47,6 +47,8 @@ FIRST_CLASS_TYPE_HEADER = (
 )
 ENTITY_PERSPECTIVE_SPEC = "entity_perspective_contract.md"
 ENTITY_PERSPECTIVE_ADR = "ADR-030-entity-perspective.md"
+ARCHIVE_TRANSFER_SPEC = "archive_transfer_contract.md"
+ARCHIVE_TRANSFER_ADR = "ADR-031-archive-transfer.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -200,8 +202,8 @@ def first_class_toml(records: list[dict[str, str | list[str]]]) -> str:
     return "\n\n".join(blocks) + "\n"
 
 
-def m0_04_master_copy(source_master: str, supplement: str) -> str:
-    """Apply the two M0-04 table clarifications and append the versioned supplement."""
+def m0_04_master_copy(source_master: str, supplements: list[str]) -> str:
+    """Apply the M0-04 §33 clarifications and append versioned M0 contract supplements."""
     updates = {
         "Entity": {
             2: "§§2.3, 3, M0-04 supplement",
@@ -247,8 +249,11 @@ def m0_04_master_copy(source_master: str, supplement: str) -> str:
         raise ValueError(f"M0-04 could not update Master §33 rows: {sorted(set(updates) - changed)}")
     master = "".join(lines).rstrip("\r\n")
     separator = "\r\n\r\n" if "\r\n" in source_master else "\n\n"
-    supplement_text = supplement.replace("\r\n", "\n").replace("\n", "\r\n" if "\r\n" in source_master else "\n")
-    return master + separator + supplement_text.strip("\r\n") + ("\r\n" if "\r\n" in source_master else "\n")
+    normalized_supplements = [
+        supplement.replace("\r\n", "\n").replace("\n", "\r\n" if "\r\n" in source_master else "\n").strip("\r\n")
+        for supplement in supplements
+    ]
+    return master + separator + separator.join(normalized_supplements) + ("\r\n" if "\r\n" in source_master else "\n")
 
 
 def replace_toml_field(block: str, field: str, value: str) -> str:
@@ -344,12 +349,19 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
 
     source_master_text = source_files[MASTER_NAME].decode("utf-8")
     master_lines = source_master_text.splitlines()
-    supplement_path = root / CONTRACT_DIR / ENTITY_PERSPECTIVE_SPEC
-    adr_path = root / CONTRACT_DIR / ENTITY_PERSPECTIVE_ADR
-    supplement_bytes = supplement_path.read_bytes()
-    adr_bytes = adr_path.read_bytes()
-    supplement_text = supplement_bytes.decode("utf-8")
-    working_master_text = m0_04_master_copy(source_master_text, supplement_text)
+    addition_files = (
+        ("M0-04", ENTITY_PERSPECTIVE_SPEC, ENTITY_PERSPECTIVE_ADR),
+        ("M0-04a", ARCHIVE_TRANSFER_SPEC, ARCHIVE_TRANSFER_ADR),
+    )
+    addition_payloads = {
+        name: (root / CONTRACT_DIR / name).read_bytes()
+        for _, specification, decision_record in addition_files
+        for name in (specification, decision_record)
+    }
+    working_master_text = m0_04_master_copy(
+        source_master_text,
+        [addition_payloads[specification].decode("utf-8") for _, specification, _ in addition_files],
+    )
     first_class_types = first_class_types_from_master(working_master_text)
     contract_files: dict[str, bytes] = dict(source_files)
     contract_files[MASTER_NAME] = working_master_text.encode("utf-8")
@@ -600,13 +612,14 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
         "working_copies": source_items,
         "contract_additions": [
             {
-                "task": "M0-04",
-                "specification": f"docs/contract/{ENTITY_PERSPECTIVE_SPEC}",
-                "specification_sha256": sha256(supplement_bytes),
-                "decision_record": f"docs/contract/{ENTITY_PERSPECTIVE_ADR}",
-                "decision_record_sha256": sha256(adr_bytes),
+                "task": task,
+                "specification": f"docs/contract/{specification}",
+                "specification_sha256": sha256(addition_payloads[specification]),
+                "decision_record": f"docs/contract/{decision_record}",
+                "decision_record_sha256": sha256(addition_payloads[decision_record]),
                 "status": "accepted working contract",
             }
+            for task, specification, decision_record in addition_files
         ],
         "corrections": [
             {
@@ -620,6 +633,19 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
                     f"docs/contract/{ENTITY_PERSPECTIVE_SPEC}",
                     f"docs/contract/{ENTITY_PERSPECTIVE_ADR}",
                     f"docs/source/{MASTER_NAME} §33",
+                ],
+            },
+            {
+                "id": "ERR-M0-04A-ARCHIVE-TRANSFER",
+                "file": MASTER_NAME,
+                "change": (
+                    "Appended the normative Archive and explicit HistorySpace transfer supplement "
+                    "after the M0-04 Entity/Perspective supplement."
+                ),
+                "authority": [
+                    f"docs/contract/{ARCHIVE_TRANSFER_SPEC}",
+                    f"docs/contract/{ARCHIVE_TRANSFER_ADR}",
+                    f"docs/source/{MASTER_NAME} §§2.1.1, 2.3.2, 15.2–15.3, 31.2, 31.4",
                 ],
             },
             {
@@ -725,7 +751,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "This is a structural source comparison; a text reference is not a product test.",
             "Open normative source gaps require an explicit M0-02a decision.",
             "The Master line index is the immutable line-number basis identified by MAIN-L keys.",
-            "The Entity/Perspective supplement is an explicit M0-04 working-contract addition, not a claim that the missing original v3.1 source was present.",
+            "The Entity/Perspective and Archive/HistorySpace supplements are explicit M0 working-contract additions, not a claim that the missing original v3.1 source was present.",
         ],
     }
     output_files[CONTRACT_DIR / ERRATA_NAME] = (
@@ -742,6 +768,8 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "verify_contract_docs.py",
             ENTITY_PERSPECTIVE_SPEC,
             ENTITY_PERSPECTIVE_ADR,
+            ARCHIVE_TRANSFER_SPEC,
+            ARCHIVE_TRANSFER_ADR,
         }
         and path.name not in expected_names
     ]

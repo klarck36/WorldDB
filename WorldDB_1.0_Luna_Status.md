@@ -23,7 +23,7 @@ Die vollständigen Tasktexte stehen in `WorldDB_1.0_Luna_Arbeitsplan.md`; ausfü
 | M0-02a | BLOCKED | `docs/contract/source_gaps.tsv`; `docs/contract/source-errata.json` | 54 Lücken präzise klassifiziert; Produktnormen nicht erfunden | Nicht fällig bis Entscheidung | Noch nicht fällig | 2026-09-29T02:00:47+02:00 | Produktentscheidung zu 52 HARD-Lücken und stärkerem WDB-HIS-001-Mastertext erforderlich |
 | M0-03 | DONE | `c4cbe8f`; `docs/M0-03-verification.md`; `docs/contract/verify_contract_docs.py` | 22 Typen; Docs Verify sowie Quell- und Plancheck bestanden | Entferntes Pflichtfeld und unregistrierter Typ in temporären Fixtures mit Exitcode 1 abgewiesen | Noch nicht fällig | geprüft 2026-09-29T02:09:32+02:00 | M0-04 DONE |
 | M0-04 | DONE | `fa95531`; `docs/M0-04-verification.md`; `docs/contract/ADR-030-entity-perspective.md`; `docs/contract/entity_perspective_contract.md` | Erzeugung, typed references, Typzuweisung, Metadatenhistorie, Retirement und Actions spezifiziert; Master-/Quellabgleich bestanden | Zwei temporäre Fixtures ohne EntityRetirement-Variante bzw. perspective.use mit Exitcode 1 abgewiesen | Nicht fällig (kein Code; M0-04) | geprüft 2026-09-29T02:29:05+02:00 | M0-04a READY |
-| M0-04a | READY | – | – | Noch nicht fällig | Noch nicht fällig | bereit geprüft 2026-09-29T02:29:05+02:00 | Archive-/HistorySpace-Transfervertrag spezifizieren |
+| M0-04a | RUNNING | – | – | – | Noch nicht fällig | Start 2026-09-29T02:43:06+02:00 | Archive/HistorySpace-Transfer-Vertrag anhand Master §§2.1.1, 2.3.2, 15.2–15.3 und 31 prüfen |
 
 ## Entscheidungs- und Release-Gates
 
