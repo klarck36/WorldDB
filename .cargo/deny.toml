@@ -1,0 +1,51 @@
+# WorldDB dependency policy, checked by cargo-deny 0.20.2.
+[graph]
+all-features = true
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+maximum-db-staleness = "P90D"
+ignore = []
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = true
+workspace-default-features = "allow"
+external-default-features = "deny"
+deny = [
+    { name = "anyhow", reason = "WorldDB errors remain typed; core error erasure is forbidden." },
+    { name = "thiserror", reason = "WorldDB errors remain hand-authored typed contracts, not derived opaque errors." },
+    { name = "failure", reason = "WorldDB errors remain typed; legacy universal error erasure is forbidden." },
+]
+
+[bans.build]
+executables = "deny"
+interpreted = "deny"
+enable-builtin-globs = true
+include-dependencies = true
+include-workspace = true
+
+[licenses]
+allow = ["MIT", "Apache-2.0"]
+include-dev = true
+include-build = true
+confidence-threshold = 0.95
+unused-allowed-license = "warn"
+
+[licenses.private]
+ignore = false
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

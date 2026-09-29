@@ -6,12 +6,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 
-if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
-    if (Test-Path -LiteralPath (Join-Path $cargoBin 'cargo.exe')) {
-        $env:PATH = "$cargoBin;$env:PATH"
-    }
+if (Test-Path -LiteralPath $cargoBin) {
+    $env:PATH = "$cargoBin;$env:PATH"
 }
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     throw 'Cargo was not found. Install the toolchain in rust-toolchain.toml and add cargo to PATH.'

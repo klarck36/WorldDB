@@ -1,0 +1,2 @@
+tool	version	install_rust_version
+cargo-deny	0.20.2	1.88.0

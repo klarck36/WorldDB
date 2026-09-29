@@ -1,0 +1,4 @@
+profile	args
+no-default	check --locked --workspace --all-targets --no-default-features
+default	check --locked --workspace --all-targets
+all-features	check --locked --workspace --all-targets --all-features
