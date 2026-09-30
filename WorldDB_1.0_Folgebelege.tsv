@@ -48,10 +48,15 @@ WDB-AST-002	M2-15c	PLANNED
 WDB-AST-002	M4-05	PLANNED				
 WDB-AST-002	M4-05d	PLANNED				
 WDB-AST-002	M8-14a	PLANNED				
-WDB-REF-001	M1-17d	PLANNED				
+WDB-REF-001	M1-17d	DONE	test:wire_records::tests::every_record_ref_roundtrips_and_unknown_noncanonical_or_malformed_refs_are_rejected;test:wire_records::tests::runtime_record_ref_tags_match_the_complete_policy_registry	PASS	2026-09-30T00:17:43+02:00	All 24 RecordRef wire variants roundtrip with fixed tags; unknown, noncanonical, and malformed refs fail closed.
 WDB-REF-001	M3-09	PLANNED				
 WDB-REF-001	M7-13	PLANNED				
-WDB-TYP-001	M1-17d	PLANNED				
+WDB-REF-003	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding admits only the registered EvidenceTargetRef subset and rejects disallowed variants.
+WDB-REF-004	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding matches the concrete Corrects endpoint matrix and rejects incompatible endpoints and self-loops.
+WDB-REF-004	M2-15a	PLANNED	-	-	-	Historische Corrects-Kompatibilität folgt M2-15a.
+WDB-REF-005	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding rejects disallowed DerivedFrom/ResultedFrom endpoints and has no Other/string escape.
+WDB-REF-005	M2-15a	PLANNED	-	-	-	Relationsemantik folgt M2-15a.
+WDB-TYP-001	M1-17d	DONE	test:wire_records::tests::all_implemented_records_match_fixed_golden_frames_and_round_trip;test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Canonical valid wire records reconstruct closed domain types; crafted endpoint violations are rejected by the record decoder.
 WDB-TYP-001	M3-14	PLANNED				
 WDB-TYP-001	M7-13	PLANNED				
 WDB-SCH-008	M2-08	PLANNED				
@@ -152,3 +157,6 @@ WDB-ENG-004	M9-13b	PLANNED
 WDB-ENG-005	M9-13b	PLANNED				
 WDB-ENG-006	M9-13b	PLANNED				
 WDB-ENG-007	M9-13b	PLANNED				
+WDB-REF-003	M1-14	DONE	test:record_refs::tests::all_record_ref_subset_conversions_match_the_closed_memberships	PASS	2026-09-29T18:50:12+02:00	The 21 admitted EvidenceTargetRef variants match the approved J-marked families, including ArchiveTransition; Source, Evidence, and direct EventRelation remain rejected.
+WDB-PRO-001	M2-07	PLANNED				Schema-aware proposition comparison in Proposition-mask projection.
+WDB-PRO-001	M2-17	PLANNED				Property tests for all four Proposition Equality components across resolution inputs.

@@ -76,3 +76,9 @@ Der Product Owner bestätigte, dass Git/GitHub wegen eigener Probleme, die währ
 Der lokale Vorfreigabepunkt M0-15 bestand auf Basis des Implementierungsstands `493506c7e144c5c1763ff560ac8aba35c5fc3118`. Saubere Windows- und WSL2/Linux-Checkouts bestanden jeweils den gelockten Offline-Build und `cargo xtask verify` mit 27 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. Die 22 Artefakte des M0-13-Evidenzmanifests sowie die Artefakte der beiden Runner-Manifeste stimmten mit ihren SHA-256-Werten überein. Das Gateprotokoll steht in `docs/gates/M0.md`.
 
 Der abschließende Verify-Lauf nach dem Eintragen von Gateprotokoll, Taskregister und Status bestand ebenfalls mit 27 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. M0-15 ist DONE; M1-01 ist READY. M0-14 und WDB-ENG-005 bleiben offen, M0 ist nicht abgeschlossen. GitHub-/Anbieter-CI einschließlich macOS wird nach der vom Product Owner angekündigten späteren Git-Integration vor M9-13b, RC und M10-10 nachgeholt.
+
+## Nachprüfung des M1-Gates am 30. September 2026
+
+Der diagnostische `--gate-precheck M1` deckte veraltete PLANNED-Primärstatus und fehlende paarbezogene M1-17d-Nachweise auf, obwohl die zugehörigen Tasks und Tests bereits abgeschlossen waren. Die Matrix wurde auf die tatsächlich ausgeführten LayerId-, RecordRef-, Provenance- und Decoder-Tests abgestimmt; ihre Folgebelege enthalten jetzt konkrete Testnamen, PASS-Ergebnis und Prüfzeitpunkt. Für WDB-PRO-001 ergänzte M1-09 einen negativen Projektionstest und ordnet den noch ausstehenden schema-aware Value-Vergleich M2-07/M2-17 zu.
+
+Nach der Korrektur bestehen regulärer Plancheck und Workspace-Tests (146 PASS, 0 FAIL; der Stunden-Fuzzer bleibt als einziger Test ignoriert). Der M1-Precheck meldet nur noch M1-18 und WDB-WIR-003/005. Diese bleiben offen, bis die erfolgreichen Fuzzläufe an den Source-Commit gebunden werden können; dadurch wird das M1-Gate nicht vorzeitig freigegeben.

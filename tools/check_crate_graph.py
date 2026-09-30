@@ -17,6 +17,16 @@ EXPECTED_CRATES = {
     "xtask": set(),
 }
 
+# These core dependencies are reviewed in policy/dependencies.tsv and their
+# task evidence; the hash dependency is added by M1-16.
+EXPECTED_EXTERNALS = {
+    "worlddb-core": {"blake3", "getrandom", "uuid"},
+    "worlddb-storage-file": set(),
+    "worlddb-cli": set(),
+    "worlddb-testkit": set(),
+    "xtask": set(),
+}
+
 
 def validate_graph(
     dependencies: dict[str, set[str]], external: dict[str, set[str]] | None = None
@@ -39,8 +49,17 @@ def validate_graph(
         if forbidden:
             errors.append(f"{crate} has forbidden workspace dependencies: {sorted(forbidden)}")
         unexpected_external = external.get(crate, set())
-        if unexpected_external:
-            errors.append(f"{crate} has unreviewed external dependencies: {sorted(unexpected_external)}")
+        allowed_external = EXPECTED_EXTERNALS.get(crate, set())
+        unreviewed_external = unexpected_external - allowed_external
+        missing_external = allowed_external - unexpected_external
+        if unreviewed_external:
+            errors.append(
+                f"{crate} has unreviewed external dependencies: {sorted(unreviewed_external)}"
+            )
+        if missing_external:
+            errors.append(
+                f"{crate} is missing expected reviewed external dependencies: {sorted(missing_external)}"
+            )
 
     return errors
 

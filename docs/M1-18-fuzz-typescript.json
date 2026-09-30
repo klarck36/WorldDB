@@ -1,0 +1,29 @@
+{
+  "run_id": "M1-18-ts-574f524c44444232-1790722644",
+  "seed": "0x574f524c44444232",
+  "started_unix_seconds": 1790722644,
+  "elapsed_seconds": 3615.07,
+  "cpu_seconds": 3600.156,
+  "rounds": 4935681,
+  "source_revision": "UNCOMMITTED_GIT_DEFERRED",
+  "decoder_targets": 1,
+  "calls_by_decoder": {
+    "typescript.json_envelope": 44435604
+  },
+  "calls_by_seed": {
+    "canonical": 4935682,
+    "empty_input": 4935682,
+    "truncate_last": 4935682,
+    "flip_one_bit": 4935682,
+    "append_junk": 4935682,
+    "duplicate_key": 4935682,
+    "malformed_escape": 4935682,
+    "oversized_object_fields": 4935682,
+    "oversized_object_graph": 4935682,
+    "oversized_scalar_string": 4822,
+    "oversized_bytes_value": 4822,
+    "oversized_utf8_frame": 4822
+  },
+  "crashes": [],
+  "result": "PASS_LOCAL"
+}

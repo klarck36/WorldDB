@@ -1,0 +1,10 @@
+seed_id	mutator	class	description
+canonical	identity	control	Versioned valid golden vector for the decoder entry.
+empty_input	empty	malformed	Replace the seed with zero bytes.
+truncate_last	truncate	malformed	Remove the final byte from the seed.
+flip_one_bit	flip	malformed	Flip one deterministic bit in the seed.
+append_junk	append	malformed	Append one deterministic byte.
+zero_one_byte	zero	malformed	Zero one deterministic byte.
+nonminimal_prefix	nonminimal	malformed	Use a nonminimal varint/prefix for the target family.
+oversized_declared_length	oversized	oversize	Declare a maximum-width payload length; reject before cast/allocation.
+tight_resource_limits	tight_limits	budget	Decode the original seed with zero/small resource budgets.

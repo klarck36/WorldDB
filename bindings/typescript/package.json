@@ -1,0 +1,19 @@
+{
+  "name": "@worlddb/transport-v1",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test ./test/transport.test.ts",
+    "typecheck": "tsc --noEmit",
+    "fuzz": "node ./test/transport_fuzz.ts --campaign",
+    "fuzz:smoke": "node ./test/transport_fuzz.ts --smoke",
+    "verify": "pnpm typecheck && pnpm test && pnpm fuzz:smoke"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2"
+  }
+}

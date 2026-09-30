@@ -1,0 +1,13 @@
+seed_id	category	description
+canonical	valid	Versioned golden envelopes for all supported scalar types.
+empty_input	malformed	Pass an empty JSON document.
+truncate_last	malformed	Remove the final JSON code unit.
+flip_one_bit	malformed	Flip one deterministic bit in a golden JSON code unit.
+append_junk	malformed	Append one non-JSON character.
+duplicate_key	malformed	Duplicate a protocol object key, including its semantic spelling.
+malformed_escape	malformed	Insert an invalid JSON escape into a scalar string.
+oversized_object_fields	oversize	Exceed the closed envelope object's field budget.
+oversized_object_graph	oversize	Exceed the preflight object-count budget.
+oversized_scalar_string	oversize	Exceed the largest permitted scalar string before parsing.
+oversized_bytes_value	oversize	Exceed the Base64url length corresponding to a 16 MiB byte value.
+oversized_utf8_frame	oversize	Exceed the 64 MiB frame limit with multibyte JSON text.

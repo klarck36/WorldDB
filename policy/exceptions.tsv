@@ -1,1 +1,2 @@
 exception_id	owner	reason	expires_on
+WDB-EXC-0001	Luna	Private fallible UUIDv7 constructor is verified in M1-01 but has no product caller before M4; keep it private under ADR-037 and remove this exception when the first product action uses it.	2026-10-31

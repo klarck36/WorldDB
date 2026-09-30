@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::path::PathBuf;
-use std::process::{self, Command};
+use std::process::{self, Command, ExitStatus};
 use std::time::Instant;
 
 const MANIFEST_RELATIVE_PATH: &str = "tools/verify/steps.tsv";
@@ -101,10 +101,7 @@ fn run() -> Result<()> {
                     .join(" ");
                 println!("[RUN ] {}: {}", step.id, command_line);
                 let start = Instant::now();
-                let status = Command::new(&program)
-                    .args(&step.args)
-                    .current_dir(&root)
-                    .status();
+                let status = run_command(&program, &step.args, &root);
                 match status {
                     Ok(status) if status.success() => {
                         println!("[PASS] {} ({:.2?})", step.id, start.elapsed());
@@ -374,19 +371,59 @@ fn validate_requested_skips(profile: &Profile, skips: &HashSet<String>) -> Resul
 }
 
 fn resolve_program(program: &str) -> String {
-    if program != "python" {
-        return program.to_owned();
+    if program == "python" {
+        return env::var("WORLDDB_PYTHON")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "python".to_owned()
+                } else {
+                    "python3".to_owned()
+                }
+            });
     }
-    env::var("WORLDDB_PYTHON")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| {
-            if cfg!(windows) {
-                "python".to_owned()
-            } else {
-                "python3".to_owned()
+
+    #[cfg(windows)]
+    if PathBuf::from(program).components().count() == 1 {
+        if let Some(path) = env::var_os("PATH") {
+            for extension in ["cmd", "bat"] {
+                let candidate_name = format!("{program}.{extension}");
+                for directory in env::split_paths(&path) {
+                    let candidate = directory.join(&candidate_name);
+                    if candidate.is_file() {
+                        return candidate.to_string_lossy().into_owned();
+                    }
+                }
             }
-        })
+        }
+    }
+
+    program.to_owned()
+}
+
+fn run_command(
+    program: &str,
+    args: &[String],
+    root: &std::path::Path,
+) -> std::io::Result<ExitStatus> {
+    #[cfg(windows)]
+    if matches!(
+        PathBuf::from(program)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some(extension) if extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    ) {
+        return Command::new("cmd.exe")
+            .arg("/D")
+            .arg("/C")
+            .arg(program)
+            .args(args)
+            .current_dir(root)
+            .status();
+    }
+
+    Command::new(program).args(args).current_dir(root).status()
 }
 
 fn print_help() {

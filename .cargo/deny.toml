@@ -27,12 +27,36 @@ deny = [
     { name = "failure", reason = "WorldDB errors remain typed; legacy universal error erasure is forbidden." },
 ]
 
+# cc enables shlex's default/std feature as its locked build dependency. Keep
+# the workspace-wide default-feature ban and allow only this exact package's
+# reviewed feature set.
+[[bans.features]]
+crate = "shlex:2.0.1"
+allow = ["default", "std"]
+
 [bans.build]
 executables = "deny"
 interpreted = "deny"
 enable-builtin-globs = true
 include-dependencies = true
 include-workspace = true
+
+# libc ships this developer utility, which WorldDB never runs during a build.
+# Keep the interpreter scan enabled and exempt only this exact source path.
+[[bans.build.bypass]]
+crate = "libc"
+allow-globs = ["etc/libc-util.py"]
+
+# BLAKE3 includes these maintainer/release scripts in its published crate;
+# none is invoked by its build script. Keep the scan enabled and exempt only
+# the exact paths present in the locked 1.8.7 release.
+[[bans.build.bypass]]
+crate = "blake3:1.8.7"
+allow-globs = [
+    ".github/workflows/build_b3sum.py",
+    ".github/workflows/upload_github_release_asset.py",
+    "c/test.py",
+]
 
 [licenses]
 allow = ["MIT", "Apache-2.0"]
