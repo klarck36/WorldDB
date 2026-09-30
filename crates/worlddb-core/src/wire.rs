@@ -1147,6 +1147,47 @@ mod tests {
     }
 
     #[test]
+    fn decoder_limit_defaults_are_policy_separate_from_wire_semantics() {
+        let defaults = DecoderLimits::DEFAULT;
+        assert_eq!(defaults, DecoderLimits::default());
+        assert_eq!(defaults.max_frame_bytes, 64 * 1024 * 1024);
+        assert_eq!(defaults.max_string_or_bytes, 16 * 1024 * 1024);
+        assert_eq!(defaults.max_fields_per_record, 256);
+        assert_eq!(defaults.max_array_items, 1_000_000);
+        assert_eq!(defaults.max_collection_bytes, 64 * 1024 * 1024);
+        assert_eq!(defaults.max_batch_bytes, 256 * 1024 * 1024);
+        assert_eq!(defaults.max_records_per_batch, 1_000_000);
+        assert_eq!(defaults.max_nesting_depth, 8);
+
+        let value = Value::String(String::from("four"));
+        let canonical_wire = encode_value(&value);
+        assert!(matches!(
+            decode_value(&canonical_wire),
+            Ok(Value::String(decoded)) if decoded == "four"
+        ));
+        assert!(matches!(
+            decode_value_with_limits(&canonical_wire, &defaults),
+            Ok(Value::String(decoded)) if decoded == "four"
+        ));
+
+        let restrictive_policy = DecoderLimits {
+            max_string_or_bytes: 3,
+            ..defaults
+        };
+        assert!(matches!(
+            decode_value_with_limits(&canonical_wire, &restrictive_policy),
+            Err(WireError::ResourceLimitExceeded {
+                resource: DecodeResource::StringOrBytes,
+                limit: 3,
+                actual: 4,
+            })
+        ));
+        assert_eq!(encode_value(&value), canonical_wire);
+        assert_eq!(super::FRAME_MAGIC, *b"WorldDB\0");
+        assert_eq!((super::FORMAT_MAJOR, super::FORMAT_MINOR), (1, 0));
+    }
+
+    #[test]
     fn decoder_depth_budget_is_checked_before_value_decoding() {
         let limits = DecoderLimits {
             max_nesting_depth: 1,
