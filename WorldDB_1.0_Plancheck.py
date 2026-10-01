@@ -185,13 +185,24 @@ def main() -> int:
             errors.append(f"{milestone}: gate dependencies differ from the declared milestone gate scope")
         if milestone != "M0":
             prior = f"M{int(milestone[1:]) - 1}"
-            if by_milestone[prior][-1] not in dep_graph[ids[0]]:
-                errors.append(f"{milestone}: first task must depend on previous gate")
+            required_local_prerequisite = by_milestone[prior][-1]
+            if milestone == "M6":
+                # M5-22a releases only Windows-local development; the complete
+                # M5-23 platform gate remains mandatory for RC and publication.
+                required_local_prerequisite = "M5-22a"
+            if required_local_prerequisite not in dep_graph[ids[0]]:
+                errors.append(
+                    f"{milestone}: first task must depend on local prerequisite {required_local_prerequisite}"
+                )
 
     if "M0-14" not in dep_graph.get("M9-13b", []):
         errors.append("M9-13b must wait for the deferred M0-14 CI matrix before the RC architecture audit")
     if "M0-14" not in dep_graph.get("M10-10", []):
         errors.append("M10-10 must wait for the deferred M0-14 CI matrix before publication")
+    if "M5-23" not in dep_graph.get("M9-13b", []):
+        errors.append("M9-13b must wait for the complete M5-23 platform gate before the RC architecture audit")
+    if "M5-23" not in dep_graph.get("M10-10", []):
+        errors.append("M10-10 must wait for the complete M5-23 platform gate before publication")
 
     gate_ids = {ids[-1] for milestone, ids in by_milestone.items() if milestone != "M10"}
 
@@ -266,6 +277,15 @@ def main() -> int:
             args.gate_precheck == "M4"
             and m4_15_status in {"BLOCKED", "WAITING_EXTERNAL"}
         )
+        m5_08_status = task_by_id.get("M5-08", {}).get("status")
+        m5_10_status = task_by_id.get("M5-10", {}).get("status")
+        m5_23_status = task_by_id.get("M5-23", {}).get("status")
+        deferred_m5_platform = (
+            args.gate_precheck in {"M6", "M7", "M8"}
+            and m5_08_status in {"BLOCKED", "WAITING_EXTERNAL"}
+            and m5_10_status in {"BLOCKED", "WAITING_EXTERNAL"}
+            and m5_23_status != "DONE"
+        )
         for task_id in milestone_ids[:-1]:
             if task_by_id[task_id]["status"] != "DONE":
                 if args.gate_precheck == "M0" and task_id == "M0-14" and deferred_ci:
@@ -275,6 +295,8 @@ def main() -> int:
                 errors.append(f"{args.gate_precheck}: prerequisite task {task_id} is not DONE")
         if args.gate_precheck != "M0":
             prior_gate = by_milestone[f"M{int(args.gate_precheck[1:]) - 1}"][-1]
+            if args.gate_precheck == "M6":
+                prior_gate = "M5-22a"
             if task_by_id[prior_gate]["status"] != "DONE":
                 errors.append(f"{args.gate_precheck}: prior gate {prior_gate} is not DONE")
         for row in invariant_rows:
@@ -285,6 +307,8 @@ def main() -> int:
                 if deferred_ci and row["invariant_id"] == "WDB-ENG-005":
                     continue
                 if deferred_m4_platform and primary == "M4-15":
+                    continue
+                if deferred_m5_platform and primary in {"M5-08", "M5-10"}:
                     continue
                 # The matrix status covers the invariant's full lifecycle,
                 # including future follow-ups (for example crash durability).
@@ -297,6 +321,8 @@ def main() -> int:
                     errors.append(f"{args.gate_precheck}: {row['invariant_id']} lacks primary positive/negative evidence")
             for followup in (item for item in row["followup_evidence_tasks"].split(",") if item):
                 if followup in task_position and task_position[followup] < gate_position:
+                    if deferred_m5_platform and followup in {"M5-08", "M5-10"}:
+                        continue
                     task = task_by_id[followup]
                     proof = followup_by_pair.get((row["invariant_id"], followup))
                     if task["status"] != "DONE" or not proof or not (
@@ -321,6 +347,8 @@ def main() -> int:
             print("DEFERRED RELEASE PREREQUISITE: M0-14 and WDB-ENG-005 remain open; M9-13b and M10-10 are blocked until CI passes")
         if deferred_m4_platform:
             print("DEFERRED PLATFORM PREREQUISITE: M4-15 remains open; APFS Machine-durability is unsupported until M5-10/M5-23 platform evidence passes")
+        if deferred_m5_platform:
+            print("DEFERRED PLATFORM PREREQUISITE: M5-08/M5-10/M5-23 remain open; M6-M8 local work is allowed after M5-22a, but RC and publication remain blocked")
     return 0
 
 
