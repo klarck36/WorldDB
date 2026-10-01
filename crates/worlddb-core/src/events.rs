@@ -228,6 +228,48 @@ impl EventDraft {
             event_time,
         })
     }
+
+    /// Returns the HistorySpace that will own the Event.
+    #[must_use]
+    pub const fn history_space_id(&self) -> HistorySpaceId {
+        self.history_space_id
+    }
+
+    /// Returns the explicit Layer that will own the Event.
+    #[must_use]
+    pub const fn layer_id(&self) -> LayerId {
+        self.layer_id
+    }
+
+    /// Returns the schema EventKind identity used to validate this draft.
+    #[must_use]
+    pub const fn event_kind_id(&self) -> EventKindId {
+        self.event_kind_id
+    }
+
+    /// Returns the EventKind schema revision used to validate this draft.
+    #[must_use]
+    pub const fn event_kind_revision(&self) -> Revision {
+        self.event_kind_revision
+    }
+
+    /// Returns the canonical, already shape-validated participants.
+    #[must_use]
+    pub const fn participants(&self) -> &Participants {
+        &self.participants
+    }
+
+    /// Returns the canonical, already shape-validated attributes.
+    #[must_use]
+    pub const fn attributes(&self) -> &EventAttributes {
+        &self.attributes
+    }
+
+    /// Returns the validated event instant or span.
+    #[must_use]
+    pub const fn event_time(&self) -> EventTime {
+        self.event_time
+    }
 }
 
 /// One immutable event history record.
@@ -888,21 +930,36 @@ mod tests {
     use std::fmt;
 
     use super::{
-        Event, EventAttributeValue, EventDraft, EventMask, EventMaskRetraction, EventParticipant,
-        EventRecordError, EventRetraction, EventSpanClosure, Participants,
+        Event, EventAttributeValue, EventAttributes, EventDraft, EventMask, EventMaskRetraction,
+        EventParticipant, EventRecordError, EventRetraction, EventSpanClosure, EventWireFields,
+        Participants,
     };
     use crate::UInt;
+    use crate::archive::ArchiveTargetRef;
+    use crate::archive_projection::{ArchiveHistoryReferenceModel, ArchiveTargetRecord};
+    use crate::catalog::{HistorySpaceCatalog, HistorySpaceDefinition};
+    use crate::event_projection::{
+        EventCandidateQuery, EventHistory, EventProjectionError, EventTimeFilter,
+        event_is_authorized, full_scan_event_candidates, prepare_event_correction,
+    };
     use crate::ids::{
         DomainId, EntityId, EventAttributeId, EventId, EventKindId as SchemaEventKindId,
         EventMaskId, EventMaskRetractionId, EventRetractionId, EventRoleId, EventSpanClosureId,
-        HistorySpaceId, IdValidationError, LayerId, Revision, RevisionError, TimelineId,
+        HistorySpaceId, IdValidationError, LayerId, ProvenanceId, Revision, RevisionError,
+        SchemaRevision, TimelineId,
     };
+    use crate::layers::{LayerDefinition, LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
     use crate::schema::{
         ConstraintSet, EntityTypeConstraint, EventAttributeDefinition, EventKindDefinition,
         EventRoleDefinition, EventTimeConstraint, EventTimeForm, Lifecycle, RoleCardinality,
         SchemaDefinitionError, ValueKind,
     };
-    use crate::temporal::{EventTime, TemporalError, Timeline, WorldTime};
+    use crate::security::{
+        Capability, CapabilityGrant, CapabilityRule, FieldSelector, GrantEffect, PolicyBundle,
+        PolicyScope, PolicySubject, Principal, RoleAssignment, RoleDefinition,
+        SecurityPolicySnapshot,
+    };
+    use crate::temporal::{EventTime, RecordedAsOf, TemporalError, Timeline, WorldTime};
     use crate::values::{Symbol, SymbolError, Value};
 
     type TestResult = Result<(), TestError>;
@@ -915,6 +972,13 @@ mod tests {
         Schema(SchemaDefinitionError),
         Symbol(SymbolError),
         Temporal(TemporalError),
+        EventProjection(EventProjectionError),
+        Archive(crate::archive_projection::ArchiveProjectionError),
+        History(crate::catalog::HistorySpaceError),
+        Layer(LayerSchemaError),
+        Policy(crate::security::SecurityPolicyError),
+        Role(crate::security::RoleDefinitionError),
+        Bundle(crate::security::PolicyBundleError),
     }
 
     impl fmt::Display for TestError {
@@ -926,6 +990,13 @@ mod tests {
                 Self::Schema(error) => write!(formatter, "{error}"),
                 Self::Symbol(error) => write!(formatter, "{error}"),
                 Self::Temporal(error) => write!(formatter, "{error}"),
+                Self::EventProjection(error) => write!(formatter, "{error}"),
+                Self::Archive(error) => write!(formatter, "{error}"),
+                Self::History(error) => write!(formatter, "{error}"),
+                Self::Layer(error) => write!(formatter, "{error}"),
+                Self::Policy(error) => write!(formatter, "{error}"),
+                Self::Role(error) => write!(formatter, "{error}"),
+                Self::Bundle(error) => write!(formatter, "{error}"),
             }
         }
     }
@@ -948,6 +1019,13 @@ mod tests {
     error_conversion!(SchemaDefinitionError, Schema);
     error_conversion!(SymbolError, Symbol);
     error_conversion!(TemporalError, Temporal);
+    error_conversion!(EventProjectionError, EventProjection);
+    error_conversion!(crate::archive_projection::ArchiveProjectionError, Archive);
+    error_conversion!(crate::catalog::HistorySpaceError, History);
+    error_conversion!(LayerSchemaError, Layer);
+    error_conversion!(crate::security::SecurityPolicyError, Policy);
+    error_conversion!(crate::security::RoleDefinitionError, Role);
+    error_conversion!(crate::security::PolicyBundleError, Bundle);
 
     macro_rules! value {
         ($result:expr) => {
@@ -1046,6 +1124,98 @@ mod tests {
             attributes()?,
             event_time,
         )))
+    }
+
+    fn projection_layers() -> Result<(LayerSchemaSnapshot, crate::ids::LayerId), TestError> {
+        let layer = value!(uuid::<LayerId>(6));
+        let revision = SchemaRevision::from_published_revision(Revision::GENESIS);
+        let snapshot = LayerSchemaSnapshot::new(
+            revision,
+            vec![LayerDefinition::new(
+                layer,
+                value!(Symbol::new("base")),
+                None,
+                0,
+                Lifecycle::Active,
+                revision,
+            )],
+            layer,
+        )?;
+        Ok((snapshot, layer))
+    }
+
+    fn archive_events(events: &[Event]) -> Result<ArchiveHistoryReferenceModel, TestError> {
+        let targets = events
+            .iter()
+            .map(|event| {
+                Ok(ArchiveTargetRecord::new(
+                    ArchiveTargetRef::Event(event.id()),
+                    event.created_revision(),
+                ))
+            })
+            .collect::<Result<Vec<_>, TestError>>()?;
+        Ok(ArchiveHistoryReferenceModel::new(targets, Vec::new())?)
+    }
+
+    #[test]
+    fn event_is_hidden_when_a_candidate_field_is_denied() -> TestResult {
+        let kind = event_kind(EventTimeForm::InstantOnly, 1, Some(2), Revision::GENESIS)?;
+        let event = value!(Event::new(
+            value!(uuid::<EventId>(85)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(
+                    crate::temporal::Timeline::new(value!(uuid::<TimelineId>(86))),
+                    10,
+                ))
+            )?,
+            Revision::GENESIS,
+        ));
+        let principal = value!(uuid::<crate::ids::PrincipalId>(87));
+        let role_id = value!(uuid::<crate::ids::RoleId>(88));
+        let assignment_id = value!(uuid::<crate::ids::RoleAssignmentId>(89));
+        let role = RoleDefinition::new(
+            role_id,
+            "event_reader",
+            PolicyBundle::from_grants([
+                CapabilityGrant::new(Capability::HistorySpaceRead, GrantEffect::Allow),
+                CapabilityGrant::new(Capability::LayerRead, GrantEffect::Allow),
+                CapabilityGrant::new(Capability::EventRead, GrantEffect::Allow),
+                CapabilityGrant::new(Capability::FieldRead, GrantEffect::Allow),
+            ])?,
+        )?;
+        let assignment =
+            RoleAssignment::new(assignment_id, principal, role_id, PolicyScope::project());
+        let allow = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal)],
+            vec![role.clone()],
+            vec![assignment],
+            Vec::new(),
+        )?;
+        assert!(event_is_authorized(&allow, principal, &event));
+        let deny_participant = CapabilityRule::new(
+            value!(uuid::<crate::ids::PolicyRuleId>(90)),
+            PolicySubject::Principal(principal),
+            CapabilityGrant::new(Capability::FieldRead, GrantEffect::Deny),
+            PolicyScope::new(
+                Some(event.history_space_id()),
+                Some(event.layer_id()),
+                Some(crate::RecordRef::Event(event.id())),
+                Some(FieldSelector::EventParticipant(
+                    kind.event_kind_id(),
+                    value!(uuid::<EventRoleId>(1)),
+                )),
+                None,
+            ),
+        );
+        let denied = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal)],
+            vec![role],
+            vec![assignment],
+            vec![deny_participant],
+        )?;
+        assert!(!event_is_authorized(&denied, principal, &event));
+        Ok(())
     }
 
     #[test]
@@ -1378,6 +1548,482 @@ mod tests {
                 }
             ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn event_projection_respects_schema_time_closure_retraction_and_half_open_filters() -> TestResult
+    {
+        let root = value!(uuid::<HistorySpaceId>(5));
+        let (layer_snapshot, _) = projection_layers()?;
+        let history_spaces = value!(HistorySpaceCatalog::new(vec![HistorySpaceDefinition::new(
+            root,
+            None,
+            Revision::GENESIS,
+        )?]));
+        let timeline = Timeline::new(value!(uuid::<TimelineId>(30)));
+        let kind = event_kind(
+            EventTimeForm::OpenSpanAllowed,
+            1,
+            Some(2),
+            Revision::GENESIS,
+        )?;
+        let closed_span = value!(Event::new(
+            value!(uuid::<EventId>(31)),
+            draft(
+                &kind,
+                EventTime::Span {
+                    start: WorldTime::from_nanoseconds(timeline, 10),
+                    end: None
+                }
+            )?,
+            value!(revision(2)),
+        ));
+        let closure = value!(EventSpanClosure::new(
+            value!(uuid::<EventSpanClosureId>(32)),
+            &closed_span,
+            WorldTime::from_nanoseconds(timeline, 20),
+            value!(revision(4)),
+        ));
+        let instant_at_end = value!(Event::new(
+            value!(uuid::<EventId>(33)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 20))
+            )?,
+            value!(revision(2)),
+        ));
+        let still_open = value!(Event::new(
+            value!(uuid::<EventId>(34)),
+            draft(
+                &kind,
+                EventTime::Span {
+                    start: WorldTime::from_nanoseconds(timeline, 25),
+                    end: None
+                }
+            )?,
+            value!(revision(2)),
+        ));
+        let later_retracted = value!(Event::new(
+            value!(uuid::<EventId>(35)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 15))
+            )?,
+            value!(revision(2)),
+        ));
+        let retraction = value!(EventRetraction::new(
+            value!(uuid::<EventRetractionId>(36)),
+            &later_retracted,
+            "event withdrawn",
+            value!(revision(5)),
+        ));
+        let events = vec![
+            closed_span.clone(),
+            instant_at_end.clone(),
+            still_open.clone(),
+            later_retracted.clone(),
+        ];
+        let archive = archive_events(&events)?;
+        let query_before_closure = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            RecordedAsOf::from_published_revision(value!(revision(3))),
+            EventTimeFilter::Overlaps {
+                start: WorldTime::from_nanoseconds(timeline, 15),
+                end: WorldTime::from_nanoseconds(timeline, 20),
+            },
+        );
+        let as_of_before_closure = full_scan_event_candidates(
+            EventHistory::new(
+                &events,
+                std::slice::from_ref(&closure),
+                std::slice::from_ref(&retraction),
+                &archive,
+                std::slice::from_ref(&kind),
+            ),
+            &history_spaces,
+            &layer_snapshot,
+            &query_before_closure,
+        )?;
+        assert_eq!(
+            as_of_before_closure
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<Vec<_>>(),
+            vec![closed_span.id(), later_retracted.id()]
+        );
+
+        let query_at_end = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            RecordedAsOf::from_published_revision(value!(revision(4))),
+            EventTimeFilter::At(WorldTime::from_nanoseconds(timeline, 20)),
+        );
+        let at_exclusive_end = full_scan_event_candidates(
+            EventHistory::new(
+                &events,
+                std::slice::from_ref(&closure),
+                std::slice::from_ref(&retraction),
+                &archive,
+                std::slice::from_ref(&kind),
+            ),
+            &history_spaces,
+            &layer_snapshot,
+            &query_at_end,
+        )?;
+        assert_eq!(
+            at_exclusive_end
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<Vec<_>>(),
+            vec![instant_at_end.id()]
+        );
+
+        let query_after_retraction = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            RecordedAsOf::from_published_revision(value!(revision(5))),
+            EventTimeFilter::At(WorldTime::from_nanoseconds(timeline, 15)),
+        );
+        let after_retraction = full_scan_event_candidates(
+            EventHistory::new(
+                &events,
+                std::slice::from_ref(&closure),
+                std::slice::from_ref(&retraction),
+                &archive,
+                std::slice::from_ref(&kind),
+            ),
+            &history_spaces,
+            &layer_snapshot,
+            &query_after_retraction,
+        )?;
+        assert_eq!(
+            after_retraction
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<Vec<_>>(),
+            vec![closed_span.id()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn event_mask_requires_strict_precedence_and_retracts_independently() -> TestResult {
+        let root = value!(uuid::<HistorySpaceId>(5));
+        let child = value!(uuid::<HistorySpaceId>(51));
+        let history_spaces = value!(HistorySpaceCatalog::new(vec![
+            HistorySpaceDefinition::new(root, None, Revision::GENESIS)?,
+            HistorySpaceDefinition::new(child, Some(root), value!(revision(2)))?,
+        ]));
+        let (layer_snapshot, layer) = projection_layers()?;
+        let kind = event_kind(EventTimeForm::InstantOnly, 1, Some(2), Revision::GENESIS)?;
+        let event = value!(Event::new(
+            value!(uuid::<EventId>(52)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(
+                    Timeline::new(value!(uuid::<TimelineId>(53))),
+                    12,
+                )),
+            )?,
+            value!(revision(2)),
+        ));
+        let mask = EventMask::new(
+            value!(uuid::<EventMaskId>(54)),
+            child,
+            layer,
+            event.id(),
+            value!(revision(3)),
+        );
+        let mask_retraction = value!(EventMaskRetraction::new(
+            value!(uuid::<EventMaskRetractionId>(55)),
+            &mask,
+            "mask superseded",
+            value!(revision(5)),
+        ));
+        let event_retraction = value!(EventRetraction::new(
+            value!(uuid::<EventRetractionId>(57)),
+            &event,
+            "event independently withdrawn",
+            value!(revision(6)),
+        ));
+        let archive = value!(ArchiveHistoryReferenceModel::new(
+            vec![
+                ArchiveTargetRecord::new(
+                    ArchiveTargetRef::Event(event.id()),
+                    event.created_revision()
+                ),
+                ArchiveTargetRecord::new(
+                    ArchiveTargetRef::EventMask(mask.id()),
+                    mask.created_revision()
+                ),
+            ],
+            Vec::new(),
+        ));
+        let events = [event.clone()];
+        let masks = [mask];
+        let retractions = [mask_retraction];
+        let query = |revision_value| {
+            EventCandidateQuery::new(
+                child,
+                LayerSelection::BaseOnly,
+                RecordedAsOf::from_published_revision(revision_value),
+                EventTimeFilter::Any,
+            )
+        };
+
+        let before_mask = full_scan_event_candidates(
+            EventHistory::new(&events, &[], &[], &archive, std::slice::from_ref(&kind))
+                .with_masks(&masks, &retractions),
+            &history_spaces,
+            &layer_snapshot,
+            &query(value!(revision(2))),
+        )?;
+        assert_eq!(before_mask.len(), 1);
+
+        let hidden = full_scan_event_candidates(
+            EventHistory::new(&events, &[], &[], &archive, std::slice::from_ref(&kind))
+                .with_masks(&masks, &retractions),
+            &history_spaces,
+            &layer_snapshot,
+            &query(value!(revision(4))),
+        )?;
+        assert!(hidden.is_empty());
+
+        let visible_after_mask_retraction = full_scan_event_candidates(
+            EventHistory::new(&events, &[], &[], &archive, std::slice::from_ref(&kind))
+                .with_masks(&masks, &retractions),
+            &history_spaces,
+            &layer_snapshot,
+            &query(value!(revision(5))),
+        )?;
+        assert_eq!(
+            visible_after_mask_retraction
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<Vec<_>>(),
+            vec![event.id()]
+        );
+
+        let independently_retracted = full_scan_event_candidates(
+            EventHistory::new(
+                &events,
+                &[],
+                std::slice::from_ref(&event_retraction),
+                &archive,
+                std::slice::from_ref(&kind),
+            )
+            .with_masks(&[], &[]),
+            &history_spaces,
+            &layer_snapshot,
+            &query(value!(revision(6))),
+        )?;
+        assert!(independently_retracted.is_empty());
+
+        let same_precedence_mask = [EventMask::new(
+            value!(uuid::<EventMaskId>(56)),
+            root,
+            layer,
+            event.id(),
+            value!(revision(3)),
+        )];
+        let same_precedence_archive = value!(ArchiveHistoryReferenceModel::new(
+            vec![
+                ArchiveTargetRecord::new(
+                    ArchiveTargetRef::Event(event.id()),
+                    event.created_revision()
+                ),
+                ArchiveTargetRecord::new(
+                    ArchiveTargetRef::EventMask(same_precedence_mask[0].id()),
+                    same_precedence_mask[0].created_revision(),
+                ),
+            ],
+            Vec::new(),
+        ));
+        let equal_precedence_result = full_scan_event_candidates(
+            EventHistory::new(
+                &events,
+                &[],
+                &[],
+                &same_precedence_archive,
+                std::slice::from_ref(&kind),
+            )
+            .with_masks(&same_precedence_mask, &[]),
+            &history_spaces,
+            &layer_snapshot,
+            &query(value!(revision(4))),
+        )?;
+        assert_eq!(equal_precedence_result.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn event_projection_revalidates_decoded_role_attribute_and_time_shape() -> TestResult {
+        let root = value!(uuid::<HistorySpaceId>(5));
+        let (layer_snapshot, layer) = projection_layers()?;
+        let history_spaces = value!(HistorySpaceCatalog::new(vec![HistorySpaceDefinition::new(
+            root,
+            None,
+            Revision::GENESIS,
+        )?]));
+        let timeline = Timeline::new(value!(uuid::<TimelineId>(48)));
+        let kind = event_kind(EventTimeForm::InstantOnly, 1, Some(2), Revision::GENESIS)?;
+        let malformed = Event::from_wire_fields(
+            value!(uuid::<EventId>(49)),
+            EventWireFields::new(
+                root,
+                layer,
+                kind.event_kind_id(),
+                Participants::from_wire_fields(Vec::new()),
+                EventAttributes::from_wire_fields(Vec::new()),
+                EventTime::Span {
+                    start: WorldTime::from_nanoseconds(timeline, 10),
+                    end: None,
+                },
+            ),
+            value!(revision(2)),
+        );
+        let archive = archive_events(std::slice::from_ref(&malformed))?;
+        let query = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            RecordedAsOf::from_published_revision(value!(revision(2))),
+            EventTimeFilter::Any,
+        );
+        assert!(matches!(
+            full_scan_event_candidates(
+                EventHistory::new(
+                    std::slice::from_ref(&malformed),
+                    &[],
+                    &[],
+                    &archive,
+                    std::slice::from_ref(&kind),
+                ),
+                &history_spaces,
+                &layer_snapshot,
+                &query,
+            ),
+            Err(EventProjectionError::Event(
+                EventRecordError::RoleCardinalityViolation { .. }
+            ))
+        ));
+        let malformed_time = Event::from_wire_fields(
+            value!(uuid::<EventId>(50)),
+            EventWireFields::new(
+                root,
+                layer,
+                kind.event_kind_id(),
+                Participants::from_wire_fields(participants(&[8])?),
+                EventAttributes::from_wire_fields(attributes()?),
+                EventTime::Span {
+                    start: WorldTime::from_nanoseconds(timeline, 10),
+                    end: None,
+                },
+            ),
+            value!(revision(2)),
+        );
+        let time_archive = archive_events(std::slice::from_ref(&malformed_time))?;
+        assert!(matches!(
+            full_scan_event_candidates(
+                EventHistory::new(
+                    std::slice::from_ref(&malformed_time),
+                    &[],
+                    &[],
+                    &time_archive,
+                    std::slice::from_ref(&kind),
+                ),
+                &history_spaces,
+                &layer_snapshot,
+                &query,
+            ),
+            Err(EventProjectionError::Event(
+                EventRecordError::EventTimeFormMismatch {
+                    expected: EventTimeForm::InstantOnly
+                }
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active() -> TestResult {
+        let root = value!(uuid::<HistorySpaceId>(5));
+        let (layer_snapshot, _) = projection_layers()?;
+        let history_spaces = value!(HistorySpaceCatalog::new(vec![HistorySpaceDefinition::new(
+            root,
+            None,
+            Revision::GENESIS,
+        )?]));
+        let timeline = Timeline::new(value!(uuid::<TimelineId>(37)));
+        let kind = event_kind(EventTimeForm::InstantOnly, 1, Some(2), Revision::GENESIS)?;
+        let original = value!(Event::new(
+            value!(uuid::<EventId>(38)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 10))
+            )?,
+            value!(revision(2)),
+        ));
+        let (replacement, corrects, correction) = prepare_event_correction(
+            &original,
+            value!(uuid::<EventId>(39)),
+            draft(
+                &kind,
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 10)),
+            )?,
+            value!(uuid::<ProvenanceId>(40)),
+            value!(revision(3)),
+            |old_kind, new_kind| old_kind == new_kind,
+        )?;
+        assert_eq!(correction.replacement_id(), replacement.id());
+        assert_eq!(replacement.event_time(), original.event_time());
+        assert_eq!(
+            corrects.from(),
+            crate::ProvenanceEndpointRef::Event(replacement.id())
+        );
+        assert_eq!(
+            corrects.to(),
+            crate::ProvenanceEndpointRef::Event(original.id())
+        );
+        assert_eq!(corrects.relation(), crate::ProvenanceRelation::Corrects);
+        assert_eq!(corrects.created_revision(), replacement.created_revision());
+
+        let events = vec![original.clone(), replacement.clone()];
+        let archive = archive_events(&events)?;
+        let query = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            RecordedAsOf::from_published_revision(value!(revision(3))),
+            EventTimeFilter::Any,
+        );
+        let visible = full_scan_event_candidates(
+            EventHistory::new(&events, &[], &[], &archive, std::slice::from_ref(&kind)),
+            &history_spaces,
+            &layer_snapshot,
+            &query,
+        )?;
+        assert_eq!(
+            visible
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<Vec<_>>(),
+            vec![original.id(), replacement.id()]
+        );
+        assert!(matches!(
+            prepare_event_correction(
+                &original,
+                value!(uuid::<EventId>(65)),
+                draft(
+                    &kind,
+                    EventTime::Instant(WorldTime::from_nanoseconds(timeline, 10)),
+                )?,
+                value!(uuid::<ProvenanceId>(66)),
+                value!(revision(3)),
+                |_, _| false,
+            ),
+            Err(EventProjectionError::IncompatibleCorrectionEventKind { .. })
+        ));
         Ok(())
     }
 }

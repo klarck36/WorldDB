@@ -18,12 +18,12 @@ EXPECTED_CRATES = {
 }
 
 # These core dependencies are reviewed in policy/dependencies.tsv and their
-# task evidence; the hash dependency is added by M1-16.
+# task evidence; rusqlite is the optional M5-20 testkit reference adapter.
 EXPECTED_EXTERNALS = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
-    "worlddb-storage-file": set(),
+    "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
     "worlddb-cli": set(),
-    "worlddb-testkit": set(),
+    "worlddb-testkit": {"rusqlite"},
     "xtask": set(),
 }
 

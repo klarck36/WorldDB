@@ -16,17 +16,18 @@ use crate::{
     EventKindDefinition, EventMask, EventMaskRetraction, EventParticipant, EventRelation,
     EventRelationInputKind, EventRelationRetraction, EventRetraction, EventRoleDefinition,
     EventSpanClosure, EventTimeConstraint, EventTimeForm, Evidence, EvidenceRelation,
-    EvidenceRetraction, EvidenceTargetRef, FrameHeader, HistorySpaceDefinition, Int,
-    LayerDefinition, LayerSchemaSnapshot, Lifecycle, Mask, MaskRetraction, MaskSelector,
-    MaskSlotSelector, MaskValidityClosure, MigrationCategory, MigrationPlan, MigrationRun,
-    MigrationRunState, MigrationStepCommitIdentity, PerspectiveDefinitionRevision,
-    PerspectiveRetirement, PerspectiveScope, Polarity, PredicateDefinition,
-    PredicateDefinitionSpec, PropositionKey, ProvenanceEdge, ProvenanceEndpointRef,
-    ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef, ReplacementBoundary,
-    ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, ResolutionPolicy, Revision,
-    RoleCardinality, SchemaRevision, Source, SourceContentDigest, SourceLocator, SourceMetadata,
-    SourceMetadataEntry, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId, TlvEncoder,
-    Value, ValueConstraint, ValueKind, WorldTime, encode_frame, encode_id,
+    EvidenceRetraction, EvidenceTargetRef, FrameHeader, HistorySpaceContentRef,
+    HistorySpaceDefinition, Int, LayerDefinition, LayerSchemaSnapshot, Lifecycle, Mask,
+    MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure, MigrationCategory,
+    MigrationPlan, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
+    PerspectiveDefinitionRevision, PerspectiveRetirement, PerspectiveScope, Polarity,
+    PredicateDefinition, PredicateDefinitionSpec, PropositionKey, ProvenanceEdge,
+    ProvenanceEndpointRef, ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef,
+    ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
+    ResolutionPolicy, Revision, RoleCardinality, SchemaRevision, Source, SourceContentDigest,
+    SourceLocator, SourceMetadata, SourceMetadataEntry, Subject, Symbol, Time, TimeInterval,
+    Timeline, TimelineId, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint,
+    ValueKind, WorldTime, encode_frame, encode_id,
 };
 
 fn id<T: DomainId>(tail: u8) -> Option<T> {
@@ -242,6 +243,15 @@ fn source_provenance_fixtures() -> Option<Vec<(&'static str, Record)>> {
         EvidenceRetraction::new(id(73)?, &evidence, "source replaced", second).ok()?;
     let provenance_retraction =
         ProvenanceRetraction::new(id(74)?, &provenance, "lineage corrected", second).ok()?;
+    let transfer_lineage = TransferLineage::new(
+        id::<TransferLineageId>(75)?,
+        id(76)?,
+        id(77)?,
+        HistorySpaceContentRef::Mask(id(78)?),
+        HistorySpaceContentRef::Mask(id(79)?),
+        first,
+    )
+    .ok()?;
     Some(vec![
         ("source_metadata", Record::Source(source)),
         ("evidence_assertion_supports", Record::Evidence(evidence)),
@@ -256,6 +266,10 @@ fn source_provenance_fixtures() -> Option<Vec<(&'static str, Record)>> {
         (
             "provenance_retraction",
             Record::ProvenanceRetraction(provenance_retraction),
+        ),
+        (
+            "transfer_lineage",
+            Record::TransferLineage(transfer_lineage),
         ),
     ])
 }
@@ -697,6 +711,7 @@ fn record_ref_fixtures() -> Option<Vec<(&'static str, RecordRef)>> {
             RecordRef::PerspectiveRetirement(id(23)?),
         ),
         ("archive_transition", RecordRef::ArchiveTransition(id(24)?)),
+        ("transfer_lineage", RecordRef::TransferLineage(id(25)?)),
     ])
 }
 
@@ -827,7 +842,7 @@ fn runtime_record_assignments_match_the_policy_registry() {
             assert!(assignments.insert(number, *name).is_none());
         }
     }
-    assert_eq!(assignments.len(), 35);
+    assert_eq!(assignments.len(), 36);
     for (kind, name) in [
         (RecordKind::HistorySpaceDefinition, "HistorySpaceDefinition"),
         (RecordKind::Entity, "Entity"),
@@ -882,6 +897,7 @@ fn runtime_record_assignments_match_the_policy_registry() {
         (RecordKind::Provenance, "Provenance"),
         (RecordKind::EvidenceRetraction, "EvidenceRetraction"),
         (RecordKind::ProvenanceRetraction, "ProvenanceRetraction"),
+        (RecordKind::TransferLineage, "TransferLineage"),
     ] {
         assert_eq!(assignments.get(&kind.number()), Some(&name));
         assert_eq!(RecordKind::from_number(kind.number()), Some(kind));
@@ -930,7 +946,7 @@ fn every_registered_record_kind_has_a_fixed_roundtrip_golden_vector() {
             golden_kinds.insert(kind);
         }
     }
-    assert_eq!(registered.len(), 35);
+    assert_eq!(registered.len(), 36);
     assert_eq!(golden_kinds, registered);
 }
 
@@ -1409,7 +1425,7 @@ fn runtime_record_ref_tags_match_the_complete_policy_registry() {
             assert!(assignments.insert(tag, *name).is_none());
         }
     }
-    assert_eq!(assignments.len(), 24);
+    assert_eq!(assignments.len(), 25);
     assert_eq!(references.len(), assignments.len());
     for (_, reference) in references {
         assert_eq!(
@@ -1511,7 +1527,7 @@ fn every_closed_archive_target_round_trips_and_archive_cannot_target_itself() {
             ),
         }
     }
-    assert_eq!(target_count, 23);
+    assert_eq!(target_count, 24);
 
     let Some(archive_id) = id::<crate::ArchiveTransitionId>(24) else {
         return;
@@ -1530,7 +1546,7 @@ fn every_closed_archive_target_round_trips_and_archive_cannot_target_itself() {
             field: 2
         })
     ));
-    let mut unknown_target = vec![25_u8];
+    let mut unknown_target = vec![26_u8];
     unknown_target.extend(encode_id(archive_id));
     assert!(matches!(
         super::lifecycle::decode_archive_target(
@@ -1539,7 +1555,7 @@ fn every_closed_archive_target_round_trips_and_archive_cannot_target_itself() {
             &unknown_target,
             &crate::DecoderLimits::DEFAULT
         ),
-        Err(RecordCodecError::UnknownRecordRefTag { tag: 25 })
+        Err(RecordCodecError::UnknownRecordRefTag { tag: 26 })
     ));
 }
 

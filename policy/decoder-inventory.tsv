@@ -75,3 +75,5 @@ record_batch.one	batch	record/entity
 audit.audit_record	audit_record	audit/audit_record_committed
 audit.raw_read_attempt	raw_read_attempt	audit/raw_read_attempt_page_zero
 typescript.json_envelope	typescript	typescript/transport-v1.0-golden
+record.transfer_lineage	record	record/transfer_lineage
+record_ref.transfer_lineage	record_ref	record_ref/transfer_lineage

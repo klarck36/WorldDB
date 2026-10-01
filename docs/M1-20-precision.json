@@ -1,0 +1,15 @@
+{
+  "run_id": "M1-20-precision-574f524c44444232-1790755621",
+  "seed": "0x574f524c44444232",
+  "source_revision": "f6b6700779fc61379376150a333f5e27df36ceb1",
+  "started_unix_seconds": 1790755621,
+  "elapsed_seconds": 6.392,
+  "rounds_requested": 10000000,
+  "signed_integer_roundtrips": 10000000,
+  "unsigned_integer_roundtrips": 10000000,
+  "decimal_bytes_roundtrips": 10000000,
+  "decimal_text_roundtrips": 10000000,
+  "failure_kind": null,
+  "failure_iteration": null,
+  "result": "PASS_LOCAL"
+}

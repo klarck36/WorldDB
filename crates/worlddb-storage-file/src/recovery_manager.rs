@@ -1,0 +1,1746 @@
+//! Idempotent replay, manifest catch-up, and journaled WAL-tail quarantine.
+
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use crate::manifest::{
+    ManifestError, ManifestReceipt, ManifestSegmentKind, ManifestSegmentReference,
+    ManifestSnapshot, ManifestStore,
+};
+use crate::recovery::{
+    CurrentManifestState, RecoveryFinding, RecoveryReport, RecoveryScanError, RecoveryScanner,
+};
+use crate::recovery_journal::{
+    JournalError, JournalPhase, JournalRecord, RecoveryJournal, current_record_state,
+    quarantine_path,
+};
+use crate::replay_payload::{ReplayPayloadError, decode_replay_payload};
+use crate::security_segment::{SecurityPolicyHistoryStore, SecurityPolicyStorageError};
+use crate::segment::{HistorySegmentStore, SegmentError};
+use crate::wal::{WalError, WalPrepareLog};
+use crate::{DatabaseLayout, WriterLock};
+
+const MAX_WAL_TAIL_BYTES: usize = 64 * 1024 * 1024;
+const MAX_TAIL_REPAIRS_PER_START: usize = 8;
+
+/// A failure that prevents automatic replay or tail recovery from reaching a
+/// verified ready state.
+#[derive(Debug)]
+pub enum RecoveryError {
+    ForeignWriterLock,
+    Scan(RecoveryScanError),
+    Journal(JournalError),
+    Wal(WalError),
+    Manifest(ManifestError),
+    HistorySegment(SegmentError),
+    SecuritySegment(SecurityPolicyStorageError),
+    UnsafeFindings(Vec<RecoveryFinding>),
+    InvalidReplayPayload,
+    ReplaySegmentMissing,
+    ReplayRevisionInvalid,
+    TailJournalMismatch,
+    TailSourceInvalid,
+    WriteAccessDenied,
+    Interrupted,
+    Io {
+        operation: &'static str,
+        source: io::Error,
+    },
+}
+
+impl fmt::Display for RecoveryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ForeignWriterLock => formatter.write_str("recovery requires this database's writer lock"),
+            Self::Scan(error) => write!(formatter, "recovery scan failed: {error}"),
+            Self::Journal(error) => write!(formatter, "recovery journal failed: {error}"),
+            Self::Wal(error) => write!(formatter, "recovery WAL access failed: {error}"),
+            Self::Manifest(error) => write!(formatter, "recovery manifest publication failed: {error}"),
+            Self::HistorySegment(error) => write!(formatter, "history-segment replay failed: {error}"),
+            Self::SecuritySegment(error) => write!(formatter, "security-segment replay failed: {error}"),
+            Self::UnsafeFindings(_) => formatter.write_str("recovery found safe-area corruption or an inconsistent manifest; no automatic repair was applied"),
+            Self::InvalidReplayPayload => formatter.write_str("committed replayable WAL payload is malformed or not bound to its commit revision"),
+            Self::ReplaySegmentMissing => formatter.write_str("committed replay references a missing or invalid immutable segment"),
+            Self::ReplayRevisionInvalid => formatter.write_str("replay snapshot revision is invalid"),
+            Self::TailJournalMismatch => formatter.write_str("recovery journal does not match the WAL tail or its quarantine copy"),
+            Self::TailSourceInvalid => formatter.write_str("WAL tail path or contents cannot be safely quarantined"),
+            Self::WriteAccessDenied => formatter.write_str("database is not eligible for an automatic recovery write session"),
+            Self::Interrupted => formatter.write_str("recovery was interrupted at a durable checkpoint"),
+            Self::Io { operation, source } => write!(formatter, "{operation}: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for RecoveryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Scan(error) => Some(error),
+            Self::Journal(error) => Some(error),
+            Self::Wal(error) => Some(error),
+            Self::Manifest(error) => Some(error),
+            Self::HistorySegment(error) => Some(error),
+            Self::SecuritySegment(error) => Some(error),
+            Self::Io { source, .. } => Some(source),
+            Self::ForeignWriterLock
+            | Self::UnsafeFindings(_)
+            | Self::InvalidReplayPayload
+            | Self::ReplaySegmentMissing
+            | Self::ReplayRevisionInvalid
+            | Self::TailJournalMismatch
+            | Self::TailSourceInvalid
+            | Self::WriteAccessDenied
+            | Self::Interrupted => None,
+        }
+    }
+}
+
+/// Result of one completed recovery pass.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecoveryOutcome {
+    report: RecoveryReport,
+    manifest_receipt: Option<ManifestReceipt>,
+    quarantined_tails: usize,
+    replayed_snapshots: usize,
+}
+
+impl RecoveryOutcome {
+    /// Final read-only scan after all safe replay steps completed.
+    #[must_use]
+    pub const fn report(&self) -> &RecoveryReport {
+        &self.report
+    }
+
+    /// Manifest generated by this recovery pass, if a replay snapshot needed publication.
+    #[must_use]
+    pub const fn manifest_receipt(&self) -> Option<ManifestReceipt> {
+        self.manifest_receipt
+    }
+
+    /// Number of WAL-tail suffixes copied to quarantine and durably truncated.
+    #[must_use]
+    pub const fn quarantined_tails(&self) -> usize {
+        self.quarantined_tails
+    }
+
+    /// Number of committed typed storage snapshots replayed from the WAL.
+    #[must_use]
+    pub const fn replayed_snapshots(&self) -> usize {
+        self.replayed_snapshots
+    }
+}
+
+/// Executes crash-resumable recovery while the caller owns the database writer lock.
+#[derive(Clone, Debug)]
+pub struct RecoveryManager {
+    layout: DatabaseLayout,
+}
+
+impl RecoveryManager {
+    /// Binds recovery to an opened, validated database layout.
+    #[must_use]
+    pub const fn new(layout: DatabaseLayout) -> Self {
+        Self { layout }
+    }
+
+    /// Replays committed storage snapshots, advances a lagging manifest, and
+    /// quarantines then truncates an incomplete or uncommitted WAL tail.
+    /// Complete corruption in the verified area is reported without mutation.
+    pub fn recover(&self, writer_lock: &WriterLock) -> Result<RecoveryOutcome, RecoveryError> {
+        self.recover_with_checkpoint(writer_lock, |_| false)
+    }
+
+    fn recover_with_checkpoint(
+        &self,
+        writer_lock: &WriterLock,
+        mut checkpoint: impl FnMut(RecoveryCheckpoint) -> bool,
+    ) -> Result<RecoveryOutcome, RecoveryError> {
+        if !writer_lock.belongs_to_database_root(self.layout.root()) {
+            return Err(RecoveryError::ForeignWriterLock);
+        }
+        let scanner = RecoveryScanner::new(self.layout.clone());
+        let mut report = scanner.scan(writer_lock).map_err(RecoveryError::Scan)?;
+        reject_unsafe_findings(&report)?;
+        let recovery_write = writer_lock
+            .begin_recovery()
+            .map_err(|()| RecoveryError::WriteAccessDenied)?;
+        let journal = RecoveryJournal::new(&self.layout);
+        let journal_records = journal
+            .read_records(writer_lock)
+            .map_err(RecoveryError::Journal)?;
+        let (mut journal_id, pending_tail) = current_record_state(&journal_records);
+        let mut quarantined_tails = 0_usize;
+        if let Some(pending) = pending_tail {
+            let phase = journal_records
+                .last()
+                .map(|record| record.phase)
+                .ok_or(RecoveryError::TailJournalMismatch)?;
+            complete_tail_repair(
+                &self.layout,
+                writer_lock,
+                &journal,
+                pending,
+                phase,
+                &mut checkpoint,
+            )?;
+            quarantined_tails = quarantined_tails.saturating_add(1);
+        }
+
+        report = scanner.scan(writer_lock).map_err(RecoveryError::Scan)?;
+        let mut repairs = 0_usize;
+        loop {
+            reject_unsafe_findings(&report)?;
+            let Some((sequence, offset)) = tail_repair_point(report.findings()) else {
+                break;
+            };
+            repairs = repairs.saturating_add(1);
+            if repairs > MAX_TAIL_REPAIRS_PER_START {
+                return Err(RecoveryError::TailJournalMismatch);
+            }
+            journal_id = journal_id
+                .checked_add(1)
+                .ok_or(RecoveryError::TailJournalMismatch)?;
+            let (original_length, suffix_digest) = tail_identity(&self.layout, sequence, offset)?;
+            let intent = JournalRecord {
+                id: journal_id,
+                phase: JournalPhase::Intent,
+                sequence,
+                offset,
+                original_length,
+                suffix_digest,
+            };
+            journal
+                .append(writer_lock, intent)
+                .map_err(RecoveryError::Journal)?;
+            if checkpoint(RecoveryCheckpoint::IntentRecorded) {
+                return Err(RecoveryError::Interrupted);
+            }
+            complete_tail_repair(
+                &self.layout,
+                writer_lock,
+                &journal,
+                intent,
+                JournalPhase::Intent,
+                &mut checkpoint,
+            )?;
+            quarantined_tails = quarantined_tails.saturating_add(1);
+            report = scanner.scan(writer_lock).map_err(RecoveryError::Scan)?;
+        }
+
+        reject_unsafe_findings(&report)?;
+        let wal = WalPrepareLog::new(&self.layout);
+        let (replay_report, committed_frames) = scanner
+            .scan_with_frames(writer_lock)
+            .map_err(RecoveryError::Scan)?;
+        reject_unsafe_findings(&replay_report)?;
+        report = replay_report;
+        let mut latest_snapshot: Option<(ManifestSnapshot, Vec<ManifestSegmentReference>)> = None;
+        let mut replayed_snapshots = 0_usize;
+        let history = HistorySegmentStore::new(self.layout.clone());
+        let security = SecurityPolicyHistoryStore::new(self.layout.clone());
+        for committed in &committed_frames {
+            let Some(decoded) = decode_replay_payload(
+                committed.prepare().payload(),
+                committed.receipt().revision(),
+                committed.prepare().reference().operation_id(),
+            )
+            .map_err(map_replay_error)?
+            else {
+                continue;
+            };
+            let snapshot = decoded.snapshot;
+            let staged = decoded.staged;
+            replayed_snapshots = replayed_snapshots.saturating_add(1);
+            latest_snapshot = Some((snapshot, staged));
+        }
+
+        // Every committed typed payload is decoded above, but only the latest
+        // snapshot is the complete live inventory. Older snapshots may name
+        // History segments that a later verified compaction has reclaimed.
+        if let Some((snapshot, staged)) = &latest_snapshot {
+            for reference in staged {
+                materialize_reference(&history, &security, *reference)?;
+                if checkpoint(RecoveryCheckpoint::SegmentPublished) {
+                    return Err(RecoveryError::Interrupted);
+                }
+            }
+            for reference in snapshot.segments() {
+                validate_reference(&history, &security, *reference)?;
+            }
+        }
+
+        let mut manifest_receipt = None;
+        if let Some((snapshot, _)) = latest_snapshot {
+            let should_publish = match report.current_manifest() {
+                CurrentManifestState::Missing => true,
+                CurrentManifestState::Corrupt => {
+                    return Err(RecoveryError::UnsafeFindings(vec![
+                        RecoveryFinding::CurrentManifestCorrupt,
+                    ]));
+                }
+                CurrentManifestState::Loaded(current) => {
+                    current.revision() < snapshot.revision()
+                        || (current.revision() == snapshot.revision()
+                            && current.segments() != snapshot.segments())
+                }
+            };
+            if should_publish {
+                let receipt = ManifestStore::new(self.layout.clone())
+                    .publish(writer_lock, &wal, snapshot)
+                    .map_err(RecoveryError::Manifest)?;
+                manifest_receipt = Some(receipt);
+                if checkpoint(RecoveryCheckpoint::ManifestPublished) {
+                    return Err(RecoveryError::Interrupted);
+                }
+            }
+        }
+
+        report = scanner.scan(writer_lock).map_err(RecoveryError::Scan)?;
+        reject_unsafe_findings(&report)?;
+        let outcome = RecoveryOutcome {
+            report,
+            manifest_receipt,
+            quarantined_tails,
+            replayed_snapshots,
+        };
+        recovery_write.finish();
+        Ok(outcome)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryCheckpoint {
+    IntentRecorded,
+    QuarantineFilePublished,
+    QuarantineRecorded,
+    TailTruncated,
+    JournalCompleted,
+    SegmentPublished,
+    ManifestPublished,
+}
+
+fn reject_unsafe_findings(report: &RecoveryReport) -> Result<(), RecoveryError> {
+    let unsafe_findings = report
+        .findings()
+        .iter()
+        .filter(|finding| {
+            !matches!(
+                finding,
+                RecoveryFinding::TornTail { .. }
+                    | RecoveryFinding::UncommittedTail { .. }
+                    | RecoveryFinding::ManifestBehindCommittedSnapshot { .. }
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if unsafe_findings.is_empty() {
+        Ok(())
+    } else {
+        Err(RecoveryError::UnsafeFindings(unsafe_findings))
+    }
+}
+
+fn tail_repair_point(findings: &[RecoveryFinding]) -> Option<(u64, u64)> {
+    findings.iter().find_map(|finding| match finding {
+        RecoveryFinding::TornTail {
+            segment_sequence,
+            offset,
+            pending_prepare_offset,
+        } => Some((*segment_sequence, pending_prepare_offset.unwrap_or(*offset))),
+        RecoveryFinding::UncommittedTail {
+            segment_sequence,
+            prepare_offset,
+        } => Some((*segment_sequence, *prepare_offset)),
+        RecoveryFinding::SafeCorruption { .. }
+        | RecoveryFinding::CurrentManifestCorrupt
+        | RecoveryFinding::ManifestAheadOfSafePrefix { .. }
+        | RecoveryFinding::ManifestCommitHashMismatch { .. }
+        | RecoveryFinding::ManifestBehindCommittedSnapshot { .. }
+        | RecoveryFinding::ManifestSnapshotMismatch { .. }
+        | RecoveryFinding::CommittedReplayPayloadCorrupt { .. }
+        | RecoveryFinding::RequiredAuditSequenceInvalid { .. }
+        | RecoveryFinding::ReferencedSegmentCorrupt { .. } => None,
+    })
+}
+
+fn tail_identity(
+    layout: &DatabaseLayout,
+    sequence: u64,
+    offset: u64,
+) -> Result<(u64, [u8; 32]), RecoveryError> {
+    let path = wal_segment_path(layout, sequence);
+    let (mut file, length) = open_regular_in_directory(&path, &layout.wal_directory(), false)?;
+    if offset >= length {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let suffix = read_range(&mut file, offset, length, MAX_WAL_TAIL_BYTES)?;
+    Ok((length, *blake3::hash(&suffix).as_bytes()))
+}
+
+fn complete_tail_repair(
+    layout: &DatabaseLayout,
+    lock: &WriterLock,
+    journal: &RecoveryJournal,
+    record: JournalRecord,
+    phase: JournalPhase,
+    checkpoint: &mut impl FnMut(RecoveryCheckpoint) -> bool,
+) -> Result<(), RecoveryError> {
+    if !lock.belongs_to_database_root(layout.root()) {
+        return Err(RecoveryError::ForeignWriterLock);
+    }
+    if record.offset >= record.original_length {
+        return Err(RecoveryError::TailJournalMismatch);
+    }
+    let wal_directory = validated_directory(layout, &layout.wal_directory())?;
+    let quarantine_directory = validated_directory(layout, &layout.quarantine_directory())?;
+    let staging_directory = validated_directory(layout, &layout.staging_directory())?;
+    let wal_path = wal_directory.join(format!("segment-{:020}.wal", record.sequence));
+    let (mut wal_file, current_length) =
+        open_regular_in_directory(&wal_path, &wal_directory, true)?;
+    let quarantine = quarantine_path(layout, record);
+    let suffix_length = record.original_length - record.offset;
+
+    if current_length == record.original_length {
+        let suffix = read_range(
+            &mut wal_file,
+            record.offset,
+            record.original_length,
+            MAX_WAL_TAIL_BYTES,
+        )?;
+        if *blake3::hash(&suffix).as_bytes() != record.suffix_digest {
+            return Err(RecoveryError::TailJournalMismatch);
+        }
+        ensure_quarantine_copy(
+            &quarantine,
+            &staging_directory,
+            &quarantine_directory,
+            record,
+            &suffix,
+        )?;
+        if checkpoint(RecoveryCheckpoint::QuarantineFilePublished) {
+            return Err(RecoveryError::Interrupted);
+        }
+    } else if current_length == record.offset {
+        validate_quarantine_copy(&quarantine, suffix_length, record.suffix_digest)?;
+    } else {
+        return Err(RecoveryError::TailJournalMismatch);
+    }
+
+    if phase == JournalPhase::Intent {
+        let mut next = record;
+        next.phase = JournalPhase::Quarantined;
+        journal.append(lock, next).map_err(RecoveryError::Journal)?;
+        if checkpoint(RecoveryCheckpoint::QuarantineRecorded) {
+            return Err(RecoveryError::Interrupted);
+        }
+    }
+
+    if current_length == record.original_length {
+        wal_file
+            .set_len(record.offset)
+            .and_then(|()| wal_file.sync_all())
+            .map_err(|source| RecoveryError::Io {
+                operation: "truncate and sync quarantined WAL tail",
+                source,
+            })?;
+        if checkpoint(RecoveryCheckpoint::TailTruncated) {
+            return Err(RecoveryError::Interrupted);
+        }
+    }
+
+    let mut completed = record;
+    completed.phase = JournalPhase::Truncated;
+    journal
+        .append(lock, completed)
+        .map_err(RecoveryError::Journal)?;
+    if checkpoint(RecoveryCheckpoint::JournalCompleted) {
+        return Err(RecoveryError::Interrupted);
+    }
+    Ok(())
+}
+
+fn ensure_quarantine_copy(
+    target: &Path,
+    staging_directory: &Path,
+    quarantine_directory: &Path,
+    record: JournalRecord,
+    suffix: &[u8],
+) -> Result<(), RecoveryError> {
+    if suffix.len() as u64 != record.original_length - record.offset
+        || *blake3::hash(suffix).as_bytes() != record.suffix_digest
+    {
+        return Err(RecoveryError::TailJournalMismatch);
+    }
+    match fs::symlink_metadata(target) {
+        Ok(_) => {
+            return validate_quarantine_copy(target, suffix.len() as u64, record.suffix_digest);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(RecoveryError::Io {
+                operation: "inspect WAL quarantine destination",
+                source,
+            });
+        }
+    }
+    let stage = staging_directory.join(format!("recovery-tail-{:020}.tmp", record.id));
+    if let Ok(metadata) = fs::symlink_metadata(&stage) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(RecoveryError::TailSourceInvalid);
+        }
+        let canonical = fs::canonicalize(&stage).map_err(|source| RecoveryError::Io {
+            operation: "resolve incomplete quarantine staging file",
+            source,
+        })?;
+        if canonical.parent() != Some(staging_directory) {
+            return Err(RecoveryError::TailSourceInvalid);
+        }
+        fs::remove_file(&stage).map_err(|source| RecoveryError::Io {
+            operation: "remove incomplete quarantine staging file",
+            source,
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&stage)
+        .map_err(|source| RecoveryError::Io {
+            operation: "create quarantine staging file",
+            source,
+        })?;
+    let result = file.write_all(suffix).and_then(|()| file.sync_all());
+    drop(file);
+    result.map_err(|source| RecoveryError::Io {
+        operation: "write and sync quarantine staging file",
+        source,
+    })?;
+    publish_new_file(&stage, target).map_err(|source| RecoveryError::Io {
+        operation: "publish WAL quarantine copy",
+        source,
+    })?;
+    crate::manifest::sync_directory(quarantine_directory).map_err(|source| RecoveryError::Io {
+        operation: "sync WAL quarantine directory",
+        source,
+    })?;
+    crate::manifest::sync_directory(staging_directory).map_err(|source| RecoveryError::Io {
+        operation: "sync staging directory after WAL quarantine publication",
+        source,
+    })?;
+    validate_quarantine_copy(target, suffix.len() as u64, record.suffix_digest)
+}
+
+fn validate_quarantine_copy(
+    path: &Path,
+    expected_length: u64,
+    expected_digest: [u8; 32],
+) -> Result<(), RecoveryError> {
+    let parent = path.parent().ok_or(RecoveryError::TailSourceInvalid)?;
+    let (mut file, length) = open_regular_in_directory(path, parent, false)?;
+    if length != expected_length {
+        return Err(RecoveryError::TailJournalMismatch);
+    }
+    let bytes = read_range(&mut file, 0, length, MAX_WAL_TAIL_BYTES)?;
+    if *blake3::hash(&bytes).as_bytes() != expected_digest {
+        return Err(RecoveryError::TailJournalMismatch);
+    }
+    Ok(())
+}
+
+fn open_regular_in_directory(
+    path: &Path,
+    directory: &Path,
+    writable: bool,
+) -> Result<(File, u64), RecoveryError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| RecoveryError::Io {
+        operation: "inspect recovery file",
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let canonical = fs::canonicalize(path).map_err(|source| RecoveryError::Io {
+        operation: "resolve recovery file",
+        source,
+    })?;
+    let canonical_directory = fs::canonicalize(directory).map_err(|source| RecoveryError::Io {
+        operation: "resolve recovery directory",
+        source,
+    })?;
+    if canonical.parent() != Some(canonical_directory.as_path()) {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(writable)
+        .open(path)
+        .map_err(|source| RecoveryError::Io {
+            operation: "open recovery file",
+            source,
+        })?;
+    let opened = file.metadata().map_err(|source| RecoveryError::Io {
+        operation: "inspect opened recovery file",
+        source,
+    })?;
+    if !opened.is_file() || opened.len() != metadata.len() {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    Ok((file, opened.len()))
+}
+
+fn read_range(
+    file: &mut File,
+    start: u64,
+    end: u64,
+    limit: usize,
+) -> Result<Vec<u8>, RecoveryError> {
+    if start > end {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let length = end - start;
+    let reserve = usize::try_from(length).map_err(|_| RecoveryError::TailSourceInvalid)?;
+    if reserve > limit {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(reserve)
+        .map_err(|_| RecoveryError::TailSourceInvalid)?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|source| RecoveryError::Io {
+            operation: "seek recovery file",
+            source,
+        })?;
+    file.take(length.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| RecoveryError::Io {
+            operation: "read recovery file range",
+            source,
+        })?;
+    if bytes.len() != reserve {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    Ok(bytes)
+}
+
+fn validated_directory(layout: &DatabaseLayout, path: &Path) -> Result<PathBuf, RecoveryError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| RecoveryError::Io {
+        operation: "inspect recovery directory",
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    let canonical = fs::canonicalize(path).map_err(|source| RecoveryError::Io {
+        operation: "resolve recovery directory",
+        source,
+    })?;
+    if !canonical.starts_with(layout.root()) {
+        return Err(RecoveryError::TailSourceInvalid);
+    }
+    Ok(canonical)
+}
+
+fn wal_segment_path(layout: &DatabaseLayout, sequence: u64) -> PathBuf {
+    layout
+        .wal_directory()
+        .join(format!("segment-{sequence:020}.wal"))
+}
+
+fn publish_new_file(source: &Path, target: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        crate::windows_publication::move_file(source, target, false)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, target)
+    }
+}
+
+fn map_replay_error(error: ReplayPayloadError) -> RecoveryError {
+    match error {
+        ReplayPayloadError::Invalid
+        | ReplayPayloadError::Manifest(_)
+        | ReplayPayloadError::RequiredAudit(_) => RecoveryError::InvalidReplayPayload,
+    }
+}
+
+fn materialize_reference(
+    history: &HistorySegmentStore,
+    security: &SecurityPolicyHistoryStore,
+    reference: ManifestSegmentReference,
+) -> Result<(), RecoveryError> {
+    match reference.kind() {
+        ManifestSegmentKind::History => history
+            .materialize_staged_reference(reference)
+            .map_err(RecoveryError::HistorySegment),
+        ManifestSegmentKind::SecurityPolicy => security
+            .materialize_staged_reference(reference)
+            .map_err(RecoveryError::SecuritySegment),
+    }
+}
+
+fn validate_reference(
+    history: &HistorySegmentStore,
+    security: &SecurityPolicyHistoryStore,
+    reference: ManifestSegmentReference,
+) -> Result<(), RecoveryError> {
+    match reference.kind() {
+        ManifestSegmentKind::History => history
+            .validate_manifest_reference(reference)
+            .map_err(RecoveryError::HistorySegment),
+        ManifestSegmentKind::SecurityPolicy => security
+            .validate_manifest_reference(reference)
+            .map_err(RecoveryError::SecuritySegment),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    #[cfg(windows)]
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use worlddb_core::{
+        DomainId, HistorySpaceContentRef, HistorySpaceDefinition, HistorySpaceId, LayerDefinition,
+        LayerId, LayerSchemaSnapshot, Lifecycle, MaskId, OperationId, Principal, PrincipalId,
+        PrincipalState, Record, Revision, SchemaRevision, SecurityEpoch, SecurityPolicyChange,
+        SecurityPolicyRecord, SecurityPolicyRecordId, SecurityPolicySnapshot,
+        SecurityPolicyVersion, Symbol, TransferLineage, TransferLineageId,
+    };
+
+    static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDatabase(PathBuf);
+
+    impl TempDatabase {
+        fn create() -> Result<Self, String> {
+            let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let path =
+                env::temp_dir().join(format!("worlddb-m5-12-{}-{sequence}", std::process::id()));
+            DatabaseLayout::create(&path).map_err(|error| error.to_string())?;
+            Ok(Self(path))
+        }
+
+        fn layout(&self) -> Result<DatabaseLayout, String> {
+            DatabaseLayout::open(&self.0).map_err(|error| error.to_string())
+        }
+    }
+
+    impl Drop for TempDatabase {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn operation_id(tail: u8) -> Result<worlddb_core::OperationId, String> {
+        OperationId::try_from_bytes([
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x7c, 0xde, 0x8f, 0x01, 0x23, 0x45, 0x67, 0x89,
+            0xab, tail,
+        ])
+        .map_err(|error| error.to_string())
+    }
+
+    fn id<T: DomainId>(tail: u8) -> Result<T, String> {
+        let mut bytes = [0_u8; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        bytes[15] = tail;
+        T::try_from_bytes(bytes).map_err(|error| error.to_string())
+    }
+
+    fn make_torn_tail(layout: &DatabaseLayout, lock: &WriterLock) -> Result<(u64, u64), String> {
+        let wal = WalPrepareLog::new(layout);
+        let prepare = wal
+            .append_prepare(lock, operation_id(1)?, b"uncommitted prepare")
+            .map_err(|error| error.to_string())?;
+        let path = wal_segment_path(layout, prepare.segment_sequence());
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(path)
+            .map_err(|error| error.to_string())?;
+        file.write_all(b"partial-marker")
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        Ok((prepare.segment_sequence(), prepare.byte_offset()))
+    }
+
+    #[test]
+    fn nested_restart_after_each_tail_checkpoint_is_idempotent() -> Result<(), String> {
+        for checkpoint_to_interrupt in [
+            RecoveryCheckpoint::IntentRecorded,
+            RecoveryCheckpoint::QuarantineFilePublished,
+            RecoveryCheckpoint::QuarantineRecorded,
+            RecoveryCheckpoint::TailTruncated,
+            RecoveryCheckpoint::JournalCompleted,
+        ] {
+            let database = TempDatabase::create()?;
+            let layout = database.layout()?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let (sequence, expected_offset) = make_torn_tail(&layout, &lock)?;
+            let manager = RecoveryManager::new(layout.clone());
+            let mut injected = false;
+            let interrupted = manager.recover_with_checkpoint(&lock, |checkpoint| {
+                if !injected && checkpoint == checkpoint_to_interrupt {
+                    injected = true;
+                    true
+                } else {
+                    false
+                }
+            });
+            if !injected {
+                return Err(format!(
+                    "checkpoint {checkpoint_to_interrupt:?} was not reached"
+                ));
+            }
+            if !matches!(interrupted, Err(RecoveryError::Interrupted)) {
+                return Err(format!(
+                    "checkpoint {checkpoint_to_interrupt:?} did not interrupt recovery"
+                ));
+            }
+            drop(manager);
+            drop(lock);
+            let reopened_layout = database.layout()?;
+            let reopened_lock = reopened_layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let manager = RecoveryManager::new(reopened_layout.clone());
+            let recovered = manager
+                .recover(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert!(recovered.report().is_clean());
+            assert_eq!(
+                recovered.quarantined_tails(),
+                usize::from(checkpoint_to_interrupt != RecoveryCheckpoint::JournalCompleted)
+            );
+            let wal_path = wal_segment_path(&reopened_layout, sequence);
+            assert_eq!(
+                fs::metadata(wal_path)
+                    .map_err(|error| error.to_string())?
+                    .len(),
+                expected_offset
+            );
+            let quarantine_count = fs::read_dir(reopened_layout.quarantine_directory())
+                .map_err(|error| error.to_string())?
+                .count();
+            assert_eq!(quarantine_count, 1);
+            let stable_length = fs::metadata(wal_segment_path(&reopened_layout, sequence))
+                .map_err(|error| error.to_string())?
+                .len();
+            let second = manager
+                .recover(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert!(second.report().is_clean());
+            assert_eq!(
+                fs::metadata(wal_segment_path(&reopened_layout, sequence))
+                    .map_err(|error| error.to_string())?
+                    .len(),
+                stable_length
+            );
+            assert_eq!(
+                fs::read_dir(reopened_layout.quarantine_directory())
+                    .map_err(|error| error.to_string())?
+                    .count(),
+                1
+            );
+            let journal = RecoveryJournal::new(&reopened_layout)
+                .read_records(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(
+                journal
+                    .iter()
+                    .map(|record| record.phase)
+                    .collect::<Vec<_>>(),
+                vec![
+                    JournalPhase::Intent,
+                    JournalPhase::Quarantined,
+                    JournalPhase::Truncated
+                ]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_restart_can_interrupt_each_tail_recovery_checkpoint() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let wal = WalPrepareLog::new(&layout);
+        let committed = wal
+            .commit_manifest_snapshot(&lock, operation_id(2)?, vec![], &[])
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            committed.revision(),
+            Revision::try_from(1).map_err(|e| e.to_string())?
+        );
+        let (sequence, expected_offset) = make_torn_tail(&layout, &lock)?;
+        drop(wal);
+
+        let checkpoints = [
+            RecoveryCheckpoint::IntentRecorded,
+            RecoveryCheckpoint::QuarantineFilePublished,
+            RecoveryCheckpoint::QuarantineRecorded,
+            RecoveryCheckpoint::TailTruncated,
+            RecoveryCheckpoint::JournalCompleted,
+        ];
+        let mut reopened_layout = layout;
+        let mut reopened_lock = lock;
+
+        for checkpoint_to_interrupt in checkpoints {
+            let manager = RecoveryManager::new(reopened_layout.clone());
+            let mut injected = false;
+            let interrupted = manager.recover_with_checkpoint(&reopened_lock, |checkpoint| {
+                if !injected && checkpoint == checkpoint_to_interrupt {
+                    injected = true;
+                    true
+                } else {
+                    false
+                }
+            });
+            if !injected || !matches!(interrupted, Err(RecoveryError::Interrupted)) {
+                return Err(format!(
+                    "recovery did not interrupt at {checkpoint_to_interrupt:?}"
+                ));
+            }
+
+            drop(manager);
+            drop(reopened_lock);
+            reopened_layout = database.layout()?;
+            reopened_lock = reopened_layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let report = RecoveryScanner::new(reopened_layout.clone())
+                .scan(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(report.safe_revision(), committed.revision());
+        }
+
+        let manager = RecoveryManager::new(reopened_layout.clone());
+        let recovered = manager
+            .recover(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(recovered.report().is_clean());
+        assert_eq!(recovered.report().safe_revision(), committed.revision());
+        assert_eq!(
+            fs::metadata(wal_segment_path(&reopened_layout, sequence))
+                .map_err(|error| error.to_string())?
+                .len(),
+            expected_offset
+        );
+        assert_eq!(
+            fs::read_dir(reopened_layout.quarantine_directory())
+                .map_err(|error| error.to_string())?
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_crash_can_interrupt_each_tail_recovery_checkpoint() -> Result<(), String> {
+        const ROOT_ENV: &str = "WORLDDB_M5_22_RECOVERY_CRASH_ROOT";
+        const POINT_ENV: &str = "WORLDDB_M5_22_RECOVERY_CRASH_POINT";
+        const TEST_NAME: &str =
+            "recovery_manager::tests::process_crash_can_interrupt_each_tail_recovery_checkpoint";
+
+        if let (Ok(root), Ok(point_name)) = (env::var(ROOT_ENV), env::var(POINT_ENV)) {
+            let point = match point_name.as_str() {
+                "intent_recorded" => RecoveryCheckpoint::IntentRecorded,
+                "quarantine_file_published" => RecoveryCheckpoint::QuarantineFilePublished,
+                "quarantine_recorded" => RecoveryCheckpoint::QuarantineRecorded,
+                "tail_truncated" => RecoveryCheckpoint::TailTruncated,
+                "journal_completed" => RecoveryCheckpoint::JournalCompleted,
+                "manifest_published" => RecoveryCheckpoint::ManifestPublished,
+                _ => return Err(format!("unknown recovery checkpoint {point_name}")),
+            };
+            let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let manager = RecoveryManager::new(layout);
+            let _ = manager.recover_with_checkpoint(&lock, |checkpoint| {
+                if checkpoint == point {
+                    std::process::exit(86);
+                }
+                false
+            });
+            return Err(format!(
+                "child did not reach recovery checkpoint {point_name}"
+            ));
+        }
+
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let wal = WalPrepareLog::new(&layout);
+        let mut committed = None;
+        for operation_tail in 2..=6 {
+            committed = Some(
+                wal.commit_manifest_snapshot(&lock, operation_id(operation_tail)?, vec![], &[])
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let committed =
+            committed.ok_or_else(|| "generated commit sequence was empty".to_owned())?;
+        let (sequence, expected_offset) = make_torn_tail(&layout, &lock)?;
+        drop(wal);
+        drop(lock);
+
+        for (checkpoint, point_name) in [
+            (RecoveryCheckpoint::IntentRecorded, "intent_recorded"),
+            (
+                RecoveryCheckpoint::QuarantineFilePublished,
+                "quarantine_file_published",
+            ),
+            (
+                RecoveryCheckpoint::QuarantineRecorded,
+                "quarantine_recorded",
+            ),
+            (RecoveryCheckpoint::TailTruncated, "tail_truncated"),
+            (RecoveryCheckpoint::JournalCompleted, "journal_completed"),
+        ] {
+            let executable = env::current_exe().map_err(|error| error.to_string())?;
+            let status = Command::new(executable)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, &database.0)
+                .env(POINT_ENV, point_name)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.code() != Some(86) {
+                return Err(format!(
+                    "child for {checkpoint:?} exited with {:?}, expected crash code 86",
+                    status.code()
+                ));
+            }
+
+            let reopened_layout = database.layout()?;
+            let reopened_lock = reopened_layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let report = RecoveryScanner::new(reopened_layout)
+                .scan(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(report.safe_revision(), committed.revision());
+        }
+
+        let executable = env::current_exe().map_err(|error| error.to_string())?;
+        let status = Command::new(executable)
+            .args(["--exact", TEST_NAME, "--nocapture"])
+            .env(ROOT_ENV, &database.0)
+            .env(POINT_ENV, "manifest_published")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|error| error.to_string())?;
+        if status.code() != Some(86) {
+            return Err(format!(
+                "child for ManifestPublished exited with {:?}, expected crash code 86",
+                status.code()
+            ));
+        }
+        let reopened_layout = database.layout()?;
+        let reopened_lock = reopened_layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let report = RecoveryScanner::new(reopened_layout.clone())
+            .scan(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(report.safe_revision(), committed.revision());
+
+        let recovered = RecoveryManager::new(reopened_layout.clone())
+            .recover(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(recovered.report().is_clean());
+        assert_eq!(recovered.report().safe_revision(), committed.revision());
+        assert_eq!(
+            fs::metadata(wal_segment_path(&reopened_layout, sequence))
+                .map_err(|error| error.to_string())?
+                .len(),
+            expected_offset
+        );
+        assert_eq!(
+            fs::read_dir(reopened_layout.quarantine_directory())
+                .map_err(|error| error.to_string())?
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_crash_after_staged_history_replay_restores_manifest() -> Result<(), String> {
+        const ROOT_ENV: &str = "WORLDDB_M5_22_SEGMENT_CRASH_ROOT";
+        const POINT_ENV: &str = "WORLDDB_M5_22_SEGMENT_CRASH_POINT";
+        const TEST_NAME: &str =
+            "recovery_manager::tests::process_crash_after_staged_history_replay_restores_manifest";
+
+        if let (Ok(root), Ok(point_name)) = (env::var(ROOT_ENV), env::var(POINT_ENV)) {
+            let point = match point_name.as_str() {
+                "segment_published" => RecoveryCheckpoint::SegmentPublished,
+                "manifest_published" => RecoveryCheckpoint::ManifestPublished,
+                _ => return Err(format!("unknown replay checkpoint {point_name}")),
+            };
+            let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let manager = RecoveryManager::new(layout);
+            let _ = manager.recover_with_checkpoint(&lock, |checkpoint| {
+                if checkpoint == point {
+                    std::process::exit(86);
+                }
+                false
+            });
+            return Err(format!(
+                "child did not reach replay checkpoint {point_name}"
+            ));
+        }
+
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let history_space = id::<HistorySpaceId>(31)?;
+        let history_record = Record::HistorySpaceDefinition(
+            HistorySpaceDefinition::new(history_space, None, Revision::GENESIS)
+                .map_err(|error| error.to_string())?,
+        );
+        let staged = HistorySegmentStore::new(layout.clone())
+            .stage_segment(&lock, &[history_record])
+            .map_err(|error| error.to_string())?;
+        let revision = Revision::try_from(1).map_err(|error| error.to_string())?;
+        let history_reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::History,
+            staged.id(),
+            staged.content_digest(),
+            revision,
+        );
+        let security_staged = SecurityPolicyHistoryStore::new(layout.clone())
+            .stage_version(
+                &lock,
+                &SecurityPolicyVersion::new(
+                    revision,
+                    SecurityEpoch::INITIAL,
+                    SecurityPolicySnapshot::default(),
+                ),
+                None,
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let security_reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::SecurityPolicy,
+            security_staged.id(),
+            security_staged.content_digest(),
+            revision,
+        );
+        let operation = operation_id(2)?;
+        let references = vec![history_reference, security_reference];
+        let commit_receipt = WalPrepareLog::new(&layout)
+            .commit_manifest_snapshot(
+                &lock,
+                operation,
+                references.clone(),
+                &[history_reference, security_reference],
+            )
+            .map_err(|error| error.to_string())?;
+        drop(lock);
+
+        for (checkpoint, point_name) in [
+            (RecoveryCheckpoint::SegmentPublished, "segment_published"),
+            (RecoveryCheckpoint::ManifestPublished, "manifest_published"),
+        ] {
+            let executable = env::current_exe().map_err(|error| error.to_string())?;
+            let status = Command::new(executable)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, &database.0)
+                .env(POINT_ENV, point_name)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.code() != Some(86) {
+                return Err(format!(
+                    "child for {checkpoint:?} exited with {:?}, expected crash code 86",
+                    status.code()
+                ));
+            }
+            let reopened_layout = database.layout()?;
+            let reopened_lock = reopened_layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let report = RecoveryScanner::new(reopened_layout)
+                .scan(&reopened_lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(report.safe_revision(), revision);
+        }
+
+        let reopened_layout = database.layout()?;
+        let reopened_lock = reopened_layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let recovered = RecoveryManager::new(reopened_layout.clone())
+            .recover(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(recovered.report().is_clean());
+        assert_eq!(recovered.report().safe_revision(), revision);
+        assert_eq!(
+            ManifestStore::new(reopened_layout.clone())
+                .read_current()
+                .map_err(|error| error.to_string())?
+                .map(|manifest| manifest.revision()),
+            Some(revision)
+        );
+        let reopened_manifest = ManifestStore::new(reopened_layout.clone())
+            .read_current()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "replay did not publish CURRENT".to_owned())?;
+        assert_eq!(reopened_manifest.segments().len(), 2);
+        let recovered_security = SecurityPolicyHistoryStore::new(reopened_layout.clone())
+            .read_version(security_reference.id())
+            .map_err(|error| error.to_string())?;
+        assert_eq!(recovered_security.version().revision(), revision);
+        assert_eq!(recovered_security.version().epoch(), SecurityEpoch::INITIAL);
+        assert_eq!(
+            WalPrepareLog::new(&reopened_layout)
+                .operation_status(&reopened_lock, operation)
+                .map_err(|error| error.to_string())?,
+            crate::WalOperationStatus::Committed(commit_receipt)
+        );
+        let committed_wal_path = wal_segment_path(&reopened_layout, 1);
+        let wal_bytes_before_retry =
+            fs::read(&committed_wal_path).map_err(|error| error.to_string())?;
+        let retry_receipt = WalPrepareLog::new(&reopened_layout)
+            .commit_manifest_snapshot(
+                &reopened_lock,
+                operation,
+                references,
+                &[history_reference, security_reference],
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(retry_receipt, commit_receipt);
+        assert_eq!(
+            fs::read(committed_wal_path).map_err(|error| error.to_string())?,
+            wal_bytes_before_retry
+        );
+        assert!(matches!(
+            WalPrepareLog::new(&reopened_layout).commit_manifest_snapshot(
+                &reopened_lock,
+                operation,
+                vec![],
+                &[],
+            ),
+            Err(crate::SnapshotCommitError::Wal(WalError::IdempotencyMismatch {
+                operation_id: mismatch_id,
+            })) if mismatch_id == operation
+        ));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn next_m5_22_campaign_point(state: &mut u64) -> usize {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut value = *state;
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^= value >> 31;
+        usize::try_from(value % 5).unwrap_or(0)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ntfs_campaign_seed_has_reproducible_checkpoint_counts() -> Result<(), String> {
+        let mut seed = 0x5744_422d_4d35_2d32_u64;
+        let mut checkpoint_counts = [0_usize; 5];
+        for _ in 0..100_000 {
+            let index = next_m5_22_campaign_point(&mut seed);
+            let count = checkpoint_counts.get_mut(index).ok_or_else(|| {
+                format!("checkpoint selector produced out-of-range index {index}")
+            })?;
+            *count = count.saturating_add(1);
+        }
+        assert_eq!(checkpoint_counts, [20_037, 19_920, 19_762, 20_059, 20_222]);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "long M5-22 Windows/NTFS campaign; run explicitly for 100,000 points"]
+    fn windows_ntfs_100000_deterministic_recovery_crash_points() -> Result<(), String> {
+        const CRASH_POINTS: usize = 100_000;
+        let checkpoints = [
+            RecoveryCheckpoint::IntentRecorded,
+            RecoveryCheckpoint::QuarantineFilePublished,
+            RecoveryCheckpoint::QuarantineRecorded,
+            RecoveryCheckpoint::TailTruncated,
+            RecoveryCheckpoint::JournalCompleted,
+        ];
+        let mut seed = 0x5744_422d_4d35_2d32_u64;
+        let mut checkpoint_counts = [0_usize; 5];
+        for _ in 0..(CRASH_POINTS / 100) {
+            let database = TempDatabase::create()?;
+            let layout = database.layout()?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let committed = WalPrepareLog::new(&layout)
+                .commit_manifest_snapshot(&lock, operation_id(2)?, vec![], &[])
+                .map_err(|error| error.to_string())?;
+            let committed_revision = committed.revision();
+            ManifestStore::new(layout.clone())
+                .publish(
+                    &lock,
+                    &WalPrepareLog::new(&layout),
+                    ManifestSnapshot::new(committed_revision, vec![])
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+            drop(lock);
+
+            let mut layout = layout;
+            for _ in 0..100 {
+                let lock = layout
+                    .try_writer_lock()
+                    .map_err(|error| error.to_string())?;
+                let (sequence, expected_offset) = make_torn_tail(&layout, &lock)?;
+                let target_index = next_m5_22_campaign_point(&mut seed);
+                let target = checkpoints
+                    .get(target_index)
+                    .copied()
+                    .ok_or_else(|| format!("invalid deterministic point index {target_index}"))?;
+                let manager = RecoveryManager::new(layout.clone());
+                let mut injected = false;
+                let interrupted = manager.recover_with_checkpoint(&lock, |checkpoint| {
+                    if !injected && checkpoint == target {
+                        injected = true;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if !injected || !matches!(interrupted, Err(RecoveryError::Interrupted)) {
+                    return Err(format!("crash point did not reach {target:?}"));
+                }
+                let count = checkpoint_counts
+                    .get_mut(target_index)
+                    .ok_or_else(|| format!("invalid deterministic point index {target_index}"))?;
+                *count = count.saturating_add(1);
+                drop(manager);
+                drop(lock);
+
+                layout = database.layout()?;
+                let reopened_lock = layout
+                    .try_writer_lock()
+                    .map_err(|error| error.to_string())?;
+                let recovered = RecoveryManager::new(layout.clone())
+                    .recover(&reopened_lock)
+                    .map_err(|error| error.to_string())?;
+                assert!(recovered.report().is_clean());
+                assert_eq!(recovered.report().safe_revision(), committed_revision);
+                assert_eq!(
+                    fs::metadata(wal_segment_path(&layout, sequence))
+                        .map_err(|error| error.to_string())?
+                        .len(),
+                    expected_offset
+                );
+                drop(reopened_lock);
+            }
+        }
+        assert_eq!(checkpoint_counts, [20_037, 19_920, 19_762, 20_059, 20_222]);
+        Ok(())
+    }
+
+    #[test]
+    fn altered_quarantine_copy_stops_before_wal_truncation() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let (sequence, offset) = make_torn_tail(&layout, &lock)?;
+        let manager = RecoveryManager::new(layout.clone());
+        let interrupted = manager.recover_with_checkpoint(&lock, |checkpoint| {
+            checkpoint == RecoveryCheckpoint::QuarantineRecorded
+        });
+        if !matches!(interrupted, Err(RecoveryError::Interrupted)) {
+            return Err("recovery did not stop after recording the quarantine copy".to_owned());
+        }
+        let quarantine_path = fs::read_dir(layout.quarantine_directory())
+            .map_err(|error| error.to_string())?
+            .next()
+            .ok_or_else(|| "quarantine copy is missing".to_owned())?
+            .map_err(|error| error.to_string())?
+            .path();
+        let mut quarantined = fs::read(&quarantine_path).map_err(|error| error.to_string())?;
+        let byte = quarantined
+            .first_mut()
+            .ok_or_else(|| "quarantine copy unexpectedly empty".to_owned())?;
+        *byte ^= 0x20;
+        fs::write(&quarantine_path, quarantined).map_err(|error| error.to_string())?;
+        let wal_path = wal_segment_path(&layout, sequence);
+        let original_length = fs::metadata(&wal_path)
+            .map_err(|error| error.to_string())?
+            .len();
+
+        assert!(matches!(
+            manager.recover(&lock),
+            Err(RecoveryError::TailJournalMismatch)
+        ));
+        assert_eq!(
+            fs::metadata(wal_path)
+                .map_err(|error| error.to_string())?
+                .len(),
+            original_length
+        );
+        assert!(original_length > offset);
+        Ok(())
+    }
+
+    #[test]
+    fn committed_staged_history_replays_manifest_and_operation_receipt_after_restart()
+    -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let history = HistorySegmentStore::new(layout.clone());
+        let parent_space = id::<HistorySpaceId>(9)?;
+        let child_space = id::<HistorySpaceId>(12)?;
+        let sibling_space = id::<HistorySpaceId>(13)?;
+        let parent = HistorySpaceDefinition::new(parent_space, None, Revision::GENESIS)
+            .map_err(|error| error.to_string())?;
+        let child = HistorySpaceDefinition::new(child_space, Some(parent_space), Revision::GENESIS)
+            .map_err(|error| error.to_string())?;
+        let sibling =
+            HistorySpaceDefinition::new(sibling_space, Some(parent_space), Revision::GENESIS)
+                .map_err(|error| error.to_string())?;
+        let transfer = TransferLineage::new(
+            id::<TransferLineageId>(14)?,
+            parent_space,
+            child_space,
+            HistorySpaceContentRef::Mask(id::<MaskId>(15)?),
+            HistorySpaceContentRef::Mask(id::<MaskId>(16)?),
+            Revision::try_from(1).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let base_layer_id = id::<LayerId>(17)?;
+        let base_layer = LayerDefinition::new(
+            base_layer_id,
+            Symbol::new("base").map_err(|error| error.to_string())?,
+            Some("Base layer".to_owned()),
+            0,
+            Lifecycle::Active,
+            SchemaRevision::from_published_revision(Revision::GENESIS),
+        );
+        let layer_snapshot = LayerSchemaSnapshot::new(
+            SchemaRevision::from_published_revision(Revision::GENESIS),
+            vec![base_layer.clone()],
+            base_layer_id,
+        )
+        .map_err(|error| error.to_string())?;
+        let records = [
+            Record::HistorySpaceDefinition(parent),
+            Record::HistorySpaceDefinition(child),
+            Record::HistorySpaceDefinition(sibling),
+            Record::TransferLineage(transfer),
+            Record::LayerDefinition(base_layer),
+            Record::LayerSchemaSnapshot(layer_snapshot),
+        ];
+        let staged_receipt = history
+            .stage_segment(&lock, &records)
+            .map_err(|error| error.to_string())?;
+        let through_revision = Revision::try_from(1).map_err(|error| error.to_string())?;
+        let reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::History,
+            staged_receipt.id(),
+            staged_receipt.content_digest(),
+            through_revision,
+        );
+        let principal_id = id::<PrincipalId>(10)?;
+        let policy =
+            SecurityPolicySnapshot::new(vec![Principal::new(principal_id)], vec![], vec![], vec![])
+                .map_err(|error| error.to_string())?;
+        let security = SecurityPolicyHistoryStore::new(layout.clone());
+        let genesis = security
+            .stage_version(
+                &lock,
+                &SecurityPolicyVersion::new(
+                    Revision::GENESIS,
+                    SecurityEpoch::new(0),
+                    policy.clone(),
+                ),
+                None,
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let policy_at_revision_one = policy.clone();
+        let epoch_zero = security
+            .stage_version(
+                &lock,
+                &SecurityPolicyVersion::new(
+                    through_revision,
+                    SecurityEpoch::new(0),
+                    policy_at_revision_one,
+                ),
+                None,
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let revision_two = Revision::try_from(2).map_err(|error| error.to_string())?;
+        let changed_policy = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal_id).with_state(PrincipalState::Retired)],
+            vec![],
+            vec![],
+            vec![],
+        )
+        .map_err(|error| error.to_string())?;
+        let policy_record = SecurityPolicyRecord::new(
+            id::<SecurityPolicyRecordId>(11)?,
+            revision_two,
+            principal_id,
+            SecurityEpoch::new(1),
+            vec![SecurityPolicyChange::PrincipalStateChanged {
+                principal_id,
+                state: PrincipalState::Retired,
+            }],
+        )
+        .map_err(|error| error.to_string())?;
+        let epoch_one = security
+            .stage_version(
+                &lock,
+                &SecurityPolicyVersion::new(revision_two, SecurityEpoch::new(1), changed_policy),
+                Some(&policy_record),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let genesis_reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::SecurityPolicy,
+            genesis.id(),
+            genesis.content_digest(),
+            Revision::GENESIS,
+        );
+        let epoch_reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::SecurityPolicy,
+            epoch_zero.id(),
+            epoch_zero.content_digest(),
+            through_revision,
+        );
+        let epoch_one_reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::SecurityPolicy,
+            epoch_one.id(),
+            epoch_one.content_digest(),
+            revision_two,
+        );
+        let wal = WalPrepareLog::new(&layout);
+        let first_receipt = wal
+            .commit_manifest_snapshot(
+                &lock,
+                operation_id(2)?,
+                vec![reference, genesis_reference, epoch_reference],
+                &[reference, genesis_reference, epoch_reference],
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            wal.commit_manifest_snapshot(
+                &lock,
+                operation_id(2)?,
+                vec![reference, genesis_reference, epoch_reference],
+                &[reference, genesis_reference, epoch_reference],
+            )
+            .map_err(|error| error.to_string())?,
+            first_receipt
+        );
+        assert!(matches!(
+            wal.commit_manifest_snapshot(
+                &lock,
+                operation_id(2)?,
+                vec![reference, genesis_reference, epoch_reference],
+                &[],
+            ),
+            Err(crate::SnapshotCommitError::Wal(
+                WalError::IdempotencyMismatch { .. }
+            ))
+        ));
+        let first_recovery = RecoveryManager::new(layout.clone())
+            .recover(&lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            first_recovery.report().safe_revision(),
+            first_receipt.revision()
+        );
+        assert_eq!(first_recovery.replayed_snapshots(), 1);
+        let receipt = wal
+            .commit_manifest_snapshot(
+                &lock,
+                operation_id(3)?,
+                vec![
+                    reference,
+                    genesis_reference,
+                    epoch_reference,
+                    epoch_one_reference,
+                ],
+                &[epoch_one_reference],
+            )
+            .map_err(|error| error.to_string())?;
+        drop(first_recovery);
+        drop(wal);
+        drop(history);
+        drop(security);
+        drop(lock);
+
+        let reopened_layout = database.layout()?;
+        let reopened_lock = reopened_layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let manager = RecoveryManager::new(reopened_layout.clone());
+        let outcome = manager
+            .recover(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(outcome.report().safe_revision(), receipt.revision());
+        assert_eq!(outcome.replayed_snapshots(), 2);
+        assert!(outcome.manifest_receipt().is_some());
+        let manifest = crate::ManifestStore::new(reopened_layout.clone())
+            .read_current()
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "replay did not publish CURRENT".to_owned())?;
+        assert_eq!(manifest.revision(), receipt.revision());
+        assert_eq!(manifest.segments().len(), 4);
+        let reopened_history_store = HistorySegmentStore::new(reopened_layout.clone());
+        reopened_history_store
+            .validate_manifest_reference(reference)
+            .map_err(|error| error.to_string())?;
+        let recovered_segment = reopened_history_store
+            .read_segment(reference.id())
+            .map_err(|error| error.to_string())?;
+        assert_eq!(recovered_segment.records().len(), records.len());
+        assert!(recovered_segment.records().iter().any(|record| {
+            matches!(record.record(), Record::TransferLineage(lineage)
+                if lineage.source_history_space_id() == parent_space
+                    && lineage.target_history_space_id() == child_space)
+        }));
+        assert!(recovered_segment.records().iter().any(|record| {
+            matches!(record.record(), Record::LayerSchemaSnapshot(snapshot)
+                if snapshot.base_layer_id() == base_layer_id)
+        }));
+        assert_eq!(
+            WalPrepareLog::new(&reopened_layout)
+                .operation_status(&reopened_lock, operation_id(2)?)
+                .map_err(|error| error.to_string())?,
+            crate::WalOperationStatus::Committed(first_receipt)
+        );
+        assert_eq!(
+            WalPrepareLog::new(&reopened_layout)
+                .operation_status(&reopened_lock, operation_id(3)?)
+                .map_err(|error| error.to_string())?,
+            crate::WalOperationStatus::Committed(receipt)
+        );
+        let reopened_security = SecurityPolicyHistoryStore::new(reopened_layout.clone());
+        let policy_history = reopened_security
+            .load_history(
+                receipt.revision(),
+                &[genesis.id(), epoch_zero.id(), epoch_one.id()],
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            policy_history
+                .policy()
+                .version_at(receipt.revision())
+                .map_err(|error| error.to_string())?
+                .epoch(),
+            SecurityEpoch::new(1)
+        );
+
+        drop(manager);
+        drop(reopened_history_store);
+        drop(reopened_security);
+        drop(reopened_lock);
+        let final_layout = database.layout()?;
+        let final_lock = final_layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let reopened_wal = WalPrepareLog::new(&final_layout);
+        assert_eq!(
+            reopened_wal
+                .operation_status(&final_lock, operation_id(2)?)
+                .map_err(|error| error.to_string())?,
+            crate::WalOperationStatus::Committed(first_receipt)
+        );
+        assert_eq!(
+            reopened_wal
+                .operation_status(&final_lock, operation_id(3)?)
+                .map_err(|error| error.to_string())?,
+            crate::WalOperationStatus::Committed(receipt)
+        );
+        let final_security = SecurityPolicyHistoryStore::new(final_layout.clone());
+        let final_history = final_security
+            .load_history(
+                receipt.revision(),
+                &[genesis.id(), epoch_zero.id(), epoch_one.id()],
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            final_history
+                .policy()
+                .version_at(receipt.revision())
+                .map_err(|error| error.to_string())?
+                .epoch(),
+            SecurityEpoch::new(1)
+        );
+        let second = RecoveryManager::new(final_layout)
+            .recover(&final_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(second.report().is_clean());
+        assert!(second.manifest_receipt().is_none());
+        assert_eq!(second.replayed_snapshots(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn safe_area_corruption_is_never_repaired_by_replay() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = database.layout()?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let wal = WalPrepareLog::new(&layout);
+        let first = wal
+            .commit_operation(&lock, operation_id(1)?, b"first")
+            .map_err(|error| error.to_string())?;
+        let second = wal
+            .commit_operation(&lock, operation_id(2)?, b"second")
+            .map_err(|error| error.to_string())?;
+        let path = wal_segment_path(&layout, 1);
+        let mut bytes = fs::read(&path).map_err(|error| error.to_string())?;
+        let corrupt_at =
+            usize::try_from(second.marker_offset()).map_err(|error| error.to_string())?;
+        *bytes
+            .get_mut(corrupt_at)
+            .ok_or_else(|| "missing marker byte".to_owned())? ^= 0x40;
+        fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+        let damaged = fs::read(&path).map_err(|error| error.to_string())?;
+        assert!(matches!(
+            RecoveryManager::new(layout.clone()).recover(&lock),
+            Err(RecoveryError::UnsafeFindings(_))
+        ));
+        assert_eq!(fs::read(&path).map_err(|error| error.to_string())?, damaged);
+        assert_eq!(
+            first.revision(),
+            Revision::try_from(1).map_err(|error| error.to_string())?
+        );
+        Ok(())
+    }
+}

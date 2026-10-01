@@ -1,2 +1,2 @@
 exception_id	owner	reason	expires_on
-WDB-EXC-0001	Luna	Private fallible UUIDv7 constructor is verified in M1-01 but has no product caller before M4; keep it private under ADR-037 and remove this exception when the first product action uses it.	2026-10-31
+WDB-EXC-0002	Luna	Confine the Windows MoveFileExW call for same-volume atomic manifest/CURRENT publication with MOVEFILE_WRITE_THROUGH to one documented adapter function; keep safe path encoding outside the FFI boundary and remove this exception if an equivalent safe standard API gains the required semantics.	2026-10-31

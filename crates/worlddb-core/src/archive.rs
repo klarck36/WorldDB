@@ -8,7 +8,7 @@ use crate::ids::{
     EventRelationRetractionId, EventRetractionId, EventSpanClosureId, EvidenceId,
     EvidenceRetractionId, MaskId, MaskRetractionId, MaskValidityClosureId, PerspectiveRetirementId,
     ProvenanceId, ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
-    ReplacementBoundaryValidityClosureId, Revision, SourceId,
+    ReplacementBoundaryValidityClosureId, Revision, SourceId, TransferLineageId,
 };
 
 /// Closed set of persisted record identities that may receive an archive transition.
@@ -64,6 +64,8 @@ pub enum ArchiveTargetRef {
     EntityRetirement(EntityRetirementId),
     /// A PerspectiveRetirement record.
     PerspectiveRetirement(PerspectiveRetirementId),
+    /// A persistent transfer-lineage record.
+    TransferLineage(TransferLineageId),
 }
 
 /// One explicit operational visibility action.

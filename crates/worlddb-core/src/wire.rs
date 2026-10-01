@@ -728,6 +728,7 @@ fn shift_error_offset(error: WireError, base: usize) -> WireError {
         WireError::Decimal(error) => WireError::Decimal(error),
         WireError::Symbol(error) => WireError::Symbol(error),
         WireError::Identity(error) => WireError::Identity(error),
+        WireError::UnknownExternalCode { code } => WireError::UnknownExternalCode { code },
     }
 }
 
@@ -880,7 +881,7 @@ impl<'a> TlvDecoder<'a> {
 }
 
 /// A malformed scalar, TLV field, or canonical value encoding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum WireError {
     /// A varint is malformed or nonminimal at the reported byte offset.
     Varint { offset: usize, error: IntegerError },
@@ -924,65 +925,47 @@ pub enum WireError {
     },
     /// A bounded decoder collection could not reserve its checked capacity.
     AllocationFailed { resource: DecodeResource },
+    /// A numeric code supplied by an external protocol is not recognized.
+    UnknownExternalCode { code: u32 },
+}
+
+impl WireError {
+    /// Returns the stable public identifier for this wire failure category.
+    #[must_use]
+    pub const fn public_code(self) -> &'static str {
+        match self {
+            Self::Varint { .. }
+            | Self::Integer(_)
+            | Self::Decimal(_)
+            | Self::Symbol(_)
+            | Self::Identity(_)
+            | Self::Truncated { .. }
+            | Self::LengthOverflow { .. }
+            | Self::LengthMismatch { .. }
+            | Self::TrailingBytes { .. }
+            | Self::ValueTagOverflow { .. }
+            | Self::FieldTagOverflow { .. }
+            | Self::FieldNotIncreasing { .. }
+            | Self::InvalidBoolean { .. }
+            | Self::InvalidUtf8 { .. } => "WDB-WIRE-INVALID-FRAME",
+            Self::UnknownValueTag { .. } => "WDB-WIRE-UNKNOWN-VALUE-TAG",
+            Self::ResourceLimitExceeded { .. } | Self::AllocationFailed { .. } => {
+                "WDB-WIRE-RESOURCE-LIMIT"
+            }
+            Self::UnknownExternalCode { .. } => "WDB-WIRE-UNKNOWN-EXTERNAL-CODE",
+        }
+    }
 }
 
 impl fmt::Display for WireError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Varint { offset, error } => write!(formatter, "varint at byte {offset}: {error}"),
-            Self::Integer(error) => write!(formatter, "integer encoding: {error}"),
-            Self::Decimal(error) => write!(formatter, "decimal encoding: {error}"),
-            Self::Symbol(error) => write!(formatter, "symbol encoding: {error}"),
-            Self::Identity(error) => write!(formatter, "identity encoding: {error}"),
-            Self::Truncated { offset } => write!(formatter, "truncated wire data at byte {offset}"),
-            Self::LengthOverflow { offset } => {
-                write!(formatter, "wire length overflow at byte {offset}")
-            }
-            Self::LengthMismatch { offset } => {
-                write!(formatter, "wire length mismatch at byte {offset}")
-            }
-            Self::TrailingBytes { offset } => {
-                write!(formatter, "trailing wire bytes at byte {offset}")
-            }
-            Self::ValueTagOverflow { offset } => {
-                write!(formatter, "core value tag overflow at byte {offset}")
-            }
-            Self::UnknownValueTag { offset, tag } => {
-                write!(formatter, "unknown core value tag {tag} at byte {offset}")
-            }
-            Self::FieldTagOverflow { offset } => {
-                write!(formatter, "TLV field tag overflow at byte {offset}")
-            }
-            Self::FieldNotIncreasing {
-                offset,
-                previous,
-                current,
-            } => write!(
-                formatter,
-                "TLV field tag {current} at byte {offset} does not follow {previous}"
-            ),
-            Self::InvalidBoolean { offset, byte } => {
-                write!(
-                    formatter,
-                    "invalid boolean byte 0x{byte:02x} at byte {offset}"
-                )
-            }
-            Self::InvalidUtf8 { offset } => write!(formatter, "invalid UTF-8 at byte {offset}"),
-            Self::ResourceLimitExceeded {
-                resource,
-                limit,
-                actual,
-            } => write!(
-                formatter,
-                "decoder resource {resource:?} is {actual}; configured maximum is {limit}"
-            ),
-            Self::AllocationFailed { resource } => {
-                write!(
-                    formatter,
-                    "could not reserve bounded decoder resource {resource:?}"
-                )
-            }
-        }
+        formatter.write_str(self.public_code())
+    }
+}
+
+impl fmt::Debug for WireError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.public_code())
     }
 }
 
@@ -1004,7 +987,8 @@ impl std::error::Error for WireError {
             | Self::InvalidBoolean { .. }
             | Self::InvalidUtf8 { .. }
             | Self::ResourceLimitExceeded { .. }
-            | Self::AllocationFailed { .. } => None,
+            | Self::AllocationFailed { .. }
+            | Self::UnknownExternalCode { .. } => None,
         }
     }
 }

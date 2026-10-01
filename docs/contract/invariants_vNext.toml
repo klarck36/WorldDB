@@ -2889,6 +2889,17 @@ security = "endpoint-intersection"
 eligibility = "EvidenceTarget J; Corrects/Derived J"
 
 [[first_class_type]]
+name = "TransferLineage"
+id_type = "TransferLineageId"
+main_section = "§31.2.1, M0-04a supplement"
+invariant_ids = ["WDB-BRA-002", "WDB-REF-001", "WDB-REF-005", "WDB-TX-003"]
+wire = "RecordRef tag + typed source/copy and HistorySpace refs"
+storage = "immutable project-wide transfer metadata at the shared transfer revision"
+lifecycle = "immutable"
+security = "transfer capability + field policy"
+eligibility = "dedicated lineage record; not Evidence target or Provenance endpoint"
+
+[[first_class_type]]
 name = "LayerDefinition"
 id_type = "LayerId"
 main_section = "§2.1.2"

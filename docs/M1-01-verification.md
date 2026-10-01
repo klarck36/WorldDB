@@ -12,7 +12,7 @@
 - `Revision` und `SchemaRevision` sind getrennte `u64`-Newtypes auf derselben Achse. Genesis ist 0, der erste Commit ist 1, und `u64::MAX` bleibt reserviert. `SchemaRevision` besitzt keinen eigenen Zähler. Die Zugehörigkeit einer Revision zur tatsächlich veröffentlichten Schemahistorie muss der spätere History-Reader/Writer prüfen; M1-01 implementiert noch keine History.
 - `uuid 1.26.1` und `getrandom 0.4.3` sind gepinnt und im Dependency-Register, in ADR-037 sowie im Crate-Graph-Check eingetragen. Der cargo-deny-Interpreter-Scan bleibt aktiv; ausschließlich `libc/etc/libc-util.py` ist als mitgelieferte Entwicklerhilfe pfadgenau ausgenommen.
 
-Der Generator hat noch keinen Produkt-Aufrufer vor M4. `WDB-EXC-0001` registriert die drei lokalen Dead-Code-Ausnahmen bis 2026-10-31; die Ausnahme ist beim ersten Produktaufruf zu entfernen.
+Der UUIDv7-Generator erhält in M5-14 erstmals einen Produktaufruf über die interne Core-Funktion für Salvage-Fork-Identitäten. Damit sind die drei lokalen Dead-Code-Ausnahmen aus `WDB-EXC-0001` entfallen.
 
 ## Verifikation
 

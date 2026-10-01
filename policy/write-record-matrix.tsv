@@ -1,0 +1,25 @@
+first_class_type	write_surface	record_variants	validation_boundary	atomic_path
+Entity	crates/worlddb-core/src/project_metadata_transaction.rs	Entity,EntityRetirement	EntityCatalogSnapshot plus identity/retirement checks	commit_mixed_record_batch
+PredicateDefinition	crates/worlddb-core/src/schema_write_validation.rs	PredicateDefinition	SchemaSnapshot candidate validation	commit_mixed_record_batch
+Assertion	crates/worlddb-core/src/write_reference_validation.rs	Assertion,AssertionValidityClosure,AssertionRetraction	Schema, reference, lifecycle, security and cross-record validators	commit_mixed_record_batch;commit_assertion_correction
+Mask	crates/worlddb-core/src/masks.rs	Mask,MaskValidityClosure,MaskRetraction	mask projection lifecycle and selector/context validation	commit_mixed_record_batch
+ReplacementBoundary	crates/worlddb-core/src/masks.rs	ReplacementBoundary,ReplacementBoundaryValidityClosure,ReplacementBoundaryRetraction	MultiValueReplace projection lifecycle and slot validation	commit_mixed_record_batch
+Event	crates/worlddb-core/src/write_reference_validation.rs	Event,EventSpanClosure,EventRetraction	Event schema, reference, lifecycle and relation-graph validation	commit_mixed_record_batch
+EventRelation	crates/worlddb-core/src/event_relations.rs	EventRelation,EventRelationRetraction	endpoint, duplicate, lifecycle, relation-kind and graph validation	commit_mixed_record_batch
+EventMask	crates/worlddb-core/src/events.rs	EventMask,EventMaskRetraction	Event target, HistorySpace/Layer precedence and lifecycle validation	commit_mixed_record_batch
+Source	crates/worlddb-core/src/source_evidence_projection.rs	Source	locator/digest and active supersession validation	commit_mixed_record_batch
+Evidence	crates/worlddb-core/src/source_evidence_projection.rs	Evidence,EvidenceRetraction	target visibility, active-tuple and lifecycle validation	commit_mixed_record_batch
+ProvenanceEdge	crates/worlddb-core/src/provenance_graph.rs	Provenance,ProvenanceRetraction	closed endpoint, lifecycle, duplicate and cycle validation	commit_mixed_record_batch
+TransferLineage	crates/worlddb-core/src/transfer_reference_model.rs	TransferLineage	receipt-bound source/target identity and target creation revision	commit_transfer_record_batch
+LayerDefinition	crates/worlddb-core/src/project_metadata_transaction.rs	LayerDefinition,LayerSchemaSnapshot	Layer catalog and exactly-one-base-layer candidate validation	validate_project_metadata_transaction + commit_mixed_record_batch
+HistorySpace	crates/worlddb-core/src/project_metadata_transaction.rs	HistorySpaceDefinition	parent existence, ancestry acyclicity and immutable origin validation	validate_project_metadata_transaction + commit_mixed_record_batch;commit_transfer_record_batch
+Perspective	crates/worlddb-core/src/project_metadata_transaction.rs	PerspectiveDefinitionRevision,PerspectiveRetirement	metadata revision and terminal retirement validation	validate_project_metadata_transaction + commit_mixed_record_batch
+Schema records	crates/worlddb-core/src/schema_write_validation.rs	EntityTypeDefinition,EventKindDefinition	stable ID, lifecycle, constraints and complete schema snapshot validation	commit_mixed_record_batch
+Migration records	crates/worlddb-core/src/migration.rs	MigrationPlan,MigrationRun,MigrationStepCommitIdentity	plan/run/step state transition validation	commit_migration
+Lifecycle records	crates/worlddb-core/src/archive_transaction.rs	ArchiveTransition	concrete target, same transaction axis, target-before-transition and append-only validation	validate_archive_transition_transaction + commit_mixed_record_batch
+Transaction	crates/worlddb-core/src/transaction_flow.rs		open→validated→committed/aborted typestate; no domain Record payload	commit_mixed_record_batch
+Snapshot	crates/worlddb-core/src/writer.rs		revision/policy pinning, lease and expiry state; no domain Record payload	SnapshotPublisher::publish
+Job	crates/worlddb-core/src/jobs.rs		owner, typed state transition and terminal-state checks; no domain Record payload	job state API (no Record payload)
+Principal	crates/worlddb-core/src/security_transaction.rs		current policy authorization and immutable state transitions in SecurityPolicyRecord	commit_security_policy_change
+SecurityPolicyRecord	crates/worlddb-core/src/security_transaction.rs		closed change variants, non-empty changes, policy/epoch/audit binding	commit_security_policy_change
+AuditRecord	crates/worlddb-core/src/security_transaction.rs		required action/object/actor/revision/OperationId/epoch/fingerprint binding	commit_security_policy_change

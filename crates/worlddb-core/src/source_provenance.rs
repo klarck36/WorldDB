@@ -1,16 +1,27 @@
 //! Immutable source, evidence, and provenance records with closed endpoints.
 
+use std::collections::HashSet;
 use std::fmt;
 
+use crate::assertions::Assertion;
+use crate::context::{EpistemicMode, PerspectiveScope};
 use crate::ids::{
     ArchiveTransitionId, AssertionId, AssertionRetractionId, AssertionValidityClosureId,
     EntityRetirementId, EventId, EventMaskId, EventMaskRetractionId, EventRelationRetractionId,
     EventRetractionId, EventSpanClosureId, EvidenceId, EvidenceRetractionId, MaskId,
-    MaskRetractionId, MaskValidityClosureId, PerspectiveRetirementId, ProvenanceId,
+    MaskRetractionId, MaskValidityClosureId, PerspectiveRetirementId, PredicateId, ProvenanceId,
     ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
     ReplacementBoundaryValidityClosureId, Revision, SourceId,
 };
+use crate::temporal::RecordedAsOf;
 use crate::values::{Bytes, Symbol, Value};
+
+type AssertionPropositionSlot = (
+    crate::assertions::Subject,
+    PredicateId,
+    PerspectiveScope,
+    EpistemicMode,
+);
 
 /// A non-empty source locator preserved byte-for-byte as UTF-8.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -304,7 +315,7 @@ impl Evidence {
 }
 
 /// One closed relation class for a ProvenanceEdge.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProvenanceRelation {
     /// Explains a correction; it does not retract or supersede its target.
     Corrects,
@@ -320,7 +331,7 @@ pub enum ProvenanceRelation {
 /// provenance contract. ArchiveTransition is included by the generic
 /// Lifecycle Record endpoint rule. Schema, migration, security, transaction,
 /// snapshot, job, and audit records use their own reference types.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ProvenanceEndpointRef {
     /// An Assertion record.
     Assertion(AssertionId),
@@ -525,6 +536,56 @@ impl ProvenanceEdge {
         })
     }
 
+    /// Creates `Corrects(replacement, target)` for two Assertions in the same
+    /// proposition slot. Value, polarity, and world-time validity may differ.
+    /// The replacement must be later on Transaction Time; the edge itself has
+    /// the replacement's creation revision and carries no retraction effect.
+    pub fn corrects_assertion(
+        id: ProvenanceId,
+        replacement: &Assertion,
+        target: &Assertion,
+    ) -> Result<Self, SourceEvidenceProvenanceError> {
+        let from = ProvenanceEndpointRef::Assertion(replacement.id());
+        let to = ProvenanceEndpointRef::Assertion(target.id());
+        if assertion_proposition_slot(replacement) != assertion_proposition_slot(target) {
+            return Err(SourceEvidenceProvenanceError::CorrectsAssertionSlotMismatch { from, to });
+        }
+        let edge = Self::new(
+            id,
+            from,
+            to,
+            ProvenanceRelation::Corrects,
+            replacement.created_revision(),
+        )?;
+        edge.validate_corrects_transaction_order(
+            replacement.created_revision(),
+            target.created_revision(),
+        )?;
+        Ok(edge)
+    }
+
+    /// Checks record ordering for a Corrects edge. Other relation kinds do
+    /// not assert transaction-time order and always pass this check.
+    pub fn validate_corrects_transaction_order(
+        self,
+        from_record_revision: Revision,
+        to_record_revision: Revision,
+    ) -> Result<(), SourceEvidenceProvenanceError> {
+        if self.relation == ProvenanceRelation::Corrects
+            && from_record_revision <= to_record_revision
+        {
+            return Err(
+                SourceEvidenceProvenanceError::CorrectsRecordNotLaterThanTarget {
+                    from: self.from,
+                    to: self.to,
+                    from_revision: from_record_revision,
+                    to_revision: to_record_revision,
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Returns this edge's stable identity.
     #[must_use]
     pub const fn id(self) -> ProvenanceId {
@@ -701,6 +762,108 @@ fn validate_lifecycle_revision(
     Ok(())
 }
 
+/// Provenance edges and their separate Transaction-Time retractions.
+#[derive(Clone, Copy)]
+pub struct ProvenanceEdgeHistory<'a> {
+    edges: &'a [ProvenanceEdge],
+    retractions: &'a [ProvenanceRetraction],
+}
+
+impl<'a> ProvenanceEdgeHistory<'a> {
+    /// Binds the complete project-wide edge and retraction history.
+    #[must_use]
+    pub const fn new(edges: &'a [ProvenanceEdge], retractions: &'a [ProvenanceRetraction]) -> Self {
+        Self { edges, retractions }
+    }
+
+    /// Returns all retained Provenance edges.
+    #[must_use]
+    pub const fn edges(self) -> &'a [ProvenanceEdge] {
+        self.edges
+    }
+
+    /// Returns all retained Provenance retractions.
+    #[must_use]
+    pub const fn retractions(self) -> &'a [ProvenanceRetraction] {
+        self.retractions
+    }
+}
+
+/// Returns active project-wide Provenance edges at one published revision.
+///
+/// Retractions remove only their targeted edge from this view. The projection
+/// has no World-Time, ContextPrecedence, or Resolution input. Active duplicate
+/// `(From, To, Relation)` tuples are rejected; a tuple may be reused after the
+/// earlier edge is retracted.
+pub fn project_active_provenance_edges(
+    history: ProvenanceEdgeHistory<'_>,
+    recorded_as_of: RecordedAsOf,
+) -> Result<Vec<ProvenanceEdge>, SourceEvidenceProvenanceError> {
+    let mut edges_by_id = std::collections::BTreeMap::new();
+    for edge in history.edges {
+        if edges_by_id.insert(edge.id(), *edge).is_some() {
+            return Err(SourceEvidenceProvenanceError::DuplicateProvenanceId {
+                provenance_id: edge.id(),
+            });
+        }
+    }
+
+    let mut retraction_ids = HashSet::new();
+    let mut retracted_at_query = HashSet::new();
+    for retraction in history.retractions {
+        if !retraction_ids.insert(retraction.id()) {
+            return Err(
+                SourceEvidenceProvenanceError::DuplicateProvenanceRetractionId {
+                    provenance_retraction_id: retraction.id(),
+                },
+            );
+        }
+        let edge = edges_by_id.get(&retraction.provenance_id()).ok_or(
+            SourceEvidenceProvenanceError::MissingProvenanceRetractionTarget {
+                provenance_id: retraction.provenance_id(),
+            },
+        )?;
+        validate_lifecycle_revision(edge.created_revision(), retraction.created_revision())?;
+        if retraction.created_revision() <= recorded_as_of.revision() {
+            retracted_at_query.insert(retraction.provenance_id());
+        }
+    }
+
+    let mut active = history
+        .edges
+        .iter()
+        .filter(|edge| {
+            edge.created_revision() <= recorded_as_of.revision()
+                && !retracted_at_query.contains(&edge.id())
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    active.sort_by_key(|edge| edge.id().to_string());
+    let mut logical_keys = HashSet::new();
+    for edge in &active {
+        if !logical_keys.insert((edge.from(), edge.to(), edge.relation())) {
+            return Err(
+                SourceEvidenceProvenanceError::DuplicateActiveProvenanceTuple {
+                    from: edge.from(),
+                    to: edge.to(),
+                    relation: edge.relation(),
+                },
+            );
+        }
+    }
+    Ok(active)
+}
+
+fn assertion_proposition_slot(assertion: &Assertion) -> AssertionPropositionSlot {
+    let context = assertion.context();
+    (
+        assertion.subject(),
+        assertion.predicate_id(),
+        context.perspective_scope(),
+        context.epistemic_mode(),
+    )
+}
+
 /// A rejected source field, forbidden endpoint, or lifecycle value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceEvidenceProvenanceError {
@@ -724,6 +887,48 @@ pub enum SourceEvidenceProvenanceError {
         from: ProvenanceEndpointRef,
         /// The right endpoint.
         to: ProvenanceEndpointRef,
+    },
+    /// Assertion Corrects endpoints must occupy the same proposition slot.
+    CorrectsAssertionSlotMismatch {
+        /// The replacement Assertion.
+        from: ProvenanceEndpointRef,
+        /// The corrected Assertion.
+        to: ProvenanceEndpointRef,
+    },
+    /// A Corrects replacement record must be later than its target.
+    CorrectsRecordNotLaterThanTarget {
+        /// The correcting record endpoint.
+        from: ProvenanceEndpointRef,
+        /// The corrected record endpoint.
+        to: ProvenanceEndpointRef,
+        /// The correcting record's creation revision.
+        from_revision: Revision,
+        /// The corrected record's creation revision.
+        to_revision: Revision,
+    },
+    /// Provenance record IDs must be unique in one supplied history.
+    DuplicateProvenanceId {
+        /// The repeated edge ID.
+        provenance_id: ProvenanceId,
+    },
+    /// Provenance retraction IDs must be unique in one supplied history.
+    DuplicateProvenanceRetractionId {
+        /// The repeated retraction ID.
+        provenance_retraction_id: ProvenanceRetractionId,
+    },
+    /// A retraction must refer to an existing Provenance edge.
+    MissingProvenanceRetractionTarget {
+        /// The absent edge ID.
+        provenance_id: ProvenanceId,
+    },
+    /// Only one active edge may have a given typed logical tuple.
+    DuplicateActiveProvenanceTuple {
+        /// The repeated source endpoint.
+        from: ProvenanceEndpointRef,
+        /// The repeated destination endpoint.
+        to: ProvenanceEndpointRef,
+        /// The repeated relation kind.
+        relation: ProvenanceRelation,
     },
     /// The selected relation disallows this endpoint on the indicated side.
     ForbiddenProvenanceEndpoint {
@@ -763,6 +968,36 @@ impl fmt::Display for SourceEvidenceProvenanceError {
                 formatter,
                 "Corrects endpoints must use the same record family: {from:?} -> {to:?}"
             ),
+            Self::CorrectsAssertionSlotMismatch { from, to } => write!(
+                formatter,
+                "Corrects Assertion endpoints must share a proposition slot: {from:?} -> {to:?}"
+            ),
+            Self::CorrectsRecordNotLaterThanTarget {
+                from,
+                to,
+                from_revision,
+                to_revision,
+            } => write!(
+                formatter,
+                "Corrects replacement {from:?} at {from_revision} must be later than target {to:?} at {to_revision}"
+            ),
+            Self::DuplicateProvenanceId { provenance_id } => {
+                write!(formatter, "duplicate Provenance ID {provenance_id}")
+            }
+            Self::DuplicateProvenanceRetractionId {
+                provenance_retraction_id,
+            } => write!(
+                formatter,
+                "duplicate ProvenanceRetraction ID {provenance_retraction_id}"
+            ),
+            Self::MissingProvenanceRetractionTarget { provenance_id } => write!(
+                formatter,
+                "ProvenanceRetraction target {provenance_id} does not exist"
+            ),
+            Self::DuplicateActiveProvenanceTuple { from, to, relation } => write!(
+                formatter,
+                "duplicate active Provenance tuple {from:?} -> {to:?} ({relation:?})"
+            ),
             Self::ForbiddenProvenanceEndpoint {
                 relation,
                 side,
@@ -791,19 +1026,23 @@ mod tests {
 
     use super::{
         Evidence, EvidenceRelation, EvidenceRetraction, EvidenceTargetRef, ProvenanceEdge,
-        ProvenanceEndpointRef, ProvenanceEndpointSide, ProvenanceRelation, ProvenanceRetraction,
-        Source, SourceContentDigest, SourceEvidenceProvenanceError, SourceLocator, SourceMetadata,
-        SourceMetadataEntry,
+        ProvenanceEdgeHistory, ProvenanceEndpointRef, ProvenanceEndpointSide, ProvenanceRelation,
+        ProvenanceRetraction, Source, SourceContentDigest, SourceEvidenceProvenanceError,
+        SourceLocator, SourceMetadata, SourceMetadataEntry, project_active_provenance_edges,
     };
+    use crate::assertions::{Assertion, AssertionDraft, Polarity, Subject};
+    use crate::context::{ContextError, ContextKey, EpistemicMode, PerspectiveScope};
     use crate::ids::{
         ArchiveTransitionId, AssertionId, AssertionRetractionId, AssertionValidityClosureId,
-        DomainId, EntityRetirementId, EventId, EventMaskId, EventMaskRetractionId,
+        DomainId, EntityId, EntityRetirementId, EventId, EventMaskId, EventMaskRetractionId,
         EventRelationRetractionId, EventRetractionId, EventSpanClosureId, EvidenceId,
-        EvidenceRetractionId, IdValidationError, MaskId, MaskRetractionId, MaskValidityClosureId,
-        PerspectiveRetirementId, ProvenanceId, ProvenanceRetractionId, ReplacementBoundaryId,
-        ReplacementBoundaryRetractionId, ReplacementBoundaryValidityClosureId, Revision,
-        RevisionError, SourceId,
+        EvidenceRetractionId, HistorySpaceId, IdValidationError, LayerId, MaskId, MaskRetractionId,
+        MaskValidityClosureId, PerspectiveRetirementId, PredicateId, ProvenanceId,
+        ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
+        ReplacementBoundaryValidityClosureId, Revision, RevisionError, SourceId, TimelineId,
     };
+    use crate::temporal::RecordedAsOf;
+    use crate::temporal::{AssertionValidity, TemporalError, TimeInterval, Timeline, WorldTime};
     use crate::values::{Bytes, Symbol, SymbolError, Value};
 
     type TestResult = Result<(), TestError>;
@@ -814,6 +1053,8 @@ mod tests {
         Id(IdValidationError),
         Revision(RevisionError),
         Symbol(SymbolError),
+        Context(ContextError),
+        Temporal(TemporalError),
     }
 
     impl fmt::Display for TestError {
@@ -823,6 +1064,8 @@ mod tests {
                 Self::Id(error) => write!(formatter, "{error}"),
                 Self::Revision(error) => write!(formatter, "{error}"),
                 Self::Symbol(error) => write!(formatter, "{error}"),
+                Self::Context(error) => write!(formatter, "{error}"),
+                Self::Temporal(error) => write!(formatter, "{error}"),
             }
         }
     }
@@ -843,6 +1086,8 @@ mod tests {
     error_conversion!(IdValidationError, Id);
     error_conversion!(RevisionError, Revision);
     error_conversion!(SymbolError, Symbol);
+    error_conversion!(ContextError, Context);
+    error_conversion!(TemporalError, Temporal);
 
     macro_rules! value {
         ($result:expr) => {
@@ -863,6 +1108,43 @@ mod tests {
 
     fn revision(value: u64) -> Result<Revision, RevisionError> {
         Revision::new(value)
+    }
+
+    fn assertion(
+        id: u8,
+        context_ids: (u8, u8),
+        proposition_ids: (u8, u8),
+        partition: (PerspectiveScope, EpistemicMode),
+        created_revision: u64,
+    ) -> Result<Assertion, TestError> {
+        let timeline = Timeline::new(value!(uuid::<TimelineId>(80)));
+        let context = value!(ContextKey::new(
+            value!(uuid::<HistorySpaceId>(context_ids.0)),
+            value!(uuid::<LayerId>(context_ids.1)),
+            partition.0,
+            partition.1,
+        ));
+        let validity = AssertionValidity::new(value!(TimeInterval::new(
+            timeline,
+            Some(WorldTime::from_nanoseconds(timeline, 10)),
+            None,
+        )));
+        Ok(Assertion::new(
+            value!(uuid::<AssertionId>(id)),
+            AssertionDraft::new(
+                context,
+                Subject::new(value!(uuid::<EntityId>(proposition_ids.0))),
+                value!(uuid::<PredicateId>(proposition_ids.1)),
+                Value::String(format!("value-{id}")),
+                if id % 2 == 0 {
+                    Polarity::Negative
+                } else {
+                    Polarity::Positive
+                },
+                validity,
+            ),
+            value!(revision(created_revision)),
+        ))
     }
 
     fn source_metadata() -> Result<SourceMetadata, TestError> {
@@ -1230,6 +1512,148 @@ mod tests {
             )
             .is_ok()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn assertion_corrects_requires_same_proposition_slot_and_later_record() -> TestResult {
+        let target = assertion(
+            40,
+            (41, 42),
+            (43, 44),
+            (PerspectiveScope::World, EpistemicMode::WorldState),
+            2,
+        )?;
+        let replacement = assertion(
+            45,
+            (46, 47),
+            (43, 44),
+            (PerspectiveScope::World, EpistemicMode::WorldState),
+            3,
+        )?;
+        let edge = value!(ProvenanceEdge::corrects_assertion(
+            value!(provenance_id(48)),
+            &replacement,
+            &target,
+        ));
+        assert_eq!(
+            edge.from(),
+            ProvenanceEndpointRef::Assertion(replacement.id())
+        );
+        assert_eq!(edge.to(), ProvenanceEndpointRef::Assertion(target.id()));
+        assert_eq!(edge.created_revision(), replacement.created_revision());
+        assert_eq!(edge.relation(), ProvenanceRelation::Corrects);
+        assert!(matches!(target.value(), Value::String(value) if value == "value-40"));
+
+        let wrong_subject = assertion(
+            49,
+            (41, 42),
+            (50, 44),
+            (PerspectiveScope::World, EpistemicMode::WorldState),
+            4,
+        )?;
+        assert_eq!(
+            ProvenanceEdge::corrects_assertion(value!(provenance_id(51)), &wrong_subject, &target,)
+                .err(),
+            Some(
+                SourceEvidenceProvenanceError::CorrectsAssertionSlotMismatch {
+                    from: ProvenanceEndpointRef::Assertion(wrong_subject.id()),
+                    to: ProvenanceEndpointRef::Assertion(target.id()),
+                }
+            )
+        );
+
+        let not_later = assertion(
+            52,
+            (41, 42),
+            (43, 44),
+            (PerspectiveScope::World, EpistemicMode::WorldState),
+            2,
+        )?;
+        assert_eq!(
+            ProvenanceEdge::corrects_assertion(value!(provenance_id(53)), &not_later, &target,)
+                .err(),
+            Some(
+                SourceEvidenceProvenanceError::CorrectsRecordNotLaterThanTarget {
+                    from: ProvenanceEndpointRef::Assertion(not_later.id()),
+                    to: ProvenanceEndpointRef::Assertion(target.id()),
+                    from_revision: value!(revision(2)),
+                    to_revision: value!(revision(2)),
+                }
+            )
+        );
+
+        let derived_without_time_order = value!(ProvenanceEdge::new(
+            value!(provenance_id(54)),
+            ProvenanceEndpointRef::Assertion(target.id()),
+            ProvenanceEndpointRef::Source(value!(uuid::<SourceId>(55))),
+            ProvenanceRelation::DerivedFrom,
+            value!(revision(3)),
+        ));
+        assert_eq!(
+            derived_without_time_order
+                .validate_corrects_transaction_order(value!(revision(1)), value!(revision(9)),),
+            Ok(())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn provenance_projection_filters_as_of_retractions_and_active_duplicates() -> TestResult {
+        let from = ProvenanceEndpointRef::Source(value!(uuid::<SourceId>(60)));
+        let to = ProvenanceEndpointRef::Evidence(value!(uuid::<EvidenceId>(61)));
+        let first = value!(ProvenanceEdge::new(
+            value!(provenance_id(62)),
+            from,
+            to,
+            ProvenanceRelation::DerivedFrom,
+            value!(revision(2)),
+        ));
+        let second = value!(ProvenanceEdge::new(
+            value!(provenance_id(63)),
+            from,
+            to,
+            ProvenanceRelation::DerivedFrom,
+            value!(revision(3)),
+        ));
+        let edges = [first, second];
+        let empty_retractions = [];
+        assert_eq!(
+            project_active_provenance_edges(
+                ProvenanceEdgeHistory::new(&edges, &empty_retractions),
+                RecordedAsOf::from_published_revision(value!(revision(2))),
+            )?
+            .len(),
+            1
+        );
+        assert_eq!(
+            project_active_provenance_edges(
+                ProvenanceEdgeHistory::new(&edges, &empty_retractions),
+                RecordedAsOf::from_published_revision(value!(revision(3))),
+            )
+            .err(),
+            Some(
+                SourceEvidenceProvenanceError::DuplicateActiveProvenanceTuple {
+                    from,
+                    to,
+                    relation: ProvenanceRelation::DerivedFrom,
+                }
+            )
+        );
+
+        let retraction = value!(ProvenanceRetraction::new(
+            value!(uuid::<ProvenanceRetractionId>(64)),
+            &first,
+            "replacement evidence lineage",
+            value!(revision(4)),
+        ));
+        let retractions = [retraction];
+        let active = value!(project_active_provenance_edges(
+            ProvenanceEdgeHistory::new(&edges, &retractions),
+            RecordedAsOf::from_published_revision(value!(revision(4))),
+        ));
+        assert_eq!(active.len(), 1);
+        assert_eq!(active.first().map(|edge| edge.id()), Some(second.id()));
         Ok(())
     }
 

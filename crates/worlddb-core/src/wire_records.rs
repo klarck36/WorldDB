@@ -15,6 +15,7 @@ use crate::{
     MigrationStepCommitIdentity, PerspectiveDefinitionRevision, PerspectiveRetirement,
     PredicateDefinition, ProvenanceEdge, ProvenanceRetraction, RecordRef, RecordRefWireTag,
     ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, Source,
+    TransferLineage,
 };
 
 mod events;
@@ -101,6 +102,8 @@ pub enum RecordKind {
     EvidenceRetraction = 0x1304,
     /// Transaction-Time retraction of one Provenance edge.
     ProvenanceRetraction = 0x1305,
+    /// Dedicated lineage record for HistorySpace copies excluded from DerivedFrom.
+    TransferLineage = 0x1306,
 }
 
 impl RecordKind {
@@ -147,6 +150,7 @@ impl RecordKind {
             0x1303 => Some(Self::Provenance),
             0x1304 => Some(Self::EvidenceRetraction),
             0x1305 => Some(Self::ProvenanceRetraction),
+            0x1306 => Some(Self::TransferLineage),
             _ => None,
         }
     }
@@ -225,6 +229,8 @@ pub enum Record {
     EvidenceRetraction(EvidenceRetraction),
     /// One Transaction-Time retraction of a Provenance edge.
     ProvenanceRetraction(ProvenanceRetraction),
+    /// Dedicated record for the source and target of a HistorySpace copy.
+    TransferLineage(TransferLineage),
 }
 
 /// A decoded record with optional frame capabilities retained for exact roundtrip.
@@ -537,6 +543,10 @@ fn encode_payload(record: &Record) -> Result<(RecordKind, Vec<u8>), RecordCodecE
             RecordKind::ProvenanceRetraction,
             meta::encode_provenance_retraction(value)?,
         )),
+        Record::TransferLineage(value) => Ok((
+            RecordKind::TransferLineage,
+            meta::encode_transfer_lineage(*value)?,
+        )),
     }
 }
 
@@ -642,10 +652,13 @@ fn decode_payload(
         RecordKind::ProvenanceRetraction => {
             meta::decode_provenance_retraction(payload, limits).map(Record::ProvenanceRetraction)
         }
+        RecordKind::TransferLineage => {
+            meta::decode_transfer_lineage(payload, limits).map(Record::TransferLineage)
+        }
     }
 }
 
-/// Encodes one of the 24 closed `RecordRef` variants as its
+/// Encodes one of the 25 closed `RecordRef` variants as its
 /// minimal unsigned LEB128 registry tag followed by the exact 16-byte identity.
 pub fn encode_record_ref(reference: RecordRef) -> Result<Vec<u8>, RecordCodecError> {
     let tag = reference.wire_tag().value();
@@ -674,6 +687,7 @@ pub fn encode_record_ref(reference: RecordRef) -> Result<Vec<u8>, RecordCodecErr
         RecordRef::EntityRetirement(id) => encode_id(id),
         RecordRef::PerspectiveRetirement(id) => encode_id(id),
         RecordRef::ArchiveTransition(id) => encode_id(id),
+        RecordRef::TransferLineage(id) => encode_id(id),
     };
     let mut bytes = crate::numbers::encode_u128_varint(u128::from(tag));
     bytes.extend_from_slice(&id);
@@ -770,6 +784,9 @@ pub fn decode_record_ref(bytes: &[u8]) -> Result<RecordRef, RecordCodecError> {
             .map_err(RecordCodecError::Wire),
         RecordRefWireTag::ArchiveTransition => decode_id(id_bytes)
             .map(RecordRef::ArchiveTransition)
+            .map_err(RecordCodecError::Wire),
+        RecordRefWireTag::TransferLineage => decode_id(id_bytes)
+            .map(RecordRef::TransferLineage)
             .map_err(RecordCodecError::Wire),
     }
 }

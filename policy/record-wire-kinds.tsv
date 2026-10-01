@@ -34,3 +34,4 @@ kind_hex	record	extensibility	fields
 1303	Provenance	closed	1:provenance_id;2:from_record_ref;3:to_record_ref;4:relation;5:created_revision
 1304	EvidenceRetraction	closed	1:retraction_id;2:evidence_id;3:reason;4:created_revision
 1305	ProvenanceRetraction	closed	1:retraction_id;2:provenance_id;3:reason;4:created_revision
+1306	TransferLineage	closed	1:transfer_lineage_id;2:source_history_space_id;3:target_history_space_id;4:source_record_ref;5:target_record_ref;6:created_revision

@@ -235,6 +235,24 @@ pub enum Value {
     Bytes(Bytes),
 }
 
+/// Compares canonical scalar variants and signals when temporal schema
+/// resolution is required before equality can be decided.
+pub(crate) fn canonical_value_equality(left: &Value, right: &Value) -> Option<bool> {
+    Some(match (left, right) {
+        (Value::Bool(left), Value::Bool(right)) => left == right,
+        (Value::Int(left), Value::Int(right)) => left == right,
+        (Value::UInt(left), Value::UInt(right)) => left == right,
+        (Value::Decimal(left), Value::Decimal(right)) => left == right,
+        (Value::String(left), Value::String(right)) => left == right,
+        (Value::Symbol(left), Value::Symbol(right)) => left == right,
+        (Value::Entity(left), Value::Entity(right)) => left == right,
+        (Value::Duration(left), Value::Duration(right)) => left == right,
+        (Value::Bytes(left), Value::Bytes(right)) => left == right,
+        (Value::Time(_), Value::Time(_)) => return None,
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Bytes, Symbol, SymbolError, Time, Value};

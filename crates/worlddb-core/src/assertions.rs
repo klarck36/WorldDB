@@ -78,6 +78,42 @@ impl AssertionDraft {
             validity,
         }
     }
+
+    /// Returns the explicit HistorySpace/Layer/Perspective/Epistemic context.
+    #[must_use]
+    pub const fn context(&self) -> ContextKey {
+        self.context
+    }
+
+    /// Returns the subject entity.
+    #[must_use]
+    pub const fn subject(&self) -> Subject {
+        self.subject
+    }
+
+    /// Returns the stable predicate identity.
+    #[must_use]
+    pub const fn predicate_id(&self) -> PredicateId {
+        self.predicate_id
+    }
+
+    /// Returns the typed scalar value.
+    #[must_use]
+    pub const fn value(&self) -> &Value {
+        &self.value
+    }
+
+    /// Returns the explicit proposition polarity.
+    #[must_use]
+    pub const fn polarity(&self) -> Polarity {
+        self.polarity
+    }
+
+    /// Returns the immutable world-time validity interval.
+    #[must_use]
+    pub const fn validity(&self) -> AssertionValidity {
+        self.validity
+    }
 }
 
 /// One immutable assertion history record.

@@ -12,9 +12,15 @@ workspace = true
 [features]
 default = []
 fault-injection = []
+sqlite-reference = ["dep:rusqlite"]
 
 [dependencies]
+rusqlite = { version = "=0.37.0", default-features = false, features = ["bundled"], optional = true }
 worlddb-core = { path = "../worlddb-core" }
+
+[[test]]
+name = "sqlite_reference_backend_contract"
+required-features = ["sqlite-reference"]
 
 [[bin]]
 name = "fault-probe"

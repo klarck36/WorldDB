@@ -25,11 +25,11 @@ Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgeb
 
 ## Konkreter Blocker
 
-Der Product Owner hat am 2026-09-29 mitgeteilt, dass Git/GitHub wegen eigener Kontoprobleme, die während dieses Arbeitslaufs nicht behoben werden können, nachträglich integriert wird. Es gibt daher aktuell kein Remote und keine `.github/workflows`-Datei; es wird kein Anbieterzugang vorgetäuscht und keine Pipeline ins Leere eingerichtet. Lokal bestehen Windows und WSL2/Linux; externer Anbieterjob, macOS-Ausführung und Artefaktarchivierung fehlen weiter. `M0-14` bleibt `BLOCKED`, hält aber nur den vollständigen M0-Abschluss und spätere RC-/Release-Gates zurück. Nach dem lokalen Vorfreigabepunkt M0-15 darf M1–M8 lokal fortgesetzt werden. M0-14 ist zwingend vor M9-13b und M10-10 abzuschließen; WDB-ENG-005 bleibt bis zu diesem Nachweis offen. Ein zweiter Anbieter ist nicht erforderlich. Optionale Alternativen stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
+Die Entwicklung läuft mit lokalen Git-Commits ohne Remote-Host weiter; eine GitHub-Verbindung ist dafür nicht erforderlich. Lokal bestehen Windows und WSL2/Linux. Es fehlen weiterhin ein externer Anbieterjob, eine macOS-Ausführung und die externe Artefaktarchivierung. `M0-14` bleibt deshalb `BLOCKED`, hält M1–M8 nach M0-15 aber nicht an. Vor M9-13b und M10-10 müssen die Plattformmatrix und WDB-ENG-005 mit einem tatsächlichen macOS-CI-Lauf belegt werden. Mögliche Anbieter für diesen späteren Nachweis stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
 
 ## Zum Fortsetzen erforderlich
 
-1. Nach Behebung des Kontoproblems Git/GitHub nachträglich integrieren und CI aktivieren.
-2. Vor M9-13b die Matrix auf dem aktuellen Produktstand einschließlich `macos-msrv` aus sauberen Checkouts laufen lassen und die Step-Manifeste archivieren.
+1. Vor M9-13b einen externen CI-Anbieter mit macOS-Runner bereitstellen oder auswählen.
+2. Die Matrix auf dem dann aktuellen Produktstand aus sauberen Checkouts laufen lassen und Step-Manifeste samt Job-Artefakten archivieren.
 
 Danach muss `macos-msrv` aus einem sauberen Checkout laufen und der Anbieter die Step-Manifeste archivieren. Es wurde kein Anbieter-Workflow auf Verdacht angelegt.

@@ -304,8 +304,8 @@ def master_type_rows(master_path: Path) -> list[dict[str, object]]:
             }
         )
     names = [str(row["name"]) for row in rows]
-    if len(rows) != 23 or len(set(names)) != len(rows):
-        raise ValueError(f"Master §33 must contain 23 uniquely named types; found {len(rows)}")
+    if len(rows) != 24 or len(set(names)) != len(rows):
+        raise ValueError(f"Master §33 must contain 24 uniquely named types; found {len(rows)}")
     return rows
 
 

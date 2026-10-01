@@ -672,6 +672,7 @@ fn archive_target_id(target: ArchiveTargetRef) -> (u16, [u8; 16]) {
         ArchiveTargetRef::ProvenanceRetraction(id) => (21, encode_id(id)),
         ArchiveTargetRef::EntityRetirement(id) => (22, encode_id(id)),
         ArchiveTargetRef::PerspectiveRetirement(id) => (23, encode_id(id)),
+        ArchiveTargetRef::TransferLineage(id) => (25, encode_id(id)),
     }
 }
 
@@ -765,6 +766,7 @@ pub(super) fn decode_archive_target(
             typed_target!(PerspectiveRetirementId, PerspectiveRetirement)
         }
         RecordRefWireTag::ArchiveTransition => Err(invalid_field(kind, field)),
+        RecordRefWireTag::TransferLineage => typed_target!(TransferLineageId, TransferLineage),
     }
 }
 

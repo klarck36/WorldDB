@@ -34,6 +34,52 @@ deny = [
 crate = "shlex:2.0.1"
 allow = ["default", "std"]
 
+# rusqlite uses the iterator's alloc-only default for fallible row decoding.
+# Permit only that exact version and feature set; the workspace-wide default
+# feature ban remains enabled for every other dependency.
+[[bans.features]]
+crate = "fallible-iterator:0.3.0"
+allow = ["default", "alloc"]
+
+# The optional SQLite reference adapter builds the pinned upstream amalgamation.
+# rusqlite enables this exact libsqlite3-sys feature set; broader SQLite,
+# SQLCipher, bindgen, and extension features remain denied.
+[[bans.features]]
+crate = "libsqlite3-sys:0.35.0"
+allow = [
+    "default",
+    "min_sqlite_version_3_14_0",
+    "pkg-config",
+    "vcpkg",
+    "bundled",
+    "cc",
+    "bundled_bindings",
+]
+
+# fs4 1.1.0 enables rustix's default std/alloc support and windows-sys's
+# empty default feature for its target adapters. The Windows storage adapter
+# also selects the exact Foundation and FileSystem APIs it calls. Keep the
+# exception exact-versioned; fs4 itself has defaults disabled.
+[[bans.features]]
+crate = "rustix:1.1.5"
+allow = ["default", "std", "alloc", "fs"]
+
+[[bans.features]]
+crate = "windows-sys:0.61.2"
+allow = [
+    "default",
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage",
+    "Win32_System_IO",
+    "Win32_System",
+    "Win32",
+    "Win32_Networking_WinSock",
+    "Win32_Networking",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics",
+]
+
 [bans.build]
 executables = "deny"
 interpreted = "deny"
@@ -58,8 +104,19 @@ allow-globs = [
     "c/test.py",
 ]
 
+# These are upstream SQLite/vcpkg maintenance and test scripts shipped in the
+# locked source archives. The bundled Windows build compiles sqlite3.c and
+# does not invoke them; keep the interpreted-file scan enabled elsewhere.
+[[bans.build.bypass]]
+crate = "libsqlite3-sys:0.35.0"
+allow-globs = ["upgrade.sh", "upgrade_sqlcipher.sh"]
+
+[[bans.build.bypass]]
+crate = "vcpkg:0.2.15"
+allow-globs = ["setup_vcp.sh", "tests/run.sh", "tests/vcpkgrs_target.sh"]
+
 [licenses]
-allow = ["MIT", "Apache-2.0"]
+allow = ["MIT", "Apache-2.0", "Zlib"]
 include-dev = true
 include-build = true
 confidence-threshold = 0.95

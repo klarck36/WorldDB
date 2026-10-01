@@ -10,7 +10,11 @@ VALID_GRAPH = {
     "worlddb-testkit": {"worlddb-core"},
     "xtask": set(),
 }
-VALID_EXTERNAL = {"worlddb-core": {"blake3", "getrandom", "uuid"}}
+VALID_EXTERNAL = {
+    "worlddb-core": {"blake3", "getrandom", "uuid"},
+    "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
+    "worlddb-testkit": {"rusqlite"},
+}
 
 
 class CrateGraphPolicyTests(unittest.TestCase):

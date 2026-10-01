@@ -69,8 +69,18 @@ fn parse_rounds() -> Result<u64, String> {
 }
 
 fn report_path() -> PathBuf {
-    std::env::var_os("WORLDDB_M120_PRECISION_REPORT")
-        .map_or_else(|| PathBuf::from("docs/M1-20-precision.json"), PathBuf::from)
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::env::var_os("WORLDDB_M120_PRECISION_REPORT").map_or_else(
+        || workspace_root.join("docs/M1-20-precision.json"),
+        |path| {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace_root.join(path)
+            }
+        },
+    )
 }
 
 fn json_report(

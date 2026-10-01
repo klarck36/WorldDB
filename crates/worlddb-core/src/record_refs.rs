@@ -13,7 +13,7 @@ use crate::ids::{
     PolicyRuleId, PredicateId, PrincipalId, ProvenanceId, ProvenanceRetractionId,
     ReplacementBoundaryId, ReplacementBoundaryRetractionId, ReplacementBoundaryValidityClosureId,
     RoleAssignmentId, RoleId, SecurityPolicyRecordId, SnapshotId, SourceId, TimelineId,
-    TransactionId,
+    TransactionId, TransferLineageId,
 };
 use crate::source_provenance::{EvidenceTargetRef, ProvenanceEndpointRef};
 
@@ -72,6 +72,8 @@ pub enum RecordRefWireTag {
     PerspectiveRetirement = 23,
     /// ArchiveTransition.
     ArchiveTransition = 24,
+    /// TransferLineage.
+    TransferLineage = 25,
 }
 
 impl RecordRefWireTag {
@@ -133,6 +135,7 @@ impl TryFrom<u16> for RecordRefWireTag {
             22 => Ok(Self::EntityRetirement),
             23 => Ok(Self::PerspectiveRetirement),
             24 => Ok(Self::ArchiveTransition),
+            25 => Ok(Self::TransferLineage),
             _ => Err(UnknownRecordRefWireTag { tag }),
         }
     }
@@ -144,7 +147,7 @@ impl TryFrom<u16> for RecordRefWireTag {
 /// policy/record-ref-wire-tags.tsv. Project catalog, schema, migration,
 /// security, transaction, snapshot, job, and audit identities use their own
 /// separate closed reference types below.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RecordRef {
     /// An Assertion record.
     Assertion(AssertionId),
@@ -194,6 +197,8 @@ pub enum RecordRef {
     PerspectiveRetirement(PerspectiveRetirementId),
     /// An ArchiveTransition record.
     ArchiveTransition(ArchiveTransitionId),
+    /// A persistent HistorySpace-copy lineage record.
+    TransferLineage(TransferLineageId),
 }
 
 impl RecordRef {
@@ -229,6 +234,7 @@ impl RecordRef {
             Self::EntityRetirement(_) => RecordRefWireTag::EntityRetirement,
             Self::PerspectiveRetirement(_) => RecordRefWireTag::PerspectiveRetirement,
             Self::ArchiveTransition(_) => RecordRefWireTag::ArchiveTransition,
+            Self::TransferLineage(_) => RecordRefWireTag::TransferLineage,
         }
     }
 
@@ -260,6 +266,7 @@ impl RecordRef {
             Self::EntityRetirement(_) => "EntityRetirement",
             Self::PerspectiveRetirement(_) => "PerspectiveRetirement",
             Self::ArchiveTransition(_) => "ArchiveTransition",
+            Self::TransferLineage(_) => "TransferLineage",
         }
     }
 }
@@ -461,6 +468,7 @@ impl TryFrom<RecordRef> for EvidenceTargetRef {
             RecordRef::EntityRetirement(id) => Ok(Self::EntityRetirement(id)),
             RecordRef::PerspectiveRetirement(id) => Ok(Self::PerspectiveRetirement(id)),
             RecordRef::ArchiveTransition(id) => Ok(Self::ArchiveTransition(id)),
+            RecordRef::TransferLineage(_) => Err(RecordRefConversionError::NotEvidenceTarget),
         }
     }
 }
@@ -498,6 +506,7 @@ impl TryFrom<RecordRef> for ProvenanceEndpointRef {
             RecordRef::EntityRetirement(id) => Ok(Self::EntityRetirement(id)),
             RecordRef::PerspectiveRetirement(id) => Ok(Self::PerspectiveRetirement(id)),
             RecordRef::ArchiveTransition(id) => Ok(Self::ArchiveTransition(id)),
+            RecordRef::TransferLineage(_) => Err(RecordRefConversionError::NotProvenanceEndpoint),
         }
     }
 }
@@ -530,7 +539,8 @@ impl TryFrom<RecordRef> for LifecycleTargetRef {
             | RecordRef::ProvenanceRetraction(_)
             | RecordRef::EntityRetirement(_)
             | RecordRef::PerspectiveRetirement(_)
-            | RecordRef::ArchiveTransition(_) => Err(RecordRefConversionError::NotLifecycleTarget),
+            | RecordRef::ArchiveTransition(_)
+            | RecordRef::TransferLineage(_) => Err(RecordRefConversionError::NotLifecycleTarget),
         }
     }
 }
@@ -567,6 +577,7 @@ impl TryFrom<RecordRef> for ArchiveTargetRef {
             RecordRef::ProvenanceRetraction(id) => Ok(Self::ProvenanceRetraction(id)),
             RecordRef::EntityRetirement(id) => Ok(Self::EntityRetirement(id)),
             RecordRef::PerspectiveRetirement(id) => Ok(Self::PerspectiveRetirement(id)),
+            RecordRef::TransferLineage(id) => Ok(Self::TransferLineage(id)),
             RecordRef::ArchiveTransition(_) => Err(RecordRefConversionError::NotArchiveTarget),
         }
     }
@@ -600,7 +611,8 @@ impl TryFrom<RecordRef> for EventRelationProvenanceRef {
             | RecordRef::ProvenanceRetraction(_)
             | RecordRef::EntityRetirement(_)
             | RecordRef::PerspectiveRetirement(_)
-            | RecordRef::ArchiveTransition(_) => {
+            | RecordRef::ArchiveTransition(_)
+            | RecordRef::TransferLineage(_) => {
                 Err(RecordRefConversionError::NotEventRelationProvenance)
             }
         }
@@ -691,7 +703,7 @@ mod tests {
         OperationId, PerspectiveRetirementId, PolicyRuleId, PredicateId, PrincipalId, ProvenanceId,
         ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
         ReplacementBoundaryValidityClosureId, RoleAssignmentId, RoleId, SecurityPolicyRecordId,
-        SnapshotId, SourceId, TimelineId, TransactionId,
+        SnapshotId, SourceId, TimelineId, TransactionId, TransferLineageId,
     };
     use crate::source_provenance::{EvidenceTargetRef, ProvenanceEndpointRef};
 
@@ -731,18 +743,25 @@ mod tests {
             RecordRef::EntityRetirement(uuid::<EntityRetirementId>(22)?),
             RecordRef::PerspectiveRetirement(uuid::<PerspectiveRetirementId>(23)?),
             RecordRef::ArchiveTransition(uuid::<ArchiveTransitionId>(24)?),
+            RecordRef::TransferLineage(uuid::<TransferLineageId>(25)?),
         ])
     }
 
     fn is_evidence_target(reference: RecordRef) -> bool {
         !matches!(
             reference,
-            RecordRef::EventRelation(_) | RecordRef::Source(_) | RecordRef::Evidence(_)
+            RecordRef::EventRelation(_)
+                | RecordRef::Source(_)
+                | RecordRef::Evidence(_)
+                | RecordRef::TransferLineage(_)
         )
     }
 
     fn is_provenance_endpoint(reference: RecordRef) -> bool {
-        !matches!(reference, RecordRef::EventRelation(_))
+        !matches!(
+            reference,
+            RecordRef::EventRelation(_) | RecordRef::TransferLineage(_)
+        )
     }
 
     fn is_lifecycle_target(reference: RecordRef) -> bool {
@@ -774,7 +793,7 @@ mod tests {
     fn every_record_ref_has_one_stable_unique_wire_tag_and_ledger_entry()
     -> Result<(), crate::ids::IdValidationError> {
         let references = record_refs()?;
-        assert_eq!(references.len(), 24);
+        assert_eq!(references.len(), 25);
         let mut expected_tag = 1_u16;
         let mut expected_rows = Vec::new();
         for reference in &references {
@@ -835,12 +854,13 @@ mod tests {
             RecordRef::EntityRetirement(_) => "EntityRetirementId",
             RecordRef::PerspectiveRetirement(_) => "PerspectiveRetirementId",
             RecordRef::ArchiveTransition(_) => "ArchiveTransitionId",
+            RecordRef::TransferLineage(_) => "TransferLineageId",
         }
     }
 
     #[test]
     fn unknown_record_ref_wire_tags_fail_closed() {
-        for tag in [0, 25, u16::MAX] {
+        for tag in [0, 26, u16::MAX] {
             let result = RecordRefWireTag::try_from(tag);
             assert_eq!(result, Err(super::UnknownRecordRefWireTag { tag }));
         }
@@ -916,7 +936,7 @@ mod tests {
                 .iter()
                 .filter(|reference| is_archive_target(**reference))
                 .count(),
-            23
+            24
         );
         assert_eq!(
             references

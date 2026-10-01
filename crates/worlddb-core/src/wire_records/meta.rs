@@ -1,5 +1,6 @@
 //! Project-wide Source, Evidence, and Provenance record payloads.
 
+use crate::ids::TransferLineageId;
 use crate::source_provenance::{
     Evidence, EvidenceRelation, EvidenceRetraction, EvidenceTargetRef, ProvenanceEdge,
     ProvenanceEndpointRef, ProvenanceRelation, ProvenanceRetraction, Source, SourceContentDigest,
@@ -10,6 +11,7 @@ use crate::wire::{
     encode_value,
 };
 use crate::{Bytes, RecordRef, Symbol};
+use crate::{HistorySpaceContentRef, TransferLineage};
 
 use super::lifecycle::{optional, read_optional};
 use super::{
@@ -400,4 +402,47 @@ pub(super) fn decode_provenance_retraction(
         reason,
         created_revision,
     ))
+}
+
+pub(super) fn encode_transfer_lineage(value: TransferLineage) -> Result<Vec<u8>, RecordCodecError> {
+    encode_fields(
+        RecordKind::TransferLineage,
+        vec![
+            (1, encode_id(value.id()).to_vec()),
+            (2, encode_id(value.source_history_space_id()).to_vec()),
+            (3, encode_id(value.target_history_space_id()).to_vec()),
+            (
+                4,
+                crate::wire_records::encode_record_ref(value.source().record_ref())?,
+            ),
+            (
+                5,
+                crate::wire_records::encode_record_ref(value.target().record_ref())?,
+            ),
+            (6, encode_revision(value.created_revision())),
+        ],
+    )
+}
+
+pub(super) fn decode_transfer_lineage(
+    payload: &[u8],
+    limits: &DecoderLimits,
+) -> Result<TransferLineage, RecordCodecError> {
+    let kind = RecordKind::TransferLineage;
+    let fields = decode_fields_with_limits(kind, payload, &[1, 2, 3, 4, 5, 6], limits)?;
+    let id = decode_id::<TransferLineageId>(required_field(kind, &fields, 1)?)
+        .map_err(RecordCodecError::Wire)?;
+    let source_space =
+        decode_id(required_field(kind, &fields, 2)?).map_err(RecordCodecError::Wire)?;
+    let target_space =
+        decode_id(required_field(kind, &fields, 3)?).map_err(RecordCodecError::Wire)?;
+    let source_ref = crate::wire_records::decode_record_ref(required_field(kind, &fields, 4)?)?;
+    let target_ref = crate::wire_records::decode_record_ref(required_field(kind, &fields, 5)?)?;
+    let source =
+        HistorySpaceContentRef::try_from(source_ref).map_err(|_| invalid_field(kind, 4))?;
+    let target =
+        HistorySpaceContentRef::try_from(target_ref).map_err(|_| invalid_field(kind, 5))?;
+    let revision = decode_revision(kind, 6, required_field(kind, &fields, 6)?)?;
+    TransferLineage::new(id, source_space, target_space, source, target, revision)
+        .map_err(|_| invalid_field(kind, 5))
 }

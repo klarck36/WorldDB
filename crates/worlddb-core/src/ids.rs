@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::{Builder, Uuid, Variant};
 
 const UUID_BYTES: usize = 16;
-#[allow(dead_code, reason = "WDB-EXC-0001")]
 const UUID_V7_TIMESTAMP_MAX: u64 = (1_u64 << 48) - 1;
 
 /// Namespace in which an identity is unique.
@@ -545,6 +544,14 @@ define_domain_ids!(
         persistent
     ),
     (
+        TransferLineageId,
+        Database,
+        Database,
+        CanonicalUuid,
+        true,
+        persistent
+    ),
+    (
         EntityRetirementId,
         Database,
         Database,
@@ -702,7 +709,6 @@ define_domain_ids!(
 ///
 /// This function remains inside the private `ids` module so callers receive IDs
 /// through product actions, not through a free-standing generator API.
-#[allow(dead_code, reason = "WDB-EXC-0001")]
 pub fn generate_id<T: DomainId>() -> Result<T, IdGenerationError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -715,7 +721,6 @@ pub fn generate_id<T: DomainId>() -> Result<T, IdGenerationError> {
     T::try_from_bytes(bytes).map_err(IdGenerationError::InvalidGeneratedId)
 }
 
-#[allow(dead_code, reason = "WDB-EXC-0001")]
 fn build_uuid_v7(
     timestamp_millis: u64,
     entropy: &[u8; 10],
@@ -1082,6 +1087,7 @@ mod tests {
             "EventRelationRetractionId",
             "EvidenceRetractionId",
             "ProvenanceRetractionId",
+            "TransferLineageId",
             "EntityRetirementId",
             "PerspectiveRetirementId",
             "ArchiveTransitionId",

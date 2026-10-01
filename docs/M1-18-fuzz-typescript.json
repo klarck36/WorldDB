@@ -1,28 +1,28 @@
 {
-  "run_id": "M1-18-ts-574f524c44444232-1790722644",
+  "run_id": "M1-18-ts-574f524c44444232-1790754779",
   "seed": "0x574f524c44444232",
-  "started_unix_seconds": 1790722644,
-  "elapsed_seconds": 3615.07,
-  "cpu_seconds": 3600.156,
-  "rounds": 4935681,
-  "source_revision": "UNCOMMITTED_GIT_DEFERRED",
+  "started_unix_seconds": 1790754779,
+  "elapsed_seconds": 3623.416,
+  "cpu_seconds": 3600.439,
+  "rounds": 4500481,
+  "source_revision": "98fc31f6ffe64f171f39293fec76c24b9a423710",
   "decoder_targets": 1,
   "calls_by_decoder": {
-    "typescript.json_envelope": 44435604
+    "typescript.json_envelope": 40517529
   },
   "calls_by_seed": {
-    "canonical": 4935682,
-    "empty_input": 4935682,
-    "truncate_last": 4935682,
-    "flip_one_bit": 4935682,
-    "append_junk": 4935682,
-    "duplicate_key": 4935682,
-    "malformed_escape": 4935682,
-    "oversized_object_fields": 4935682,
-    "oversized_object_graph": 4935682,
-    "oversized_scalar_string": 4822,
-    "oversized_bytes_value": 4822,
-    "oversized_utf8_frame": 4822
+    "canonical": 4500482,
+    "empty_input": 4500482,
+    "truncate_last": 4500482,
+    "flip_one_bit": 4500482,
+    "append_junk": 4500482,
+    "duplicate_key": 4500482,
+    "malformed_escape": 4500482,
+    "oversized_object_fields": 4500482,
+    "oversized_object_graph": 4500482,
+    "oversized_scalar_string": 4397,
+    "oversized_bytes_value": 4397,
+    "oversized_utf8_frame": 4397
   },
   "crashes": [],
   "result": "PASS_LOCAL"

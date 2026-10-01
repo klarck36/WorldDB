@@ -1160,6 +1160,7 @@ Eine Invariante benennt eine oder mehrere **Evidence Classes** und getrennt davo
 | Source | SourceId | §§2.3.2, 31.2 | WDB-SRC-001/002 | RecordRef tag | project meta-history | immutable/superseded | field policy | Corrects/Derived J; not EvidenceTarget |
 | Evidence | EvidenceId | §31.2 | WDB-EVI-001–007 | closed target tag | project meta-history edge | retraction | endpoint-intersection | Corrects/Derived J; not EvidenceTarget |
 | ProvenanceEdge | ProvenanceId | §31.2 | WDB-PRV-001–013 | relation + closed endpoints | project meta-history graph | retraction | endpoint-intersection | EvidenceTarget J; Corrects/Derived J |
+| TransferLineage | TransferLineageId | §31.2.1, M0-04a supplement | WDB-BRA-002, WDB-REF-001/005, WDB-TX-003 | RecordRef tag + typed source/copy and HistorySpace refs | immutable project-wide transfer metadata at the shared transfer revision | immutable | transfer capability + field policy | dedicated lineage record; not Evidence target or Provenance endpoint |
 | LayerDefinition | LayerId | §2.1.2 | WDB-LAY-001–011 | schema ID/definition incl. base designation | schema history | Active/Deprecated/Retired | layer capability | schema provenance only |
 | HistorySpace | HistorySpaceId | §2.1.1 | WDB-BRA-001–005 | typed ID + parent/base | immutable ancestry metadata | no implicit merge/delete | space capability | administrative provenance only |
 | Perspective | PerspectiveId | §§2.1.2, 2.3.1, M0-04 supplement | WDB-EPI-001–003 | typed 16-byte PerspectiveId | revisioned project definition; optional name/description | Active → Retired at shared Revision | perspective action/use policy; never Principal | through assertions |
@@ -2328,9 +2329,9 @@ ArchiveTransition {
 }
 ```
 
-`ArchiveTargetRef` is an exhaustive, closed subset containing every current 1.0 `RecordRef` variant except `ArchiveTransition`; it has one typed case for each admitted variant and a validating `TryFrom<RecordRef>`. It therefore admits Assertion, Mask, ReplacementBoundary, Event, EventMask, EventRelation, Source, Evidence, Provenance, and every concrete lifecycle record, including Entity/Perspective retirement. It cannot target itself. It has no string, generic UUID, HistorySpace, schema, principal, transaction, snapshot, job, or audit escape hatch. Each transition has a concrete ID and its own `RecordRef::ArchiveTransition(ArchiveTransitionId)` variant, as required by WDB-LFC-002. It receives a distinct `WireTag` from the central format registry.
+`ArchiveTargetRef` is an exhaustive, closed subset containing every current 1.0 `RecordRef` variant except `ArchiveTransition`; it has one typed case for each admitted variant and a validating `TryFrom<RecordRef>`. It therefore admits Assertion, Mask, ReplacementBoundary, Event, EventMask, EventRelation, Source, Evidence, Provenance, TransferLineage, and every concrete lifecycle record, including Entity/Perspective retirement. It cannot target itself. It has no string, generic UUID, HistorySpace, schema, principal, transaction, snapshot, job, or audit escape hatch. Each transition has a concrete ID and its own `RecordRef::ArchiveTransition(ArchiveTransitionId)` variant, as required by WDB-LFC-002. It receives a distinct `WireTag` from the central format registry.
 
-`ArchiveTransitionId` and `RecordRef::ArchiveTransition` add one concrete lifecycle ID and one case to the exhaustive lists in Master §§3.1/3.2. Neither aliases an existing ID or wire tag; decoder limits and the format registry are completed in M0-11.
+`ArchiveTransitionId` and `RecordRef::ArchiveTransition` add one concrete lifecycle ID and one case to the exhaustive lists in Master §§3.1/3.2. `TransferLineageId` and `RecordRef::TransferLineage` add one persistent project-wide record identity. None aliases an existing ID or wire tag; decoder limits and the format registry are completed in M0-11.
 
 The current state of a target at `RecordedAsOf` is the state after its latest visible transition; before its first transition it is `Unarchived`. `Archive` is valid only from `Unarchived`; `Unarchive` is valid only from `Archived`. Repeating the current state fails as `AlreadyArchived` or `NotArchived`. Concurrent changes to one target conflict through normal OCC validation; revision order or record-ID order is never used as last-writer-wins.
 
@@ -2374,13 +2375,26 @@ TransferPlan {
 
 Every copied record receives a fresh ID of the same concrete type. The complete source-to-target ID map is visible in the plan and outcome. An ID collision, duplicate mapping, type-changing mapping, or mapping to an already existing record fails; the engine never silently adopts or deduplicates an existing identity. References among copied records are rewritten by the explicit map. A reference outside the selected set is retained only when the plan explicitly says `RetainVisible` and validation proves that the referenced record is visible and admissible from the target HistorySpace at commit. Otherwise the transfer fails before publication.
 
-The plan includes every effective Closure/Retraction record needed to preserve the selected content at `source_recorded_as_of`, unless `OmitWithAcknowledgement` is selected and the preview reports the resulting lifecycle difference. Archive state is not a domain lifecycle effect. `PreserveArchiveState` creates an ArchiveTransition for each copied record or selected EventRelation whose source is archived; `StartUnarchived` leaves each copy unarchived. The preview lists those transitions explicitly.
+The plan includes every effective Closure/Retraction record needed to preserve the selected content at `source_recorded_as_of`, unless `OmitWithAcknowledgement` is selected and the preview reports the resulting lifecycle difference. Archive state is not a domain lifecycle effect. ArchiveHistory requires every ArchiveTransition to be strictly later than target creation. Therefore a one-revision transfer cannot preserve an archived source state on a newly created copy: `PreserveArchiveState` fails closed if any selected source record or EventRelation is archived. The preview lists those archive targets and the required later Archive transaction. `StartUnarchived` leaves each copy unarchived; callers may archive it in a separate subsequent transaction.
 
-For every copied `HistorySpaceContentRef`, the same transaction creates a `ProvenanceEdge` with `relation: DerivedFrom`, `from: source_record_ref`, and `to: copied_record_ref`. This records the exact origin of each new identity. Existing Evidence and Provenance edges remain attached to their original records and are not rewritten or copied implicitly. A caller can add separate, explicitly authorized Evidence or Provenance records for a copy. The new lineage edge remains project-wide meta-history and is returned in the outcome; a context-bound provenance query emits it only when both endpoints are visible and authorized in that query context. EventRelation lineage uses the separate rule above because generic Provenance does not accept EventRelation endpoints. If an edge, endpoint, cycle, or duplicate constraint makes the lineage invalid, the entire transfer fails.
+For each copied `HistorySpaceContentRef`, the same transaction records exactly one source-to-copy lineage artifact. If the source family is admitted by the closed `DerivedFrom` source matrix in Master §31.2.1 / WDB-REF-005, the artifact is a `ProvenanceEdge` with `relation: DerivedFrom`, `from: source_record_ref`, and `to: copied_record_ref`. If it is `Mask`, `ReplacementBoundary`, or `EventMask`, the artifact is a `TransferLineage` record instead:
+
+```text
+TransferLineage {
+  transfer_lineage_id: TransferLineageId,
+  source_history_space_id: HistorySpaceId,
+  target_history_space_id: HistorySpaceId,
+  source: HistorySpaceContentRef,
+  target: HistorySpaceContentRef,
+  created_revision: Revision
+}
+```
+
+`TransferLineage` requires distinct source and target IDs of the same concrete family and is committed at the transfer's shared revision. It is project-wide metadata, not a generic Provenance endpoint, Evidence target, or `HistorySpaceContentRef`; it does not enlarge or alter any endpoint matrix. Existing Evidence and Provenance edges remain attached to their original records and are not rewritten or copied implicitly. EventRelation lineage uses the separate rule above because generic Provenance does not accept EventRelation endpoints. If any required lineage artifact, endpoint, cycle, or duplicate constraint is invalid, the entire transfer fails.
 
 ## 4. Transaction, conflict, and outcome rules
 
-The transfer is one ordinary validated transaction and publishes at most one shared `Revision`. Its only writes are the planned target-local copies, selected remapped EventRelations, required lifecycle copies, explicitly planned archive transitions, and their `DerivedFrom` lineage edges. It uses the normal `OperationId` idempotency contract. A retry with the same ID and payload returns the same receipt; a changed payload with that ID fails.
+The transfer is one ordinary validated transaction and publishes at most one shared `Revision`. Its only writes are the planned target-local copies, selected remapped EventRelations, required lifecycle copies, explicitly planned archive transitions, and one family-appropriate lineage artifact per copied record. It uses the normal `OperationId` idempotency contract. A retry with the same ID and payload returns the same receipt; a changed payload with that ID fails.
 
 At commit, the engine revalidates the plan fingerprint, source snapshot, target head, all typed references, current schema, capabilities, ID uniqueness, lifecycle effects, and Provenance graph against the complete post-transaction state. A changed target head yields `TransactionConflict` and requires a new preview. Any rejected reference, schema or lifecycle violation, ID collision, authorization failure, or graph conflict leaves the target unchanged. The source, its parent, the target's parent and every sibling remain unchanged.
 
@@ -2396,7 +2410,7 @@ An Outcome returns the committed Revision and the typed source-to-copy maps for 
 - Archive state is an operational projection. Closure remains world-time validity, Retraction remains transaction-time lifecycle, and Purge remains an offline rewrite to a new database with a PurgeReport.
 - The contract preserves WDB-BRA-001–005, WDB-LFC-001/002, WDB-TX-001/003–006, WDB-PRV-002–013, WDB-REF-001–005, WDB-HIS-004, WDB-PRG-001/002, and WDB-EXP-002.
 
-Implementation tests must cover Archive/Unarchive transitions at revisions on both sides of each change; operational, include-archived, and raw-history queries; every operation's duplicate/fault cases; valid transfer to a child and sibling; ID and reference collisions; preserved lifecycle effects and archive policy; duplicate facts that resolve to Conflict; `DerivedFrom` lineage; target-head conflict; graph/authorization failure atomicity; and unchanged source, parent, and sibling HistorySpaces.
+Implementation tests must cover Archive/Unarchive transitions at revisions on both sides of each change; operational, include-archived, and raw-history queries; every operation's duplicate/fault cases; valid transfer to a child and sibling; ID and reference collisions; preserved lifecycle effects and archive policy; duplicate facts that resolve to Conflict; `DerivedFrom` for allowed families and `TransferLineage` for Mask, ReplacementBoundary, and EventMask; target-head conflict; graph/authorization failure atomicity; and unchanged source, parent, and sibling HistorySpaces.
 
 # WorldDB 1.0 supplement – Constraints and time registration
 

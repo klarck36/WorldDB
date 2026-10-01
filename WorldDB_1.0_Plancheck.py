@@ -25,6 +25,26 @@ FOLLOWUPS = ROOT / "WorldDB_1.0_Folgebelege.tsv"
 TASK_PATTERN = re.compile(r"^- \[([ x])\] \*\*(M\d+-\d+[a-z]?) – (.+?)\.\*\*", re.M)
 COUNT_PATTERN = re.compile(r"beschreibt derzeit (\d+) Tasks")
 VALID_STATES = {"PLANNED", "READY", "RUNNING", "WAITING_EXTERNAL", "BLOCKED", "DONE"}
+# M2-18 explicitly gates this index-free reference-model invariant scope. Other
+# invariant families can have earlier primary tasks while being governed by a
+# later gate (for example source-commit binding in WDB-WIR).
+GATE_INVARIANT_FAMILIES = {
+    "M2": {"WDB-HIS", "WDB-BRA", "WDB-LAY", "WDB-TIM", "WDB-AST", "WDB-PRO",
+           "WDB-MSK", "WDB-RES", "WDB-SCH", "WDB-EVT", "WDB-EVI", "WDB-PRV"},
+    # M3 gates the API/security/error/audit boundaries and their explicit
+    # reference-model follow-ups. Wire campaign source-commit bindings remain
+    # governed by the later M9 release gates, not by this local Core gate.
+    "M3": {"WDB-API", "WDB-AUD", "WDB-BRA", "WDB-ENG", "WDB-EPI", "WDB-ERR",
+           "WDB-EVI", "WDB-HIS", "WDB-LAY", "WDB-OBS", "WDB-PRV", "WDB-REF",
+           "WDB-RES", "WDB-SCH", "WDB-SEC", "WDB-SNP", "WDB-SRC", "WDB-TYP"},
+    # M4 is the engine write/transaction/concurrency milestone. Derive this
+    # scope from invariants whose primary or follow-up tasks are in M4; later
+    # release-only families (for example WDB-WIR source-commit binding) are
+    # checked by their explicitly assigned future gates.
+    "M4": {"WDB-AST", "WDB-BRA", "WDB-CON", "WDB-EVI", "WDB-EVT", "WDB-LAY",
+           "WDB-OCC", "WDB-OWN", "WDB-PRV", "WDB-SCH", "WDB-SNP", "WDB-TX",
+           "WDB-TYP"},
+}
 
 
 def read_tsv(path: Path) -> list[dict[str, str]]:
@@ -157,6 +177,10 @@ def main() -> int:
             # M0-15 is an explicit local development pre-gate; external CI remains
             # mandatory before the RC architecture audit and final publication.
             expected_gate_dependencies.discard("M0-14")
+        if milestone == "M4":
+            # APFS measurement is a deferred platform acceptance task. The local
+            # M4 gate can proceed only with unverified platform writes fail-closed.
+            expected_gate_dependencies.discard("M4-15")
         if milestone != "M10" and set(dep_graph[ids[-1]]) != expected_gate_dependencies:
             errors.append(f"{milestone}: gate dependencies differ from the declared milestone gate scope")
         if milestone != "M0":
@@ -237,9 +261,16 @@ def main() -> int:
             int(args.gate_precheck[1:]) < 9
             and m0_14_status in {"BLOCKED", "WAITING_EXTERNAL"}
         )
+        m4_15_status = task_by_id.get("M4-15", {}).get("status")
+        deferred_m4_platform = (
+            args.gate_precheck == "M4"
+            and m4_15_status in {"BLOCKED", "WAITING_EXTERNAL"}
+        )
         for task_id in milestone_ids[:-1]:
             if task_by_id[task_id]["status"] != "DONE":
                 if args.gate_precheck == "M0" and task_id == "M0-14" and deferred_ci:
+                    continue
+                if task_id == "M4-15" and deferred_m4_platform:
                     continue
                 errors.append(f"{args.gate_precheck}: prerequisite task {task_id} is not DONE")
         if args.gate_precheck != "M0":
@@ -247,11 +278,20 @@ def main() -> int:
             if task_by_id[prior_gate]["status"] != "DONE":
                 errors.append(f"{args.gate_precheck}: prior gate {prior_gate} is not DONE")
         for row in invariant_rows:
+            if args.gate_precheck in GATE_INVARIANT_FAMILIES and row["invariant_id"].rsplit("-", 1)[0] not in GATE_INVARIANT_FAMILIES[args.gate_precheck]:
+                continue
             primary = row["primary_task"]
             if primary in task_position and task_position[primary] < gate_position:
                 if deferred_ci and row["invariant_id"] == "WDB-ENG-005":
                     continue
-                if row["status"] != "DONE" or not (
+                if deferred_m4_platform and primary == "M4-15":
+                    continue
+                # The matrix status covers the invariant's full lifecycle,
+                # including future follow-ups (for example crash durability).
+                # A milestone precheck only requires its completed primary
+                # task and concrete positive/negative evidence; due follow-ups
+                # are checked pair-by-pair below.
+                if task_by_id[primary]["status"] != "DONE" or not (
                     concrete_refs(row["positive_evidence"]) and concrete_refs(row["negative_evidence"])
                 ):
                     errors.append(f"{args.gate_precheck}: {row['invariant_id']} lacks primary positive/negative evidence")
@@ -279,6 +319,8 @@ def main() -> int:
         print("GATE PRECHECK ONLY: test/run/artifact existence, outcomes and semantic effectiveness are not verified here")
         if deferred_ci:
             print("DEFERRED RELEASE PREREQUISITE: M0-14 and WDB-ENG-005 remain open; M9-13b and M10-10 are blocked until CI passes")
+        if deferred_m4_platform:
+            print("DEFERRED PLATFORM PREREQUISITE: M4-15 remains open; APFS Machine-durability is unsupported until M5-10/M5-23 platform evidence passes")
     return 0
 
 

@@ -23,3 +23,4 @@ tag	variant	id_type
 22	EntityRetirement	EntityRetirementId
 23	PerspectiveRetirement	PerspectiveRetirementId
 24	ArchiveTransition	ArchiveTransitionId
+25	TransferLineage	TransferLineageId

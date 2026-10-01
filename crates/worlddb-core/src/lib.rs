@@ -159,6 +159,15 @@
 //! }
 //! ```
 //!
+//! Events and Assertions are separate story records; an Event cannot become an Assertion implicitly:
+//!
+//! ```compile_fail
+//! use worlddb_core::{Assertion, Event};
+//! fn witness_event_does_not_create_knowledge(event: Event) {
+//!     let _: Assertion = event;
+//! }
+//! ```
+//!
 //! EventMask and EventRetraction are distinct records, and their lifecycle
 //! identifiers cannot be interchanged.
 //!
@@ -166,6 +175,16 @@
 //! use worlddb_core::{EventMask, EventRetraction};
 //! fn mask_is_not_an_event_retraction(mask: EventMask) {
 //!     let _: EventRetraction = mask;
+//! }
+//! ```
+//!
+//! An EventMask also cannot be used as an Assertion Mask; event visibility
+//! and assertion visibility have separate projections and lifecycle families.
+//!
+//! ```compile_fail
+//! use worlddb_core::{EventMask, Mask};
+//! fn event_mask_does_not_become_assertion_mask(mask: EventMask) {
+//!     let _: Mask = mask;
 //! }
 //! ```
 //!
@@ -205,9 +224,29 @@
 //! }
 //! ```
 //!
+//! EventRelation has no World-Time validity interval; corrections use an
+//! independent EventRelationRetraction record.
+//!
+//! ```compile_fail
+//! use worlddb_core::EventRelation;
+//! fn relation_has_no_world_time_validity(relation: EventRelation) {
+//!     let _ = relation.validity();
+//! }
+//! ```
+//!
 //! Evidence and Provenance endpoints are closed typed subsets. A Source or an
 //! Evidence record cannot be used as an Evidence target, and EventRelation has
 //! its separate relation-reference contract.
+//!
+//! Evidence remains explanatory metadata and cannot be converted into an
+//! Assertion that would affect resolution.
+//!
+//! ```compile_fail
+//! use worlddb_core::{Assertion, EvidenceHistoryEntry};
+//! fn evidence_does_not_create_an_assertion(entry: EvidenceHistoryEntry<'_>) {
+//!     let _: Assertion = entry;
+//! }
+//! ```
 //!
 //! ```compile_fail
 //! use worlddb_core::{EvidenceTargetRef, SourceId};
@@ -422,6 +461,24 @@
 //! }
 //! ```
 //!
+//! A Perspective cannot be registered as an authenticated security Principal:
+//!
+//! ```compile_fail
+//! use worlddb_core::{PerspectiveId, Principal};
+//! fn perspective_is_not_authority(perspective: PerspectiveId) {
+//!     let _principal = Principal::new(perspective);
+//! }
+//! ```
+//!
+//! Query security context requires a `PrincipalId`, never a `PerspectiveId`:
+//!
+//! ```compile_fail
+//! use worlddb_core::{AuthorizationMode, PerspectiveId, SecurityContext};
+//! fn perspective_cannot_authorize(perspective: PerspectiveId) {
+//!     let _security = SecurityContext::new(perspective, AuthorizationMode::Now);
+//! }
+//! ```
+//!
 //! `Value` has no domain-wide ordering; query ordering must select typed
 //! ordering rules for the operation and its schema snapshot.
 //!
@@ -502,28 +559,92 @@
 //! ```
 //! ```
 
+mod admin_raw;
 mod archive;
+mod archive_projection;
+mod archive_transaction;
+mod assertion_correction;
+mod assertion_projection;
 mod assertions;
 mod audit;
 mod audit_wire;
+mod candidate_scan;
 mod catalog;
+mod commit_cancellation;
 mod context;
+mod context_precedence;
+mod cursor;
+mod database_close;
+mod diagnostics;
+mod errors;
+mod event_projection;
 mod event_relations;
 mod events;
+mod history_model;
 mod ids;
+mod job_supervisor;
 mod jobs;
 mod layers;
+mod mask_projection;
 mod masks;
 mod migration;
+mod multi_value_resolution;
+#[cfg(test)]
+mod non_interference;
 mod numbers;
+mod occ_point;
+mod operation_status;
+mod policy_audit;
+mod project_metadata_transaction;
+mod provenance_graph;
+mod query_aggregate;
+mod query_context;
+mod query_graph;
+mod query_ports;
+mod query_search;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "query ports consume the internal stream in the next milestone"
+    )
+)]
+mod query_stream;
 mod record_refs;
+mod reference_query;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the internal replay-safe runner is consumed by a future designated worker"
+    )
+)]
+mod retry;
+mod revision_backend;
+mod revision_history;
 mod schema;
+mod schema_history;
+mod schema_write_validation;
+mod security;
+mod security_transaction;
+mod single_value_resolution;
+mod snapshot_lease;
+mod source_evidence_projection;
 mod source_provenance;
+mod storage_contract;
 mod temporal;
 mod transaction;
+mod transaction_flow;
+mod transfer_model;
+mod transfer_reference_model;
+mod transfer_transaction;
 mod values;
 mod wire;
 mod wire_records;
+mod write_authorization;
+mod write_cross_record_validation;
+mod write_reference_validation;
+mod writer;
 
 pub use ids::{
     ArchiveTransitionId, AssertionId, AssertionRetractionId, AssertionValidityClosureId,
@@ -534,10 +655,60 @@ pub use ids::{
     HistorySpaceId, IdGenerationError, IdNamespace, IdPersistence, IdScope, IdValidationError,
     IdWire, JobId, LayerId, MaskId, MaskRetractionId, MaskValidityClosureId, MigrationId,
     MigrationRunId, MigrationStepId, OperationId, PersistentId, PerspectiveId,
-    PerspectiveRetirementId, PredicateId, PrincipalId, ProvenanceId, ProvenanceRetractionId,
-    ReplacementBoundaryId, ReplacementBoundaryRetractionId, ReplacementBoundaryValidityClosureId,
-    Revision, RevisionError, SchemaRevision, SecurityEpoch, SecurityEpochError, SnapshotId,
-    SourceId, TimelineId, TransactionId, WireId,
+    PerspectiveRetirementId, PolicyRuleId, PredicateId, PrincipalId, ProvenanceId,
+    ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
+    ReplacementBoundaryValidityClosureId, Revision, RevisionError, RoleAssignmentId, RoleId,
+    SchemaRevision, SecurityEpoch, SecurityEpochError, SecurityPolicyRecordId, SnapshotId,
+    SourceId, TimelineId, TransactionId, TransferLineageId, WireId,
+};
+
+#[doc(hidden)]
+pub mod storage_internal {
+    //! Internal types shared with the file-storage adapter.
+
+    pub use crate::ids::SegmentId;
+
+    /// Creates the database identity for a new salvage fork through the core UUIDv7 policy.
+    #[doc(hidden)]
+    pub fn generate_salvage_fork_database_id()
+    -> Result<crate::ids::DatabaseId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates a WAL identity for a storage-only maintenance commit.
+    #[doc(hidden)]
+    pub fn generate_storage_maintenance_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates an audit identity for one raw-read page attempt.
+    #[doc(hidden)]
+    pub fn generate_raw_read_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates a fresh audit-operation identity; retries intentionally get a new value.
+    #[doc(hidden)]
+    pub fn generate_raw_read_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+}
+
+pub use security::{
+    AuthorizationDecision, Capability, CapabilityGrant, CapabilityRule, EvidenceRelationship,
+    FieldSelector, GrantEffect, PolicyBundle, PolicyBundleError, PolicyEventRelationKind,
+    PolicyScope, PolicySubject, PolicyTarget, Principal, PrincipalState, ProvenanceRelationship,
+    RelationshipSelector, RoleAssignment, RoleDefinition, RoleDefinitionError, SecurityPolicyError,
+    SecurityPolicyHistory, SecurityPolicyHistoryError, SecurityPolicySnapshot,
+    SecurityPolicyVersion, SecurityPolicyView,
+};
+pub use security_transaction::{
+    SecurityPolicyChange, SecurityPolicyChangeRequest, SecurityPolicyCommitBatch,
+    SecurityPolicyRecord, SecurityPolicyRecordError, SecurityPolicyTransactionError,
+    SecurityPolicyTransactionOutcome, commit_security_policy_change,
 };
 
 pub use audit::{
@@ -555,29 +726,82 @@ pub use audit_wire::{
 pub use archive::{
     ArchiveAction, ArchiveState, ArchiveTargetRef, ArchiveTransition, ArchiveTransitionError,
 };
+pub use archive_projection::{
+    ArchiveHistoryReferenceModel, ArchiveProjectionError, ArchiveTargetRecord,
+};
+pub use archive_transaction::{ArchiveTransactionError, validate_archive_transition_transaction};
+pub use assertion_correction::{
+    AssertionCorrectionCommand, AssertionCorrectionCommitError,
+    AssertionCorrectionCommitValidationError, AssertionCorrectionError,
+    PreparedAssertionCorrection, commit_assertion_correction, prepare_assertion_correction,
+};
+pub use assertion_projection::{AssertionLifecycleProjection, AssertionProjectionError};
 pub use assertions::{
     Assertion, AssertionDraft, AssertionRecordError, AssertionRetraction, AssertionValidityClosure,
     Polarity, Subject,
+};
+pub use candidate_scan::{
+    AssertionCandidate, AssertionCandidateQuery, AssertionHistoryRecord, CandidateScanError,
+    full_scan_assertion_candidates, full_scan_authorized_assertion_candidates,
 };
 pub use catalog::{
     Entity, EntityCatalogError, EntityCatalogSnapshot, EntityRetirement, HistorySpaceCatalog,
     HistorySpaceDefinition, HistorySpaceError, PerspectiveCatalogError, PerspectiveCatalogSnapshot,
     PerspectiveDefinitionRevision, PerspectiveRetirement,
 };
+pub use commit_cancellation::{
+    CancellationRequestDisposition, CommitCancellation, CommitCancellationState, CommitpointError,
+    CommitpointPermit,
+};
 pub use context::{ContextError, ContextKey, EpistemicMode, PerspectiveScope};
+pub use context_precedence::{ContextPrecedence, ContextPrecedenceError};
+pub use cursor::{
+    CursorInsertRequest, CursorSecurityContext, CursorStateError, CursorStateStore,
+    CursorStoreLimits, CursorToken, QueryHash,
+};
+pub use database_close::{
+    DatabaseCloseOwner, DatabaseCloseReport, NoTelemetryFlusher, TelemetryFlushStatus,
+    TelemetryFlusher,
+};
+pub use diagnostics::{
+    BoundedDiagnostics, DiagnosticCode, DiagnosticCounter, DiagnosticEvent, DiagnosticEventError,
+    DiagnosticEventKind, DiagnosticField, DiagnosticFieldKey, DiagnosticPort, DiagnosticQueueError,
+    DiagnosticRedaction, DiagnosticSpanName, MAX_DIAGNOSTIC_FIELDS, MAX_DIAGNOSTIC_QUEUE_CAPACITY,
+    SafeDiagnosticValue, StableDiagnosticHash,
+};
+pub use errors::{
+    BackupError, CommitError, CommitOutcome, CommitReceipt, ConflictFact, ConflictReport,
+    ErrorFacts, ExportError, IntegrityImpact, InternalError, JobError, MigrationError, OpenError,
+    PublicErrorCode, PublicErrorDto, QueryError, RecoveryAction, RecoveryError,
+    ResourceLookupFailure, RetryHint, Retryability, SecurityError, Severity, StorageError,
+    StorageFailureClass, StorageOperation, ValidationError, map_resource_lookup_error,
+    recovery_action, to_public_error, to_public_job_error,
+};
+pub use event_projection::{
+    EventCandidate, EventCandidateQuery, EventCorrection, EventHistory, EventProjectionError,
+    EventTimeFilter, full_scan_authorized_event_candidates, full_scan_event_candidates,
+    prepare_event_correction,
+};
 pub use event_relations::{
-    EventRelation, EventRelationBatch, EventRelationError, EventRelationInputKind,
-    EventRelationKey, EventRelationKind, EventRelationRetraction,
+    EventGraphError, EventGraphProjection, EventRelation, EventRelationBatch, EventRelationError,
+    EventRelationHistory, EventRelationInputKind, EventRelationKey, EventRelationKind,
+    EventRelationRetraction, project_active_event_relations,
+    project_authorized_active_event_relations, validate_event_graph_transaction,
 };
 pub use events::{
     Event, EventAttributeValue, EventAttributes, EventDraft, EventMask, EventMaskRetraction,
     EventParticipant, EventRecordError, EventRetraction, EventSpanClosure, Participants,
 };
+pub use history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
 pub use jobs::{
     DeterminateJobProgress, JobBudget, JobBudgetError, JobDescriptor, JobKind, JobProgress,
-    JobProgressError, JobStatus, JobTerminalState,
+    JobProgressError, JobStatus, JobTerminalState, TaskFailure, TaskRole, observe_task_join,
 };
 pub use layers::{LayerDefinition, LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
+pub use mask_projection::{
+    AssertionMaskContext, AuthorizedAssertionMaskHistory, MaskProjectionError,
+    apply_assertion_masks, apply_authorized_assertion_masks,
+};
 pub use masks::{
     Mask, MaskRecordError, MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure,
     PropositionKey, ReplacementBoundary, ReplacementBoundaryError, ReplacementBoundaryRetraction,
@@ -587,6 +811,11 @@ pub use migration::{
     MigrationCategory, MigrationPlan, MigrationPlanError, MigrationRun, MigrationRunState,
     MigrationStepCommitIdentity,
 };
+pub use multi_value_resolution::{
+    MultiValueConflict, MultiValueEntry, MultiValueOutcome, MultiValueReplaceContext,
+    MultiValueResolutionError, MultiValueSlot, ReplacementBoundaryHistory,
+    resolve_multi_value_overlay, resolve_multi_value_replace,
+};
 
 pub use temporal::{
     AssertionValidity, Duration, EventTime, RecordedAsOf, TemporalError, TimeInterval, Timeline,
@@ -594,12 +823,88 @@ pub use temporal::{
 };
 
 pub use transaction::{TransactionDescriptor, TransactionIdentity, TransactionState};
+pub use transaction_flow::{
+    CancellableCommitError, MixedRecordCommitError, Open, OpenTransaction, TransactionBeginError,
+    Validated, ValidatedTransaction, WriteTransaction, commit_mixed_record_batch,
+};
+pub use transfer_model::{
+    ExternalReferenceDecision, HistorySpaceContentRef, HistorySpaceContentRefError,
+    TransferArchivePolicy, TransferLifecyclePolicy, TransferLineage, TransferLineageError,
+    TransferPlan, TransferPlanError, TransferPlanSpec,
+};
+pub use transfer_reference_model::{
+    TransferPreview, TransferPreviewAcknowledgement, TransferReceipt, TransferRecord,
+    TransferReferenceModel, TransferReferenceModelError,
+};
+pub use transfer_transaction::{
+    TransferTransactionError, TransferTransactionOutcome, commit_transfer_record_batch,
+};
 
+pub use admin_raw::{
+    AdminRawAuditAuthorizer, AdminRawAuditError, AdminRawAuthorizeRequest, AdminRawError,
+    release_admin_raw_page,
+};
+pub use job_supervisor::{
+    JobCompletion, JobControl, JobPool, JobResumeMetadata, JobShutdownError, JobShutdownReport,
+    JobSnapshot, JobSpec, JobStateError, JobSubmitError, JobSupervisor, JobSupervisorLimitError,
+    JobSupervisorLimits,
+};
 pub use numbers::{Decimal, DecimalError, Int, IntegerError, UInt};
+pub use occ_point::{OccPointError, OccPointStore, OccPointTransaction, OccScopeKey};
+pub use operation_status::{
+    OperationAttempt, OperationBeginOutcome, OperationStatus, OperationStatusError,
+    OperationStatusJournal,
+};
+pub use policy_audit::{
+    AuditAccessPermissions, AuditRetentionError, AuditRetentionPolicy, InMemoryPolicyState,
+    InMemoryRequiredAuditPort, MAX_IN_MEMORY_AUDIT_RECORDS, PolicyAuditError, RequiredAuditError,
+    RequiredAuditPort, apply_required_policy_change,
+};
+pub use project_metadata_transaction::{
+    ProjectMetadataCandidate, ProjectMetadataSnapshot, ProjectMetadataValidationError,
+    validate_project_metadata_transaction,
+};
+pub use provenance_graph::{
+    GraphValidationBudget, ProvenanceDependencyEdge, ProvenanceGraphError,
+    ProvenanceGraphProjection, project_authorized_provenance_edges,
+    validate_provenance_graph_transaction,
+};
+pub use query_aggregate::{
+    AggregateError, AggregateGroupValue, AggregateResult, AggregateSpec, GroupValueKey,
+    GroupedCountRow, ResolvedAggregateRow, aggregate_visible_resolved,
+};
+pub use query_context::{
+    AuthorizationMode, BudgetDimension, CancellationToken, QueryBudget, QueryBudgetError,
+    QueryBudgetLimits, QueryContext, QueryContextBinding, QueryContextError, QueryContextInput,
+    SecurityContext, SnapshotSelector, ValidatedLayerSelection, WorldTimeSelector,
+};
+pub use query_graph::{
+    GraphCandidateSet, GraphCyclePolicy, GraphDirection, GraphEdge, GraphError, GraphNode,
+    GraphRelationshipKind, GraphResult, GraphSpec, TraversedGraphEdge,
+    full_scan_authorized_graph_traversal,
+};
+pub use query_ports::{
+    OwnedQueryResult, QueryPortError, bind_authorized_explain, bind_authorized_resolved_view,
+    full_scan_owned_authorized_raw_history,
+};
+pub use query_search::{
+    QuerySearchError, SearchDocument, SearchHit, SearchMatch, SearchSpec, SearchTextField,
+    SearchToken, full_scan_token_search,
+};
 pub use record_refs::{
     AuditRecordRef, DatabaseBoundRef, DatabaseReference, EventRelationProvenanceRef, JobRef,
     LifecycleTargetRef, MigrationRecordRef, RecordRef, RecordRefConversionError, RecordRefWireTag,
     SchemaRecordRef, SecurityRecordRef, SnapshotRef, TransactionRef, UnknownRecordRefWireTag,
+};
+pub use reference_query::{
+    ExplainStage, ExplainStageError, ExplainStageKind, HistoricalQueryBinding, RawHistoryError,
+    RawHistoryRow, ReferenceExplain, ReferenceExplainError, ResolvedOutcome, ResolvedView,
+    ResolvedViewError, canonicalize_raw_history_rows, full_scan_authorized_raw_history,
+    full_scan_raw_history,
+};
+pub use revision_backend::{CancellablePublishError, InMemoryRevisionBackend, RevisionBackend};
+pub use revision_history::{
+    HistoricalRead, InMemoryRevisionLog, PublishedCommit, RevisionLogError,
 };
 pub use schema::{
     CalendarPeriod, Cardinality, ConstraintSet, DecimalFieldMetadata, EntityTypeConstraint,
@@ -608,11 +913,36 @@ pub use schema::{
     PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, RoleCardinality,
     SchemaDefinitionError, TimeRange, ValueConstraint, ValueKind,
 };
+pub use schema_history::{
+    SchemaDefinition, SchemaHistoryError, SchemaHistoryReferenceModel, SchemaMode, SchemaSnapshot,
+};
+pub use schema_write_validation::{
+    DeprecatedSchemaWriteWarning, SchemaWriteValidationError, ValidatedAssertionBatch,
+    validate_assertion_batch,
+};
+pub use single_value_resolution::{
+    SingleValueOutcome, SingleValueResolutionError, SingleValueSlot, resolve_single_value_replace,
+};
+pub use snapshot_lease::{
+    HistorySpaceView, SnapshotBinding, SnapshotBindingInput, SnapshotError, SnapshotLease,
+    SnapshotLifetimeLimits, SnapshotLifetimeStatus, SnapshotPinPurpose, SnapshotRegistry,
+    SnapshotSecurityBinding,
+};
+pub use source_evidence_projection::{
+    EvidenceHistoryEntry, EvidenceHistoryStatus, EvidenceTargetHistoryEntry, SourceEvidenceError,
+    SourceEvidenceHistory, SourceEvidenceProjection, SourceEvidenceQuery,
+    full_scan_authorized_source_evidence, full_scan_source_evidence,
+    validate_source_evidence_post_transaction,
+};
 pub use source_provenance::{
     Evidence, EvidenceRelation, EvidenceRetraction, EvidenceTargetRef, ProvenanceEdge,
-    ProvenanceEndpointRef, ProvenanceEndpointSide, ProvenanceRelation, ProvenanceRetraction,
-    Source, SourceContentDigest, SourceEvidenceProvenanceError, SourceLocator, SourceMetadata,
-    SourceMetadataEntry,
+    ProvenanceEdgeHistory, ProvenanceEndpointRef, ProvenanceEndpointSide, ProvenanceRelation,
+    ProvenanceRetraction, Source, SourceContentDigest, SourceEvidenceProvenanceError,
+    SourceLocator, SourceMetadata, SourceMetadataEntry, project_active_provenance_edges,
+};
+pub use storage_contract::{
+    DurabilityLevel, ProductionStorage, StorageBackend, StorageCapabilities, StorageFeature,
+    StorageFeatureSet, StorageRequirementError,
 };
 pub use values::{Bytes, Symbol, SymbolError, Time, Value};
 pub use wire::{
@@ -625,4 +955,20 @@ pub use wire_records::{
     DecodedRecord, Record, RecordCodecError, RecordKind, decode_record,
     decode_record_batch_with_limits, decode_record_ref, decode_record_with_limits,
     encode_decoded_record, encode_record, encode_record_ref, encode_record_with_flags,
+};
+pub use write_authorization::{
+    WriteAuthorizationError, authorize_deprecated_schema_warnings, authorize_validated_write_batch,
+};
+pub use write_cross_record_validation::{
+    ValidatedWriteCrossRecordState, WriteCrossRecordCandidate, WriteCrossRecordValidationError,
+    validate_write_cross_record_state,
+};
+pub use write_reference_validation::{
+    ReferenceCatalog, ValidatedWriteReferenceBatch, WriteReferenceSnapshot,
+    WriteReferenceValidationError, validate_write_references,
+};
+pub use writer::{
+    DatabaseHandle, SingleWriter, SnapshotPublicationError, SnapshotPublisher, SnapshotRead,
+    WriterCloseError, WriterCloseReport, WriterCoordinator, WriterReply, WriterUnavailable,
+    spawn_single_writer,
 };

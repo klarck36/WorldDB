@@ -196,8 +196,8 @@ def first_class_types_from_master(master_text: str) -> list[dict[str, str | list
             }
         )
     names = [str(record["name"]) for record in records]
-    if len(records) != 23 or len(set(names)) != 23:
-        raise ValueError(f"Master §33 must contain 23 uniquely named types; found {len(records)}")
+    if len(records) != 24 or len(set(names)) != 24:
+        raise ValueError(f"Master §33 must contain 24 uniquely named types; found {len(records)}")
     return records
 
 
@@ -289,6 +289,33 @@ def m0_04_master_copy(source_master: str, supplements: list[str]) -> str:
         "not a Domain Evidence/Provenance target",
     )
     lines.insert(principal_index + 1, "| " + " | ".join(security_record_cells) + " |" + line_ending)
+    if any(
+        (cells := split_markdown_table_row(line)) and cells[0] == "TransferLineage"
+        for line in lines
+    ):
+        raise ValueError("Source Master already contains the M2 TransferLineage row")
+    provenance_index = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if (cells := split_markdown_table_row(line)) and cells[0] == "ProvenanceEdge"
+        ),
+        None,
+    )
+    if provenance_index is None:
+        raise ValueError("Cannot add TransferLineage without the Master §33 ProvenanceEdge row")
+    transfer_lineage_cells = (
+        "TransferLineage",
+        "TransferLineageId",
+        "§31.2.1, M0-04a supplement",
+        "WDB-BRA-002, WDB-REF-001/005, WDB-TX-003",
+        "RecordRef tag + typed source/copy and HistorySpace refs",
+        "immutable project-wide transfer metadata at the shared transfer revision",
+        "immutable",
+        "transfer capability + field policy",
+        "dedicated lineage record; not Evidence target or Provenance endpoint",
+    )
+    lines.insert(provenance_index + 1, "| " + " | ".join(transfer_lineage_cells) + " |" + line_ending)
     master = "".join(lines).rstrip("\r\n")
     separator = "\r\n\r\n" if "\r\n" in source_master else "\n\n"
     normalized_supplements = [

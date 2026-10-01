@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "efdd15a69ac74dbc12f78ab73ee1562b37c927f48de5e98c236db21d000ce739",
+      "working_sha256": "f07659c1bf9d0b3f0dee60f5307756eeb8cf808285a7cbea3b2d5899ca2b9ce6",
       "byte_identical": false
     },
     {
@@ -49,7 +49,7 @@
       "working_file": "invariants_vNext.toml",
       "source_file": "docs/source/invariants_vNext.toml",
       "source_sha256": "3b220fea1f11dbc074ab082bc3ec5d528700cc312943c38fd4d0e79cec40c43e",
-      "working_sha256": "d3c41f64687574db67ae659283848b8a6ea4c56c7c085bbc882d73b0a14a1ef9",
+      "working_sha256": "acf8b00b0e0cd6ad93fd01ef50adc898caae0f5ba44fc194e254a46451a947fd",
       "byte_identical": false
     }
   ],
@@ -65,9 +65,9 @@
     {
       "task": "M0-04a",
       "specification": "docs/contract/archive_transfer_contract.md",
-      "specification_sha256": "d270f0f7dcaf9a07ee5c5ef450ff5250a5e63b5a7d6e710c634ea8a8d3ebbc3f",
+      "specification_sha256": "fb9cdd83c3efeb4966bf2f35ce80c892b04c970e907f848c7aa5c3147360e13c",
       "decision_record": "docs/contract/ADR-031-archive-transfer.md",
-      "decision_record_sha256": "134d317bf6ee2e14642ec3962331ca1b3643a0987fca3c878e659f09a1ff1ecb",
+      "decision_record_sha256": "98eda74bc9aac386f15ff41500dddb535721f7f9d299c9c52d3c24e85d516bc9",
       "status": "accepted working contract"
     },
     {

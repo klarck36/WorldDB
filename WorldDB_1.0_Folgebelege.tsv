@@ -1,127 +1,128 @@
 invariant_id	task_id	status	evidence_ref	result	checked_at	note
-WDB-HIS-001	M5-22	PLANNED				
+WDB-HIS-001	M5-22	DONE	test:recovery_manager::tests::process_crash_can_interrupt_each_tail_recovery_checkpoint	PASS	2026-10-02T00:07:06+02:00	Der committed Fünfrevisionspräfix bleibt nach jedem Recovery-Prozessabbruch lückenlos sichtbar.
 WDB-HIS-003	M7-15	PLANNED				
-WDB-HIS-004	M3-05	PLANNED				
-WDB-HIS-004	M5-12	PLANNED				
+WDB-HIS-004	M3-05	DONE	artifact:docs/M3-05-verification.md	PASS	2026-09-30T18:56:00+02:00	M2-16 same-binding regression and policy epoch/view regression pass; durable history reconstruction remains M5 follow-up.
+WDB-HIS-004	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Recovery veröffentlicht History- und LayerSchemaSnapshot-Records erneut; reproduzierbare Querybindung ist separat durch M3-05 belegt.
 WDB-HIS-004	M6-13	PLANNED				
-WDB-BRA-001	M4-05a	PLANNED				
-WDB-BRA-001	M5-12	PLANNED				
+WDB-BRA-001	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::unpublished_child_cutoff_and_denied_metadata_rights_reject_candidate;test:project_metadata_transaction::tests::history_space_children_publish_without_mutating_schema_or_siblings	PASS	2026-09-30T23:24:21+02:00	The commit callback rejects a child cutoff later than the already published parent head and retains the existing parent definition.
+WDB-BRA-001	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Parent-/Child-/Sibling-Definitionen und TransferLineage überstehen Replay und erneutes Öffnen; Cutoff-Semantik ist durch M2/M4 belegt.
 WDB-BRA-001	M6-13	PLANNED				
-WDB-BRA-002	M4-05a	PLANNED				
-WDB-BRA-002	M5-12	PLANNED				
+WDB-BRA-002	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::history_space_children_publish_without_mutating_schema_or_siblings	PASS	2026-09-30T23:24:21+02:00	Creating sibling HistorySpaces appends both immutable definitions at one revision; the parent cutoff remains pinned.
+WDB-BRA-002	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Persistierte Parent-/Child-/Sibling-Definitionen werden wiederhergestellt; kein implizites Übernehmen späterer Parent-Commits.
 WDB-BRA-002	M6-13	PLANNED				
-WDB-BRA-003	M4-05a	PLANNED				
-WDB-BRA-003	M4-05b	PLANNED				
-WDB-BRA-003	M5-12	PLANNED				
+WDB-BRA-003	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::history_space_children_publish_without_mutating_schema_or_siblings	PASS	2026-09-30T23:24:21+02:00	Two sibling child definitions are admitted together without rewriting existing HistorySpace definitions or schema state.
+WDB-BRA-003	M4-05b	DONE	artifact:docs/M4-05b-verification.md;test:archive_transaction::tests::archive_transition_publishes_once_and_does_not_cascade;test:transfer_transaction::tests::transfer_candidate_and_typed_records_publish_at_one_revision	PASS	2026-10-01T00:02:34+02:00	Transfer publish is one revision; prior/sibling HistorySpace state is retained; Archive adds no cascade.
+WDB-BRA-003	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	TransferLineage wird nach Replay wieder gelesen; Quell- und Geschwisterisolation ist durch M2-02a/M4-05b belegt.
 WDB-BRA-003	M6-13	PLANNED				
-WDB-BRA-004	M4-05a	PLANNED				
-WDB-BRA-004	M4-05b	PLANNED				
-WDB-BRA-004	M5-12	PLANNED				
+WDB-BRA-004	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::history_space_children_publish_without_mutating_schema_or_siblings	PASS	2026-09-30T23:24:21+02:00	The HistorySpace-only metadata transaction preserves the schema fingerprint.
+WDB-BRA-004	M4-05b	DONE	artifact:docs/M4-05b-verification.md;test:archive_transaction::tests::archive_transition_publishes_once_and_does_not_cascade;test:transfer_transaction::tests::transfer_candidate_and_typed_records_publish_at_one_revision	PASS	2026-10-01T00:02:34+02:00	Transfer adds only target-local copies and typed lineage; project schema identities remain outside the transfer batch.
+WDB-BRA-004	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Recovery stellt HistorySpace- und Layer-Schema-Records wieder her; Schemaidentitäten bleiben durch die Primärtests belegt.
 WDB-BRA-004	M6-13	PLANNED				
-WDB-BRA-005	M3-07	PLANNED				
-WDB-LAY-001	M4-04b	PLANNED				
+WDB-BRA-005	M3-07	DONE	artifact:docs/M3-07-verification.md;test:query_context::tests::valid_context_binds_every_axis_and_pinned_layers	PASS	2026-09-30T21:32:00+02:00	HistorySpaceId is the sole Branch-domain type; complete query contexts bind concrete branch and snapshot identity.
+WDB-LAY-001	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::complete_assertion_references_produce_a_validated_batch;test:write_reference_validation::tests::assertion_perspective_must_resolve_in_the_selected_catalog;test:write_reference_validation::tests::catalogs_from_different_revisions_are_rejected	PASS	2026-09-30T22:29:30+02:00	Write-reference validation binds layer and perspective context to retained catalogs and rejects mismatched catalog revisions; storage/import evidence remains assigned to M5-06.
 WDB-LAY-001	M5-06	PLANNED				
-WDB-LAY-003	M3-15	PLANNED				
-WDB-LAY-004	M3-15	PLANNED				
-WDB-LAY-005	M4-04c	PLANNED				
-WDB-LAY-005	M4-05a	PLANNED				
+WDB-LAY-003	M3-15	DONE	artifact:docs/M3-15-verification.md;test:mask_projection::tests::cross_partition_and_equal_precedence_masks_do_not_hide;test:single_value_resolution::tests::combined_resolution_security_truth_table_has_no_hidden_contributors	PASS	2026-09-30T21:32:00+02:00	Cross-partition masks are inert; 96-case policy matrix confirms only eligible visible contributors affect results.
+WDB-LAY-004	M3-15	DONE	artifact:docs/M3-15-verification.md;test:candidate_scan::tests::full_scan_respects_ancestry_cutoffs_context_layer_and_world_time;test:single_value_resolution::tests::combined_resolution_security_truth_table_has_no_hidden_contributors	PASS	2026-09-30T21:32:00+02:00	Full-scan layer selection and precedence are evaluated on the same bound axes; security filtering does not introduce an alternate rank.
+WDB-LAY-005	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::complete_cross_record_boundary_accepts_an_empty_atomic_batch;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	The composed boundary consumes the pinned LayerSchemaSnapshot before the single publish; M4-05a separately proves an actual base switch.
+WDB-LAY-005	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::one_authorized_transaction_publishes_metadata_and_atomic_base_switch;test:project_metadata_transaction::tests::metadata_validator_runs_inside_one_publish_and_denial_leaves_head_unchanged	PASS	2026-09-30T23:24:21+02:00	The authorized mixed commit changes the designated base and complete layer snapshot atomically; denied writes leave the backend head unchanged.
 WDB-LAY-005	M5-06	PLANNED				
-WDB-LAY-005	M5-12	PLANNED				
-WDB-LAY-006	M2-04	PLANNED				
-WDB-LAY-006	M4-05a	PLANNED				
-WDB-LAY-007	M2-04	PLANNED				
-WDB-LAY-007	M4-05a	PLANNED				
-WDB-LAY-008	M4-04c	PLANNED				
-WDB-LAY-008	M4-05a	PLANNED				
+WDB-LAY-005	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Replay stellt den LayerSchemaSnapshot mit derselben aktiven Base-Layer-ID wieder her.
+WDB-LAY-006	M2-04	DONE	artifact:docs/M2-04-verification.md;test:layers::tests::lifecycle_revisions_are_forward_only_and_keep_stable_identity;test:layers::tests::schema_revision_preserves_layer_identity_symbols_and_history	PASS	2026-09-30T16:47:58+02:00	Layer identity, revisioned lifecycle, and stable schema identity are covered by the completed M2-04 reference-model evidence.
+WDB-LAY-006	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::metadata_validator_runs_inside_one_publish_and_denial_leaves_head_unchanged;test:write_reference_validation::tests::retired_layer_and_unknown_timeline_fail_before_a_batch_is_returned	PASS	2026-09-30T23:24:21+02:00	The former base is deprecated in the same metadata revision, definitions remain in history, and reference validation rejects new assertion drafts on retired layers.
+WDB-LAY-007	M2-04	DONE	artifact:docs/M2-04-verification.md;test:layers::tests::base_switch_is_a_new_atomic_historical_state_and_rank_revisions_keep_ids;test:layers::tests::snapshot_rejects_duplicate_ids_symbols_and_future_definitions	PASS	2026-09-30T16:47:58+02:00	Base layer is selected from revisioned project schema data; unknown base IDs are rejected.
+WDB-LAY-007	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::one_authorized_transaction_publishes_metadata_and_atomic_base_switch	PASS	2026-09-30T23:24:21+02:00	Post-state selects the typed new base LayerId from persisted schema records.
+WDB-LAY-008	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::complete_cross_record_boundary_accepts_an_empty_atomic_batch;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	The composed boundary carries the same validated LayerSchemaSnapshot through cross-record validation and atomic publish.
+WDB-LAY-008	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::one_authorized_transaction_publishes_metadata_and_atomic_base_switch	PASS	2026-09-30T23:24:21+02:00	The candidate LayerSchemaSnapshot constructor and commit validator accept only a valid unique-lowest active base post-state.
 WDB-LAY-008	M5-06	PLANNED				
-WDB-LAY-008	M5-12	PLANNED				
+WDB-LAY-008	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Der gespeicherte LayerSchemaSnapshot wird mit seiner niedrigsten aktiven Base-Layer-ID nach Neustart wiederhergestellt; Negativformen sind separat geprüft.
 WDB-LAY-009	M5-06	PLANNED				
 WDB-LAY-009	M7-13	PLANNED				
-WDB-LAY-010	M2-04	PLANNED				
-WDB-LAY-010	M4-04c	PLANNED				
-WDB-LAY-010	M4-05a	PLANNED				
-WDB-LAY-011	M2-04	PLANNED				
-WDB-LAY-011	M3-07	PLANNED				
-WDB-TIM-003	M2-05	PLANNED				
-WDB-AST-002	M2-05	PLANNED				
-WDB-AST-002	M2-15c	PLANNED				
-WDB-AST-002	M4-05	PLANNED				
-WDB-AST-002	M4-05d	PLANNED				
+WDB-LAY-010	M2-04	DONE	artifact:docs/M2-04-verification.md;test:layers::tests::base_switch_is_a_new_atomic_historical_state_and_rank_revisions_keep_ids;test:layers::tests::snapshot_requires_one_explicit_unique_lowest_active_base	PASS	2026-09-30T16:47:58+02:00	Immutable schema snapshots preserve base designation and reject same-revision updates or invalid post-state.
+WDB-LAY-010	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::complete_cross_record_boundary_accepts_an_empty_atomic_batch;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	The composed boundary consumes the pinned layer snapshot; M4-05a proves the no-record-movement base switch.
+WDB-LAY-010	M4-05a	DONE	artifact:docs/M4-05a-verification.md;test:project_metadata_transaction::tests::metadata_validator_runs_inside_one_publish_and_denial_leaves_head_unchanged	PASS	2026-09-30T23:24:21+02:00	One metadata batch publishes the base switch; denied validation publishes nothing, and no content Records are staged or moved by the base update.
+WDB-LAY-011	M2-04	DONE	artifact:docs/M2-04-verification.md;test:layers::tests::selections_resolve_only_against_the_pinned_snapshot;test:rustdoc compile_fail empty Explicit layer set	PASS	2026-09-30T16:47:58+02:00	BaseOnly and explicit layer selection resolve against the supplied immutable schema snapshot; unknown IDs fail closed.
+WDB-LAY-011	M3-07	DONE	artifact:docs/M3-07-verification.md;test:query_context::tests::layer_selection_must_resolve_against_the_bound_schema;test:query_context::tests::valid_context_binds_every_axis_and_pinned_layers	PASS	2026-09-30T21:32:00+02:00	BaseOnly and Explicit layer choices resolve against the pinned schema snapshot; unknown layer identities fail closed.
+WDB-TIM-003	M2-05	DONE	artifact:docs/M2-05-verification.md;test:assertion_projection::tests::closure_applies_only_after_its_transaction_revision_and_at_its_world_time;test:assertion_projection::tests::retraction_applies_only_at_and_after_its_recorded_revision;test:assertion_projection::tests::world_time_validity_is_half_open_and_separate_from_creation_revision	PASS	2026-09-30T13:10:21+02:00	Index-free reference projection separates RecordedAsOf lifecycle visibility from half-open WorldTime validity.
+WDB-AST-002	M2-05	DONE	artifact:docs/M2-05-verification.md;test:assertion_projection::tests::closure_applies_only_after_its_transaction_revision_and_at_its_world_time;test:assertion_projection::tests::retraction_applies_only_at_and_after_its_recorded_revision;test:assertion_projection::tests::world_time_validity_is_half_open_and_separate_from_creation_revision	PASS	2026-09-30T13:10:21+02:00	Index-free reference projection separates RecordedAsOf lifecycle visibility from half-open WorldTime validity.
+WDB-AST-002	M2-15c	DONE	test:assertion_correction::tests::correction_prepares_exactly_three_records_at_one_commit_revision;test:assertion_correction::tests::correction_rejects_wrong_slot_or_context_without_returning_any_record	PASS	2026-09-30T16:08:10+02:00	Assertion Correct prepares new Assertion, explicit target Retraction, and Corrects edge at one revision; invalid slot/context exposes no bundle.
+WDB-AST-002	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A newly written Assertion participates in the one-revision mixed batch; invalid references reject the complete candidate.
+WDB-AST-002	M4-05d	DONE	artifact:docs/M4-05d-verification.md;test:assertion_correction::tests::correction_commit_publishes_only_the_exact_three_record_effect	PASS	2026-10-01T12:19:07+02:00	Correction publishes exactly a new Assertion, explicit target Retraction, and Corrects edge in one revision.
 WDB-AST-002	M8-14a	PLANNED				
 WDB-REF-001	M1-17d	DONE	test:wire_records::tests::every_record_ref_roundtrips_and_unknown_noncanonical_or_malformed_refs_are_rejected;test:wire_records::tests::runtime_record_ref_tags_match_the_complete_policy_registry	PASS	2026-09-30T00:17:43+02:00	All 24 RecordRef wire variants roundtrip with fixed tags; unknown, noncanonical, and malformed refs fail closed.
-WDB-REF-001	M3-09	PLANNED				
+WDB-REF-001	M3-09	DONE	artifact:docs/M3-09-verification.md;test:reference_query::tests::raw_rows_sort_by_fixed_typed_tag_then_id_and_reject_duplicate_identity;test:reference_query::tests::resolved_view_orders_contributors_and_rejects_duplicates	PASS	2026-09-30T21:32:00+02:00	Owned ports retain closed typed RecordRef identities and reject duplicate/noncanonical result identity order.
 WDB-REF-001	M7-13	PLANNED				
 WDB-REF-003	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding admits only the registered EvidenceTargetRef subset and rejects disallowed variants.
 WDB-REF-004	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding matches the concrete Corrects endpoint matrix and rejects incompatible endpoints and self-loops.
-WDB-REF-004	M2-15a	PLANNED	-	-	-	Historische Corrects-Kompatibilität folgt M2-15a.
+WDB-REF-004	M2-15a	DONE	test:source_provenance::tests::assertion_corrects_requires_same_proposition_slot_and_later_record;test:events::tests::event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active;test:source_provenance::tests::corrects_requires_same_concrete_family_and_provenance_rejects_self_loops	PASS	2026-09-30T15:47:53+02:00	Typed Corrects compatibility is validated for assertion proposition slots, compatible EventKind callbacks, and exact lifecycle variants.
 WDB-REF-005	M1-17d	DONE	test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Wire decoding rejects disallowed DerivedFrom/ResultedFrom endpoints and has no Other/string escape.
-WDB-REF-005	M2-15a	PLANNED	-	-	-	Relationsemantik folgt M2-15a.
+WDB-REF-005	M2-15a	DONE	test:source_provenance::tests::derived_from_rejects_exactly_the_disallowed_from_families;test:source_provenance::tests::resulted_from_accepts_only_assertion_or_event_on_each_side;test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T15:47:53+02:00	Relation endpoint permissions are closed; DerivedFrom and ResultedFrom semantics stay separate and wire decoding has no escape hatch.
 WDB-TYP-001	M1-17d	DONE	test:wire_records::tests::all_implemented_records_match_fixed_golden_frames_and_round_trip;test:wire_records::tests::source_meta_decoder_enforces_the_closed_evidence_and_provenance_matrices	PASS	2026-09-30T00:17:43+02:00	Canonical valid wire records reconstruct closed domain types; crafted endpoint violations are rejected by the record decoder.
-WDB-TYP-001	M3-14	PLANNED				
+WDB-TYP-001	M3-14	DONE	artifact:docs/M3-14-verification.md;test:jobs::tests::joined_panics_are_payload_free_and_writer_panics_require_restart;test:wire::tests::decoder_limits_reject_large_frames_and_owned_values_before_copy	PASS	2026-09-30T21:32:00+02:00	Malformed external bytes use bounded typed decoder errors; worker panic payloads are discarded at the join boundary.
 WDB-TYP-001	M7-13	PLANNED				
-WDB-SCH-008	M2-08	PLANNED				
-WDB-SCH-008	M4-04a	PLANNED				
-WDB-SCH-010	M4-04c	PLANNED				
+WDB-SCH-008	M2-08	DONE	test:single_value_resolution::tests::equal_precedence_disagreement_is_conflict_and_input_order_independent	PASS	2026-09-30T14:04:02+02:00	Single cardinality keeps contradictory stored Assertions representable; resolution returns Conflict.
+WDB-SCH-008	M4-04a	DONE	artifact:docs/M4-04a-verification.md;test:schema_write_validation::tests::single_cardinality_does_not_suppress_conflicting_assertion_drafts	PASS	2026-09-30T22:10:40+02:00	Two conflicting drafts for a Single predicate pass shape validation as separate assertions; no suppression occurs before resolution.
+WDB-SCH-010	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::deprecated_schema_warning_is_rechecked_against_current_policy	PASS	2026-10-01T12:19:07+02:00	Commit-boundary validation rechecks deprecated-write warning capability against the current policy and rejects a revoked grant.
 WDB-SCH-010	M8-11a	PLANNED				
 WDB-SCH-010	M8-26d	PLANNED				
 WDB-SCH-011	M5-22	PLANNED				
-WDB-SCH-017	M3-15	PLANNED				
+WDB-SCH-017	M3-15	DONE	artifact:docs/M3-15-verification.md;test:schema_history::tests::corrupt_required_history_fails_without_historical_fallback	PASS	2026-09-30T21:32:00+02:00	Required historical schema corruption fails explicitly and never falls back to Current.
 WDB-SCH-017	M5-22	PLANNED				
 WDB-SCH-017	M8-26d	PLANNED				
-WDB-EVT-004	M4-04a	PLANNED				
-WDB-EVT-004	M4-04c	PLANNED				
-WDB-EVT-004	M4-05	PLANNED				
-WDB-EVT-005	M4-04a	PLANNED				
-WDB-EVT-005	M4-04c	PLANNED				
-WDB-EVT-005	M4-05	PLANNED				
-WDB-EVT-007	M4-04a	PLANNED				
-WDB-EVT-007	M4-04c	PLANNED				
-WDB-EVT-007	M4-05	PLANNED				
-WDB-EVT-012	M2-15a	PLANNED				
-WDB-EVT-012	M2-15c	PLANNED				
-WDB-EVT-012	M4-05d	PLANNED				
+WDB-EVT-004	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A reference-validated Event is carried through the composed security and cross-record boundary in the atomic candidate.
+WDB-EVT-004	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A valid Event is validated against the staged schema and published atomically with the mixed Schema and domain batch; invalid candidate batches remain unpublished.
+WDB-EVT-005	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A cardinality-valid Event is carried through the composed security and cross-record boundary in the atomic candidate.
+WDB-EVT-005	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A valid Event is validated against the staged schema and published atomically with the mixed Schema and domain batch; invalid candidate batches remain unpublished.
+WDB-EVT-007	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	The EventKind-pinned Event is carried through the complete candidate validation before publication.
+WDB-EVT-007	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A valid Event is validated against the staged schema and published atomically with the mixed Schema and domain batch; invalid candidate batches remain unpublished.
+WDB-EVT-012	M2-15a	DONE	artifact:docs/M2-15a-verification.md;test:events::tests::event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active;test:source_provenance::tests::corrects_requires_same_concrete_family_and_provenance_rejects_self_loops	PASS	2026-09-30T16:47:58+02:00	Event correction is a new Event plus Corrects edge; original remains active and event-family compatibility is validated.
+WDB-EVT-012	M2-15c	DONE	test:events::tests::event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active;test:assertion_correction::tests::correction_prepares_exactly_three_records_at_one_commit_revision	PASS	2026-09-30T16:08:10+02:00	Event correction remains new Event plus Corrects with old Event active; three-record Assertion correction does not leak an implicit EventRetraction.
+WDB-EVT-012	M4-05d	DONE	artifact:docs/M4-05d-verification.md;test:events::tests::event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active;artifact:policy/write-record-matrix.tsv	PASS	2026-10-01T12:19:07+02:00	The Event correction remains a new Event plus Corrects edge with the old Event active; the write matrix keeps its path separate from Assertion correction.
 WDB-EVT-012	M8-14a	PLANNED				
-WDB-EVI-004	M3-15	PLANNED				
-WDB-EVI-007	M4-04c	PLANNED				
-WDB-EVI-007	M4-05	PLANNED				
-WDB-PRV-002	M2-15c	PLANNED				
-WDB-PRV-002	M4-05d	PLANNED				
+WDB-EVT-020	M2-13b	DONE	test:event_relations::tests::graph_projection_builds_same_time_components_without_transitive_records;test:event_relations::tests::before_cycle_after_same_time_collapse_is_stable_under_input_order	PASS	2026-09-30T15:16:34+02:00	SameTime equivalence classes are projected after active retractions without transitive records; Before is checked after component collapse.
+WDB-EVI-004	M3-15	DONE	artifact:docs/M3-15-verification.md;test:source_evidence_projection::tests::child_cutoff_hides_future_scoped_targets_but_keeps_visible_parent_evidence	PASS	2026-09-30T21:32:00+02:00	A child base cutoff filters target visibility while retaining visible parent evidence history.
+WDB-EVI-007	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:source_evidence_projection::tests::active_duplicate_evidence_tuples_conflict_but_retraction_frees_the_tuple;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	The duplicate-active-tuple check is exercised in the source/evidence projection and that projection is composed with the mixed write boundary.
+WDB-EVI-007	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A valid Evidence record is included in the one-revision mixed batch and the complete source/evidence projection runs before publish.
+WDB-PRV-002	M2-15c	DONE	test:assertion_correction::tests::correction_prepares_exactly_three_records_at_one_commit_revision;test:source_provenance::tests::assertion_corrects_requires_same_proposition_slot_and_later_record	PASS	2026-09-30T16:08:10+02:00	Corrects alone has no retraction effect; CorrectAssertion command contains its separate explicit target Retraction.
+WDB-PRV-002	M4-05d	DONE	artifact:docs/M4-05d-verification.md;test:assertion_correction::tests::correction_commit_publishes_only_the_exact_three_record_effect;test:events::tests::event_correction_adds_new_event_and_corrects_edge_but_keeps_original_active	PASS	2026-10-01T12:19:07+02:00	Assertion correction commits an explicit Retraction with Corrects; Event correction leaves the original active.
 WDB-PRV-002	M8-14a	PLANNED				
 WDB-PRV-009	M6-10	PLANNED				
-WDB-PRV-013	M4-04c	PLANNED				
-WDB-PRV-013	M4-05	PLANNED				
+WDB-PRV-013	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:provenance_graph::tests::retractions_apply_before_atomic_candidate_cycle_validation;test:provenance_graph::tests::post_transaction_batch_rejects_duplicate_active_logical_tuples;test:provenance_graph::tests::mixed_relation_cycle_is_rejected_stably	PASS	2026-10-01T12:19:07+02:00	The full post-transaction graph validator is composed before publication; its atomic candidate cycle and duplicate cases pass.
+WDB-PRV-013	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once;test:provenance_graph::tests::mixed_relation_cycle_is_rejected_stably	PASS	2026-10-01T12:19:07+02:00	A valid Provenance edge is checked in the mixed commit; the composed graph validator is invoked before publication and its mixed-relation cycle case rejects.
 WDB-MIG-005	M7-10b	PLANNED				
 WDB-MIG-009	M7-10a	PLANNED				
 WDB-MIG-010	M7-10a	PLANNED				
 WDB-MIG-023	M7-10b	PLANNED				
 WDB-TX-002	M5-22	PLANNED				
 WDB-TX-003	M5-22	PLANNED				
-WDB-TX-004	M5-12	PLANNED				
-WDB-TX-004	M5-22	PLANNED				
+WDB-TX-004	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	OperationId-Index und Originalreceipt sind nach Handleschluss und erneutem Öffnen verfügbar; echte Prozess-/Stromausfallmatrix folgt M5-22.
+WDB-TX-004	M5-22	DONE	test:recovery_manager::tests::process_crash_after_staged_history_replay_restores_manifest	PASS	2026-10-02T00:07:06+02:00	Nach Prozessabbruch liefert derselbe OperationId-/Payload-Retry dasselbe Receipt und ändert den WAL nicht.
 WDB-TX-004	M8-26d	PLANNED				
-WDB-TX-005	M5-12	PLANNED				
-WDB-TX-005	M5-22	PLANNED				
-WDB-TX-006	M5-12	PLANNED				
-WDB-TX-006	M5-22	PLANNED				
+WDB-TX-005	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart (IdempotencyMismatch)	PASS	2026-10-01T17:55:27+02:00	Abweichender Payload derselben OperationId wird abgewiesen; Wiederherstellung der committed Receipts nach erneutem Öffnen ist belegt.
+WDB-TX-005	M5-22	DONE	test:recovery_manager::tests::process_crash_after_staged_history_replay_restores_manifest	PASS	2026-10-02T00:07:06+02:00	Nach Wiederanlauf wird derselbe OperationId mit abweichendem Payload als IdempotencyMismatch abgewiesen.
+WDB-TX-006	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Das Receipt folgt dem WAL-Commitpoint und bleibt nach Replay erhalten; reale Crashdurabilität folgt M5-22.
+WDB-TX-006	M5-22	DONE	test:wal::tests::process_crash_at_wal_prepare_and_commit_sync_recovers_one_prefix	PASS	2026-10-02T00:07:06+02:00	Abbruch nach Commitmarker-Sync, bevor die Commitfunktion ein Receipt zurückgibt, stellt genau Revision 1 wieder her.
 WDB-OCC-005	M5-22	PLANNED				
 WDB-OCC-005	M8-26d	PLANNED				
-WDB-SNP-003	M5-15	PLANNED				
+WDB-SNP-003	M5-15	DONE	artifact:docs/M5-15-verification.md;test:each_pin_kind_protects_replaced_segments_until_the_pin_is_dropped;test:unpinned_history_is_compacted_losslessly_and_reclaimed_after_replay;test:current_references_cannot_be_reclaimed_and_stale_references_cannot_be_pinned	PASS	2026-10-01T19:29:25+02:00	Alle vier simulierten Pinarten verhindern Reclamation; nach Freigabe entfernt ein Retry die Datei. Restart-Recovery und bytegleiche History-Frames bestanden; cargo xtask verify PASS.
 WDB-SNP-003	M5-22	PLANNED				
 WDB-SNP-003	M7-08	PLANNED				
 WDB-SNP-003	M7-11	PLANNED				
-WDB-STO-004	M5-16	PLANNED				
-WDB-STO-005	M5-16	PLANNED				
+WDB-STO-004	M5-16	DONE	artifact:docs/M5-16-verification.md;test:manifest_verify_binds_segment_id_separately_from_its_content_digest	PASS	2026-10-01T19:58:47+02:00	Manifest-/Recovery-Readback erkennt eine geänderte SegmentId separat vom weiterhin referenzierten Digest; Quellbytes bleiben unverändert.
+WDB-STO-005	M5-16	DONE	artifact:docs/M5-16-verification.md;test:manifest_verify_binds_content_digest_separately_from_segment_id	PASS	2026-10-01T19:58:47+02:00	Manifest-/Recovery-Readback erkennt einen geänderten ContentDigest bei unveränderter SegmentId; Quellbytes bleiben unverändert.
 WDB-STO-006	M7-08	PLANNED				
 WDB-STO-006	M7-10	PLANNED				
 WDB-STO-006	M8-26d	PLANNED				
 WDB-WIR-003	M9-04a	PLANNED				
 WDB-WIR-004	M8-26d	PLANNED				
 WDB-WIR-005	M6-14c	PLANNED				
-WDB-WAL-001	M5-12	PLANNED				
-WDB-WAL-001	M5-22	PLANNED				
-WDB-WAL-002	M5-12	PLANNED				
-WDB-WAL-002	M5-22	PLANNED				
-WDB-WAL-004	M5-12	PLANNED				
+WDB-WAL-001	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Der synchronisierte Prepare mit Commitmarker wird nach erneutem Öffnen als committed rekonstruiert.
+WDB-WAL-001	M5-22	DONE	test:wal::tests::process_crash_at_wal_prepare_and_commit_sync_recovers_one_prefix	PASS	2026-10-02T00:07:06+02:00	Abbruch nach Prepare-Sync bleibt bei Genesis; Abbruch nach Commitmarker-Sync stellt den Commit wieder her.
+WDB-WAL-002	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Nur der committed WAL-Stand wird wiederhergestellt; physische Crashdurabilität bleibt M5-22 vorbehalten.
+WDB-WAL-002	M5-22	DONE	test:wal::tests::process_crash_at_wal_prepare_and_commit_sync_recovers_one_prefix	PASS	2026-10-02T00:07:06+02:00	Der synchronisierte zweite WAL-Sync ist der Commitpoint; danach ist genau Revision 1 sichtbar.
+WDB-WAL-004	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Recovery publiziert gestagte immutable Segmente; Wiederverwendung vorhandener Segmentbytes wird abgewiesen.
+WDB-WAL-005	M5-08	PLANNED				Linux/ext4-Abnahme auf Host später.
+WDB-WAL-005	M5-09	DONE	artifact:docs/M5-09-verification.md;artifact:crates/worlddb-storage-file/src/windows_publication.rs	PASS	2026-10-01T16:24:14+02:00	Windows/NTFS-Adapter geprüft; Sharingfehler lässt CURRENT unverändert und Retry gelingt; konkrete Antivirussoftware und Crashmatrix bleiben M5-22 vorbehalten.
+WDB-WAL-005	M5-10	PLANNED				macOS/APFS-Abnahme auf Host später.
 WDB-REC-003	M8-26d	PLANNED				
 WDB-REC-005	M8-26d	PLANNED				
 WDB-BKP-001	M7-10	PLANNED				
@@ -131,17 +132,17 @@ WDB-API-004	M6-11	PLANNED
 WDB-API-004	M8-26d	PLANNED				
 WDB-API-005	M8-26d	PLANNED				
 WDB-API-007	M8-26d	PLANNED				
-WDB-SEC-003	M3-15	PLANNED				
+WDB-SEC-003	M3-15	DONE	artifact:docs/M3-15-verification.md;test:non_interference::tests::paired_world_compares_values_shapes_public_errors_and_cursor_behavior;test:single_value_resolution::tests::combined_resolution_security_truth_table_has_no_hidden_contributors	PASS	2026-09-30T21:32:00+02:00	Paired worlds and the combined truth table confirm hidden contributors cannot change public values, conflict contributors, shapes, errors, or counts.
 WDB-SEC-003	M6-13	PLANNED				
-WDB-SEC-004	M3-15	PLANNED				
+WDB-SEC-004	M3-15	DONE	artifact:docs/M3-15-verification.md;test:query_graph::tests::hidden_nodes_and_edges_are_filtered_before_budgets_and_traversal	PASS	2026-09-30T21:32:00+02:00	Graph traversal excludes hidden nodes and edges before traversal budgets and edge counts.
 WDB-SEC-004	M6-10	PLANNED				
 WDB-SEC-004	M6-13	PLANNED				
-WDB-SEC-005	M5-06a	PLANNED				
-WDB-SEC-005	M5-12	PLANNED				
+WDB-SEC-005	M5-06a	DONE	artifact:docs/M5-06a-verification.md;test:complete_security_snapshot_epoch_and_audit_configuration_roundtrip;test:all_typed_policy_change_variants_roundtrip_without_domain_record_encoding;test:history_reconstruction_fails_closed_when_any_revision_snapshot_is_missing	PASS	2026-10-01T15:47:07+02:00	Snapshot, epoch, typed SecurityPolicyRecord, and audit-retention history roundtrip locally; missing revision fails closed. Restart and cursor invalidation remain M5-12/M5-22.
+WDB-SEC-005	M5-12	DONE	artifact:docs/M5-12-verification.md;test:nested_restart_after_each_tail_checkpoint_is_idempotent;test:committed_staged_history_replays_manifest_and_operation_receipt_after_restart	PASS	2026-10-01T17:55:27+02:00	Policyhistorie und SecurityEpoch werden nach erneutem Öffnen rekonstruiert; Cursorinvalidierung bleibt M5-22.
 WDB-SEC-005	M5-22	PLANNED				
 WDB-AUD-001	M5-22	PLANNED				
 WDB-AUD-002	M8-26d	PLANNED				
-WDB-AUD-003	M5-22	PLANNED				
+WDB-AUD-003	M5-22	DONE	test:m5_17_required_audit_contract::process_exit_after_required_audit_commit_recovers_action_and_record	PASS	2026-10-02T00:07:06+02:00	Nach Prozessabbruch werden Action, Operationstatus und genau ein gebundener Required Audit Record gemeinsam wiederhergestellt.
 WDB-AUD-003	M7-10	PLANNED				
 WDB-AUD-003	M7-10a	PLANNED				
 WDB-AUD-003	M7-12	PLANNED				
@@ -158,5 +159,16 @@ WDB-ENG-005	M9-13b	PLANNED
 WDB-ENG-006	M9-13b	PLANNED				
 WDB-ENG-007	M9-13b	PLANNED				
 WDB-REF-003	M1-14	DONE	test:record_refs::tests::all_record_ref_subset_conversions_match_the_closed_memberships	PASS	2026-09-29T18:50:12+02:00	The 21 admitted EvidenceTargetRef variants match the approved J-marked families, including ArchiveTransition; Source, Evidence, and direct EventRelation remain rejected.
-WDB-PRO-001	M2-07	PLANNED				Schema-aware proposition comparison in Proposition-mask projection.
-WDB-PRO-001	M2-17	PLANNED				Property tests for all four Proposition Equality components across resolution inputs.
+WDB-PRO-001	M2-17	DONE	test:mask_projection::tests::proposition_mask_truth_table_requires_each_of_the_four_equality_components;test:single_value_resolution::tests::equal_precedence_resolution_is_stable_across_every_three_candidate_permutation;test:candidate_scan::tests::stored_insertion_order_does_not_change_canonical_candidate_set	PASS	2026-09-30T16:37:04+02:00	Generated a deterministic component truth table (Subject, Predicate, Value, Polarity) plus complete three-item permutation checks; the other branch/layer/time/relation/provenance checks remain explicit tests.
+WDB-MSK-004	M2-08	DONE	test:single_value_resolution::tests::masking_every_candidate_resolves_to_unknown_not_a_negative_fact	PASS	2026-09-30T14:04:02+02:00	End-to-end M2-07 Mask → M2-08 resolution: all masked candidates produce Unknown; no negation is created.
+WDB-RES-001	M2-09	DONE	artifact:docs/M2-09-verification.md;test:single_value_resolution::tests::multi_overlay_preserves_known_values_while_reporting_polarity_conflicts;test:single_value_resolution::tests::multi_overlay_uses_post_mask_candidates_and_empty_set_is_unknown;test:single_value_resolution::tests::multi_overlay_unions_parent_and_local_values_without_precedence_replacement;test:single_value_resolution::tests::multi_overlay_coalesces_equal_values_and_keeps_all_contributors_in_id_order	PASS	2026-09-30T14:13:55+02:00	Follow-up evidence for multi-value resolution.
+WDB-RES-002	M2-09	DONE	artifact:docs/M2-09-verification.md;test:single_value_resolution::tests::multi_overlay_preserves_known_values_while_reporting_polarity_conflicts;test:single_value_resolution::tests::multi_overlay_uses_post_mask_candidates_and_empty_set_is_unknown;test:single_value_resolution::tests::multi_overlay_unions_parent_and_local_values_without_precedence_replacement;test:single_value_resolution::tests::multi_overlay_coalesces_equal_values_and_keeps_all_contributors_in_id_order	PASS	2026-09-30T14:13:55+02:00	Follow-up evidence for multi-value resolution.
+WDB-ERR-002	M8-09	PLANNED				End-to-end versioned IPC serialization must preserve the safe error DTO whitelist and reject source/cause leakage.
+WDB-ERR-002	M8-24	PLANNED				Public error UI and logging canary tests must confirm no internal cause is displayed or logged.
+WDB-ERR-004	M8-24	PLANNED				Renderer-visible/public diagnostic Debug path must retain the safe Display boundary under canary input.
+WDB-EPI-003	M3-04	DONE	test:candidate_scan::tests::authorization_filters_assertion_before_candidate_construction	PASS	2026-09-30T18:39:41+02:00	Same Perspective with an unrelated Principal yields no candidate; grants come only from the host-bound Principal.
+WDB-SEC-001	M3-04	DONE	test:candidate_scan::tests::authorization_filters_assertion_before_candidate_construction	PASS	2026-09-30T18:39:41+02:00	Query operation non-interference: Perspective stays fixed while changing the authenticated Principal removes the grant and candidate.
+WDB-EVT-004	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
+WDB-EVT-005	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
+WDB-EVT-007	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
+WDB-SCH-010	M4-09	DONE	artifact:docs/M4-09-verification.md;test:schema_write_validation::tests::deprecated_opt_in_and_exact_scoped_capability_return_typed_warning	PASS	2026-10-01T12:19:07+02:00	Accepted deprecated-write warnings survive as typed CommitReceipt data; the same test rejects missing opt-in and denied scope.

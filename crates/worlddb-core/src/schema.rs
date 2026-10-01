@@ -9,7 +9,7 @@ use crate::values::{Symbol, Time, Value};
 use crate::{Decimal, Int, UInt};
 
 /// The exact scalar family accepted by a schema field.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ValueKind {
     /// `Value::Bool`.
     Bool,

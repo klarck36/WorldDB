@@ -143,9 +143,9 @@ fn inventory() -> Result<Vec<Target<'static>>, String> {
             targets.push(target);
         }
     }
-    if targets.len() != 75 {
+    if targets.len() != 77 {
         return Err(format!(
-            "expected 75 decoder targets, found {}",
+            "expected 77 decoder targets, found {}",
             targets.len()
         ));
     }
@@ -444,6 +444,15 @@ fn json_report(
     report
 }
 
+fn workspace_path(path: PathBuf) -> PathBuf {
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    if path.is_absolute() {
+        path
+    } else {
+        workspace_root.join(path)
+    }
+}
+
 #[test]
 #[ignore = "one-hour CPU fuzz campaign; invoke explicitly with a recorded seed"]
 fn decoder_budget_fuzz_campaign() -> Result<(), String> {
@@ -510,8 +519,10 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
         &crashes,
     );
     let report_path = match std::env::var("WORLDDB_DECODER_FUZZ_REPORT") {
-        Ok(path) => PathBuf::from(path),
-        Err(_) => PathBuf::from(format!("target/fuzz-results/m1-18-{seed:016x}.json")),
+        Ok(path) => workspace_path(PathBuf::from(path)),
+        Err(_) => workspace_path(PathBuf::from(format!(
+            "target/fuzz-results/m1-18-{seed:016x}.json"
+        ))),
     };
     if let Some(parent) = report_path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;

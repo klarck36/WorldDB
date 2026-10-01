@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::num::NonZeroU64;
+use std::thread;
 
 use crate::ids::{JobId, PrincipalId};
 
@@ -27,6 +28,58 @@ pub enum JobTerminalState {
     Cancelled,
     /// A worker panic requires the engine to restart before work can continue.
     NeedsRestart,
+}
+
+/// Classified panic observed when joining a worker task.
+///
+/// Panic payloads are deliberately discarded: they may contain secrets or
+/// implementation details and are not a recovery instruction.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TaskFailure {
+    /// The worker unwound before returning its result.
+    Panicked,
+}
+
+/// Engine role of a worker that panicked.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TaskRole {
+    /// Single writer whose interrupted mutation requires restart and recovery.
+    Writer,
+    /// Background task that does not own an in-progress publication.
+    Background,
+}
+
+impl TaskFailure {
+    /// Maps a worker panic to the safe terminal state for its role.
+    ///
+    /// Writer panics require database restart and recovery. Other worker
+    /// panics fail only that job; the caller remains responsible for recording
+    /// the failure and applying its retry policy.
+    #[must_use]
+    pub const fn terminal_state(self, role: TaskRole) -> JobTerminalState {
+        match role {
+            TaskRole::Writer => JobTerminalState::NeedsRestart,
+            TaskRole::Background => JobTerminalState::Failed,
+        }
+    }
+}
+
+impl fmt::Display for TaskFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Panicked => formatter.write_str("background task panicked"),
+        }
+    }
+}
+
+impl std::error::Error for TaskFailure {}
+
+/// Converts a joined worker panic to a payload-free typed failure.
+///
+/// This observes the panic after the worker has unwound; it does not catch a
+/// panic inside the worker or claim that the writer can continue safely.
+pub fn observe_task_join<T>(joined: thread::Result<T>) -> Result<T, TaskFailure> {
+    joined.map_err(|_payload| TaskFailure::Panicked)
 }
 
 /// Observed state of one job; terminal results remain explicit values.
@@ -250,9 +303,10 @@ impl JobDescriptor {
 mod tests {
     use super::{
         JobBudget, JobBudgetError, JobDescriptor, JobKind, JobProgress, JobProgressError,
-        JobStatus, JobTerminalState,
+        JobStatus, JobTerminalState, TaskFailure, TaskRole, observe_task_join,
     };
     use crate::ids::{DomainId, IdValidationError, JobId, PrincipalId};
+    use std::thread;
 
     fn uuid<T: DomainId>(tail: u8) -> Result<T, IdValidationError> {
         let mut bytes = [0_u8; 16];
@@ -304,6 +358,23 @@ mod tests {
             assert!(JobStatus::Terminal(state).is_terminal());
         }
         assert_ne!(JobTerminalState::Failed, JobTerminalState::Cancelled);
+    }
+
+    #[test]
+    fn joined_panics_are_payload_free_and_writer_panics_require_restart() {
+        let joined: thread::Result<()> = Err(Box::new("secret panic detail"));
+        let failure = TaskFailure::Panicked;
+        assert_eq!(observe_task_join(joined), Err(failure));
+        assert_eq!(failure, TaskFailure::Panicked);
+        assert_eq!(failure.to_string(), "background task panicked");
+        assert_eq!(
+            failure.terminal_state(TaskRole::Background),
+            JobTerminalState::Failed
+        );
+        assert_eq!(
+            failure.terminal_state(TaskRole::Writer),
+            JobTerminalState::NeedsRestart
+        );
     }
 
     #[test]

@@ -1,6 +1,14 @@
 #![forbid(unsafe_code)]
 
-//! Deterministic, dependency-free support for WorldDB tests.
+//! Deterministic support for WorldDB tests.
+
+pub mod backend_contract;
+
+/// Opt-in logical SQLite backend for differential and prototype tests.
+///
+/// It is excluded from production storage admission and makes no durability claim.
+#[cfg(feature = "sqlite-reference")]
+pub mod sqlite_reference;
 
 #[cfg(all(feature = "fault-injection", not(debug_assertions)))]
 compile_error!("WorldDB test fault hooks cannot be built with a release profile");
