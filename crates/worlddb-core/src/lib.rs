@@ -582,6 +582,7 @@ mod event_relations;
 mod events;
 mod history_model;
 mod ids;
+mod index_generation;
 mod job_supervisor;
 mod jobs;
 mod layers;
@@ -843,6 +844,11 @@ pub use transfer_transaction::{
 pub use admin_raw::{
     AdminRawAuditAuthorizer, AdminRawAuditError, AdminRawAuthorizeRequest, AdminRawError,
     release_admin_raw_page,
+};
+pub use index_generation::{
+    FullScanBudget, IndexAccessPlan, IndexAvailability, IndexBuildVersion, IndexFallbackReason,
+    IndexFamily, IndexFormatVersion, IndexGenerationMetadata, IndexMetadataError,
+    IndexQueryRequirement, IndexRevisionCoverage, IndexSchemaVersion, plan_index_access,
 };
 pub use job_supervisor::{
     JobCompletion, JobControl, JobPool, JobResumeMetadata, JobShutdownError, JobShutdownReport,

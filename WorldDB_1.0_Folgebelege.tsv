@@ -1,4 +1,5 @@
 invariant_id	task_id	status	evidence_ref	result	checked_at	note
+WDB-IDX-002	M6-08	PLANNED				Production query paths must execute the full scan or return the explicit budget error selected for a missing, stale, or invalid index.
 WDB-HIS-001	M5-22	DONE	test:recovery_manager::tests::process_crash_can_interrupt_each_tail_recovery_checkpoint	PASS	2026-10-02T00:07:06+02:00	Der committed Fünfrevisionspräfix bleibt nach jedem Recovery-Prozessabbruch lückenlos sichtbar.
 WDB-HIS-003	M7-15	PLANNED				
 WDB-HIS-004	M3-05	DONE	artifact:docs/M3-05-verification.md	PASS	2026-09-30T18:56:00+02:00	M2-16 same-binding regression and policy epoch/view regression pass; durable history reconstruction remains M5 follow-up.

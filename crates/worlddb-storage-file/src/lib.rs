@@ -5,6 +5,7 @@
 mod audit_wal;
 mod compaction;
 mod format;
+mod index_generation;
 mod layout;
 mod manifest;
 mod recovery;
@@ -32,6 +33,10 @@ pub use compaction::{
 };
 pub use format::{
     FORMAT_FILE_BYTES, FORMAT_FILE_KIND, FormatCapabilities, FormatProbeError, probe_format,
+};
+pub use index_generation::{
+    INDEX_GENERATION_FRAME_KIND, IndexFileDecision, IndexGeneration, IndexGenerationError,
+    decode_index_generation, encode_index_generation, select_index_generation,
 };
 pub use layout::{DatabaseLayout, StorageFileError};
 pub use manifest::{

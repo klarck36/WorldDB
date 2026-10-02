@@ -202,7 +202,7 @@ Die Reihenfolge folgt dem Master-Implementierungsplan M0–M10. **Die Zeilenfolg
 
 ### M6 – Produktive Abfragen, Indizes und gemessene Leistung
 
-- [ ] **M6-01 – Indexformat und Fallback.** Abgeleitete Indexgenerationen mit Schema-/Format-/Buildversion, Revisionsabdeckung und Integritätsprüfung definieren. **Fertig wenn** fehlender/staler/beschädigter Index zu Full Scan oder ausdrücklichem Budgetfehler führt, nie zu unvollständiger Antwort. (`WDB-IDX-001/002`)
+- [x] **M6-01 – Indexformat und Fallback.** Abgeleitete Indexgenerationen mit Schema-/Format-/Buildversion, Revisionsabdeckung und Integritätsprüfung definieren. **Fertig wenn** fehlender/staler/beschädigter Index zu Full Scan oder ausdrücklichem Budgetfehler führt, nie zu unvollständiger Antwort. (`WDB-IDX-002`; die Differentialgleichheit `WDB-IDX-001` bleibt M6-13)
 - [ ] **M6-02 – Record-/Operation-/Schema-Indizes.** RecordId, OperationId, SchemaId/Revision und Lifecycle Lookup bauen. **Fertig wenn** jeder Treffer gegen Full-Scan-Orakel stimmt.
 - [ ] **M6-03 – Assertion-Point-/History-Index.** Space/Layer/Perspective/Mode/Subject/Predicate/Revision samt Parent-Cutoff indizieren. **Fertig wenn** Point und Entity-/Predicate-History über Branches differential gleich sind.
 - [ ] **M6-04 – Zeit-/Mask-/Boundary-Indizes.** AssertionValidity, MaskSelector, ContextPrecedence und ReplacementBoundary separat indizieren. **Fertig wenn** adversariale Mask-/Layer-/Zeitcorpora gegen Full Scan gleich bleiben.
