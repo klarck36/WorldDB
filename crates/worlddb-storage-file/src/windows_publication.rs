@@ -28,6 +28,18 @@ pub(crate) fn move_file(stage: &Path, target: &Path, replace: bool) -> io::Resul
     }
 }
 
+/// Publishes a complete same-volume directory without replacing any target.
+pub(crate) fn move_directory(stage: &Path, target: &Path) -> io::Result<()> {
+    let stage = encode_local_path(stage)?;
+    let target = encode_local_path(target)?;
+    let succeeded = call_move_file(&stage, &target, MOVEFILE_WRITE_THROUGH);
+    if succeeded == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[allow(unsafe_code, reason = "WDB-EXC-0002")]
 fn call_move_file(stage: &[u16], target: &[u16], flags: u32) -> windows_sys::core::BOOL {
     // SAFETY: both paths are absolute, NUL-terminated UTF-16 buffers which remain alive for the

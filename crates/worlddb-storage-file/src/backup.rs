@@ -22,6 +22,9 @@ use crate::{
     WalPrepareLog, WriterLockError,
 };
 
+mod restore;
+pub use restore::{RestoreError, RestoreManager, RestoreReport};
+
 const BACKUP_MANIFEST_FILE: &str = "EXACT_BACKUP";
 const BACKUP_INCOMPLETE_FILE: &str = "EXACT_BACKUP.INCOMPLETE";
 const AUDIT_BACKUP_MANIFEST_PATH: &str = "audit/AUDIT_MANIFEST";

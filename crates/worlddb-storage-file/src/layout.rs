@@ -207,6 +207,22 @@ impl DatabaseLayout {
         })
     }
 
+    pub(crate) fn prepare_restore_staging_root(
+        root: impl AsRef<Path>,
+    ) -> Result<PathBuf, StorageFileError> {
+        let root = canonical_directory(root.as_ref())?;
+        for relative_path in LAYOUT_DIRECTORIES {
+            fs::create_dir_all(root.join(relative_path)).map_err(|source| {
+                StorageFileError::Io {
+                    operation: "prepare restore staging layout",
+                    source,
+                }
+            })?;
+        }
+        validate_layout_directories(&root)?;
+        Ok(root)
+    }
+
     /// Opens the layout, validates all required directories, and probes the
     /// versioned capability frame without interpreting unknown optional bits.
     pub fn open(root: impl AsRef<Path>) -> Result<Self, StorageFileError> {

@@ -701,6 +701,34 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates a new database identity for a restored clone.
+    #[doc(hidden)]
+    pub fn generate_restore_clone_database_id()
+    -> Result<crate::ids::DatabaseId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the idempotency identity for a restore publication commit.
+    #[doc(hidden)]
+    pub fn generate_restore_publication_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-record identity for a restore publication.
+    #[doc(hidden)]
+    pub fn generate_restore_publication_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-operation identity for a restore publication.
+    #[doc(hidden)]
+    pub fn generate_restore_publication_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates an audit identity for one raw-read page attempt.
     #[doc(hidden)]
     pub fn generate_raw_read_audit_record_id()
