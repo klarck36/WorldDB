@@ -1263,7 +1263,7 @@ mod tests {
         SecurityContext, ValidatedLayerSelection,
     };
     use crate::record_refs::SnapshotRef;
-    use crate::reference_query::{HistoricalQueryBinding, ResolvedView};
+    use crate::reference_query::{HistoricalQueryBinding, ResolvedOutcome, ResolvedView};
     use crate::schema::{
         Cardinality, ConstraintSet, EntityTypeConstraint, Lifecycle, PredicateDefinitionSpec,
         ResolutionPolicy, ValueKind,
@@ -1273,6 +1273,7 @@ mod tests {
         CapabilityGrant, CapabilityRule, GrantEffect, PolicyBundle, PolicyScope, PolicySubject,
         Principal, RoleAssignment, RoleDefinition, SecurityPolicyVersion,
     };
+    use crate::single_value_resolution::SingleValueOutcome;
     use crate::temporal::{AssertionValidity, RecordedAsOf, TimeInterval, Timeline, WorldTime};
     use crate::values::{Symbol, Value};
     use crate::{
@@ -1436,6 +1437,18 @@ mod tests {
     }
 
     fn fixture() -> TestResult<Fixture> {
+        fixture_with_generated_assertions(0, 0)
+    }
+
+    fn fixture_with_generated_assertions(
+        generated_assertion_count: usize,
+        seed: u64,
+    ) -> TestResult<Fixture> {
+        if generated_assertion_count > 200 {
+            return Err(
+                std::io::Error::other("generated assertion count exceeds test ID space").into(),
+            );
+        }
         let query_revision = revision(2)?;
         let revision = revision(1)?;
         let root = id::<HistorySpaceId>(1)?;
@@ -1507,8 +1520,13 @@ mod tests {
         let schema_binding =
             HistoricalQueryBinding::bind(&schema_history, recorded_as_of, SchemaMode::Historical)?;
         let validated_layers = ValidatedLayerSelection::resolve(&layers, LayerSelection::BaseOnly)?;
-        let budget_limits = QueryBudgetLimits::new(100, 1_000, 100)?;
-        let budget = QueryBudget::new(100, 1_000, 100, budget_limits)?;
+        let (candidate_limit, work_limit, result_limit) = if generated_assertion_count == 0 {
+            (100, 1_000, 100)
+        } else {
+            (10_000, 20_000, 10_000)
+        };
+        let budget_limits = QueryBudgetLimits::new(candidate_limit, work_limit, result_limit)?;
+        let budget = QueryBudget::new(candidate_limit, work_limit, result_limit, budget_limits)?;
         let context = QueryContext::new(QueryContextInput {
             snapshot: SnapshotRef::new(id::<SnapshotId>(7)?),
             snapshot_revision: query_revision,
@@ -1631,25 +1649,147 @@ mod tests {
         let hidden = make_assertion(hidden_id, predicate_id, "same")?;
         let multi_assertion_id = id::<AssertionId>(16)?;
         let multi_assertion = make_assertion(multi_assertion_id, multi_predicate_id, "old")?;
+        let make_generated_assertion = |assertion_id: AssertionId,
+                                        assertion_subject: Subject,
+                                        assertion_predicate_id: PredicateId,
+                                        value: String,
+                                        polarity: Polarity,
+                                        validity: AssertionValidity|
+         -> TestResult<Assertion> {
+            let assertion_context = ContextKey::new(
+                root,
+                base,
+                PerspectiveScope::World,
+                EpistemicMode::WorldState,
+            )?;
+            Ok(Assertion::new(
+                assertion_id,
+                AssertionDraft::new(
+                    assertion_context,
+                    assertion_subject,
+                    assertion_predicate_id,
+                    Value::String(value),
+                    polarity,
+                    validity,
+                ),
+                revision,
+            ))
+        };
+        let all_time_validity = AssertionValidity::new(TimeInterval::new(
+            timeline,
+            Some(WorldTime::from_nanoseconds(timeline, 0)),
+            Some(WorldTime::from_nanoseconds(timeline, 100)),
+        )?);
+        let mut generated_assertions = Vec::with_capacity(16 + generated_assertion_count);
+        if generated_assertion_count > 0 {
+            for subject_offset in 0_u8..8 {
+                let subject_tail = 40 + subject_offset;
+                let assertion_subject = Subject::new(id::<EntityId>(subject_tail)?);
+                for side in 0_u8..2 {
+                    let assertion_tail = 32 + subject_offset * 2 + side;
+                    let value = if subject_offset == 0 {
+                        if side == 0 {
+                            "mutant-left"
+                        } else {
+                            "mutant-right"
+                        }
+                        .to_owned()
+                    } else if side == 0 {
+                        format!("seed-{subject_tail}-left")
+                    } else {
+                        format!("seed-{subject_tail}-right")
+                    };
+                    generated_assertions.push(make_generated_assertion(
+                        id::<AssertionId>(assertion_tail)?,
+                        assertion_subject,
+                        predicate_id,
+                        value,
+                        Polarity::Positive,
+                        all_time_validity,
+                    )?);
+                }
+            }
+        }
+        let validity_patterns = [
+            (Some(0), Some(100)),
+            (Some(50), Some(100)),
+            (Some(51), Some(100)),
+            (Some(0), Some(50)),
+            (None, Some(50)),
+            (None, None),
+        ];
+        let mut random_state = seed;
+        for offset in 0..generated_assertion_count {
+            random_state = random_state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let subject_tail = 41
+                + u8::try_from(random_state % 7).map_err(|_| {
+                    std::io::Error::other("generated subject ID escaped the test ID space")
+                })?;
+            let assertion_subject = Subject::new(id::<EntityId>(subject_tail)?);
+            let predicate_for_record = if random_state & 0x8 == 0 {
+                predicate_id
+            } else {
+                multi_predicate_id
+            };
+            let value = format!("generated-{:02}", (random_state >> 4) % 16);
+            let polarity = if random_state & 0x10 == 0 {
+                Polarity::Positive
+            } else {
+                Polarity::Negative
+            };
+            let validity_index = usize::try_from((random_state >> 8) % 6)
+                .map_err(|_| std::io::Error::other("generated validity index is out of range"))?;
+            let Some((start, end)) = validity_patterns.get(validity_index).copied() else {
+                return Err(
+                    std::io::Error::other("generated validity index is out of range").into(),
+                );
+            };
+            let interval = TimeInterval::new(
+                timeline,
+                start.map(|value| WorldTime::from_nanoseconds(timeline, value)),
+                end.map(|value| WorldTime::from_nanoseconds(timeline, value)),
+            )?;
+            let assertion_tail = u8::try_from(48 + offset).map_err(|_| {
+                std::io::Error::other("generated assertion ID escaped the test ID space")
+            })?;
+            generated_assertions.push(make_generated_assertion(
+                id::<AssertionId>(assertion_tail)?,
+                assertion_subject,
+                predicate_for_record,
+                value,
+                polarity,
+                AssertionValidity::new(interval),
+            )?);
+        }
         let mut history = HistorySpaceReferenceModel::new(vec![HistorySpaceDefinition::new(
             root,
             None,
             Revision::GENESIS,
         )?])?;
-        history.publish(
-            root,
-            vec![
-                AssertionHistoryRecord::from_assertion(hidden.clone()),
-                AssertionHistoryRecord::from_assertion(second_visible.clone()),
-                AssertionHistoryRecord::from_assertion(visible.clone()),
-                AssertionHistoryRecord::from_assertion(multi_assertion.clone()),
-            ],
-        )?;
+        let mut root_records = vec![
+            AssertionHistoryRecord::from_assertion(hidden.clone()),
+            AssertionHistoryRecord::from_assertion(second_visible.clone()),
+            AssertionHistoryRecord::from_assertion(visible.clone()),
+            AssertionHistoryRecord::from_assertion(multi_assertion.clone()),
+        ];
+        root_records.extend(
+            generated_assertions
+                .iter()
+                .cloned()
+                .map(AssertionHistoryRecord::from_assertion),
+        );
+        history.publish(root, root_records)?;
         history.add_history_space(HistorySpaceDefinition::new(child, Some(root), revision)?)?;
         assert_eq!(history.publish(child, Vec::new())?, query_revision);
+        let archived_assertions = [hidden, second_visible, visible, multi_assertion]
+            .into_iter()
+            .chain(generated_assertions.iter().cloned())
+            .collect::<Vec<_>>();
         let archive = ArchiveHistoryReferenceModel::new(
-            [&hidden, &second_visible, &visible, &multi_assertion]
-                .into_iter()
+            archived_assertions
+                .iter()
                 .map(|assertion| {
                     ArchiveTargetRecord::new(ArchiveTargetRef::Assertion(assertion.id()), revision)
                 })
@@ -1726,6 +1866,202 @@ mod tests {
         scan_budget: FullScanBudget,
     ) -> AssertionPointRequest<'a> {
         AssertionPointRequest::new(context, masks, boundaries, point_index, scan_budget)
+    }
+
+    fn single_outcomes_match(left: &SingleValueOutcome, right: &SingleValueOutcome) -> bool {
+        match (left, right) {
+            (
+                SingleValueOutcome::Known {
+                    value: Value::String(left_value),
+                    polarity: left_polarity,
+                    contributors: left_contributors,
+                },
+                SingleValueOutcome::Known {
+                    value: Value::String(right_value),
+                    polarity: right_polarity,
+                    contributors: right_contributors,
+                },
+            ) => {
+                left_value == right_value
+                    && left_polarity == right_polarity
+                    && left_contributors == right_contributors
+            }
+            (SingleValueOutcome::Unknown, SingleValueOutcome::Unknown) => true,
+            (
+                SingleValueOutcome::Conflict {
+                    contributors: left_contributors,
+                },
+                SingleValueOutcome::Conflict {
+                    contributors: right_contributors,
+                },
+            ) => left_contributors == right_contributors,
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn m6_13_seeded_scaled_indexed_queries_match_the_full_scan_oracle() -> TestResult {
+        let seeds = [0x5eed_u64, 0xcafe_u64, 0xdecafbad_u64];
+        for (seed_index, seed) in seeds.into_iter().enumerate() {
+            let fixture = fixture_with_generated_assertions(128, seed)?;
+            let world_time = match fixture.context.world_time() {
+                WorldTimeSelector::At(world_time) => world_time,
+                WorldTimeSelector::AllTimes => {
+                    return Err(std::io::Error::other(
+                        "M6-13 fixture must bind one concrete WorldTime",
+                    )
+                    .into());
+                }
+            };
+            let record_query = AssertionCandidateQuery::new(
+                fixture.context.history_space(),
+                fixture.context.layers().requested().clone(),
+                fixture.context.perspective(),
+                fixture.context.epistemic_mode(),
+                fixture.context.recorded_as_of(),
+                world_time,
+            );
+            for subject_tail in 40_u8..48 {
+                let slot = MultiValueSlot::new(
+                    Subject::new(id::<EntityId>(subject_tail)?),
+                    fixture.slot.predicate_id(),
+                );
+                for (policy_index, policies) in [&fixture.policies, &fixture.hidden_policies]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let policy = policies.resolve(&fixture.context)?.snapshot();
+                    let oracle_candidates = full_scan_authorized_assertion_candidates(
+                        &fixture.history,
+                        &fixture.archive,
+                        &record_query,
+                        &fixture.layers,
+                        policy,
+                        &fixture.context,
+                    )?;
+                    let oracle = resolve_single_value_replace(
+                        &oracle_candidates,
+                        SingleValueSlot::new(slot.subject(), slot.predicate_id()),
+                        &fixture.predicate,
+                        |_, _| Ok(false),
+                    )?;
+
+                    let (masks, boundaries) = empty_mask_and_boundary_sources();
+                    let indexed = ProductiveQueryEngine::resolved_point(
+                        query_store(&fixture, policies),
+                        point_request(
+                            &fixture.context,
+                            masks,
+                            boundaries,
+                            available_index(&fixture),
+                            FullScanBudget::Available,
+                        ),
+                        slot,
+                        &fixture.predicate,
+                        |_, _| Ok(false),
+                    )?;
+                    assert_eq!(
+                        indexed.path(),
+                        QueryExecutionPath::Indexed { generation_id: 1 },
+                        "seed {seed:#x}, subject {subject_tail} did not exercise the index"
+                    );
+                    let ResolvedOutcome::Single(indexed_outcome) =
+                        indexed.query().value().outcome()
+                    else {
+                        return Err(std::io::Error::other(
+                            "M6-13 single-value query returned a non-single outcome",
+                        )
+                        .into());
+                    };
+                    assert!(
+                        single_outcomes_match(indexed_outcome, &oracle),
+                        "M6-13 differential mismatch for seed {seed:#x}, subject {subject_tail}"
+                    );
+
+                    let (masks, boundaries) = empty_mask_and_boundary_sources();
+                    let explained = ProductiveQueryEngine::explain_point(
+                        query_store(&fixture, policies),
+                        point_request(
+                            &fixture.context,
+                            masks,
+                            boundaries,
+                            available_index(&fixture),
+                            FullScanBudget::Available,
+                        ),
+                        slot,
+                        &fixture.predicate,
+                        |_, _| Ok(false),
+                    )?;
+                    assert_eq!(
+                        explained.path(),
+                        QueryExecutionPath::Indexed { generation_id: 1 },
+                        "seed {seed:#x}, subject {subject_tail} explain did not exercise the index"
+                    );
+                    assert!(single_outcomes_match(
+                        match explained.query().value().resolved_view().outcome() {
+                            ResolvedOutcome::Single(outcome) => outcome,
+                            ResolvedOutcome::Multi(_) => {
+                                return Err(std::io::Error::other(
+                                    "M6-13 explain returned a non-single outcome",
+                                )
+                                .into());
+                            }
+                        },
+                        &oracle,
+                    ));
+
+                    if seed_index == 0 && subject_tail == 40 && policy_index == 0 {
+                        let (masks, boundaries) = empty_mask_and_boundary_sources();
+                        let fallback = ProductiveQueryEngine::resolved_point(
+                            query_store(&fixture, policies),
+                            point_request(
+                                &fixture.context,
+                                masks,
+                                boundaries,
+                                AssertionPointIndexAccess::missing(),
+                                FullScanBudget::Available,
+                            ),
+                            slot,
+                            &fixture.predicate,
+                            |_, _| Ok(false),
+                        )?;
+                        assert_eq!(
+                            fallback.path(),
+                            QueryExecutionPath::IndexFallback {
+                                reason: IndexFallbackReason::Missing
+                            }
+                        );
+                        let ResolvedOutcome::Single(fallback_outcome) =
+                            fallback.query().value().outcome()
+                        else {
+                            return Err(std::io::Error::other(
+                                "M6-13 fallback returned a non-single outcome",
+                            )
+                            .into());
+                        };
+                        assert!(single_outcomes_match(fallback_outcome, &oracle));
+
+                        let mut incomplete_oracle = oracle_candidates.clone();
+                        let prior_len = incomplete_oracle.len();
+                        let omitted_id = id::<AssertionId>(32)?;
+                        incomplete_oracle
+                            .retain(|candidate| candidate.assertion().id() != omitted_id);
+                        assert_eq!(incomplete_oracle.len() + 1, prior_len);
+                        let mutant = resolve_single_value_replace(
+                            &incomplete_oracle,
+                            SingleValueSlot::new(slot.subject(), slot.predicate_id()),
+                            &fixture.predicate,
+                            |_, _| Ok(false),
+                        )?;
+                        assert!(
+                            !single_outcomes_match(&oracle, &mutant),
+                            "the differential check must reject a representative omitted-index result"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
