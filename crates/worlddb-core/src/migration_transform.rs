@@ -1,6 +1,7 @@
 //! Closed, versioned migration transforms with no ambient runtime capabilities.
 
 use crate::ids::{SchemaRevision, TimelineId};
+use crate::migration_dry_run::MigrationDryRunUnresolvedItem;
 use crate::{
     CalendarPeriod, DecoderLimits, MigrationCalendarDirection, MigrationPlan, MigrationPlanError,
     MigrationTransformerVersion, RecordCodecError, Timeline, WorldTime, decode_record_with_limits,
@@ -10,7 +11,7 @@ use std::fmt;
 const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 const UNIX_EPOCH_DAY_OFFSET: i128 = 719_468;
 const RECORD_VECTOR_SLOT_RESERVATION_BYTES: u64 = 32;
-const MAX_RETAINED_PREVIEW_ERRORS: usize = 256;
+const MAX_RETAINED_PREVIEW_DIAGNOSTICS: usize = 256;
 
 /// The implemented deterministic migration interpreter.
 ///
@@ -137,8 +138,8 @@ impl MigrationTransformer {
     /// Runs the shared transform while retaining a bounded set of per-record failures.
     ///
     /// The record decoder and transform loop are identical to [`Self::transform_records`].
-    /// The only difference is that this preview variant retains up to 256 error details within
-    /// the plan's memory allowance and reports the count of any omitted details.
+    /// The only difference is that this preview variant retains up to 256 combined error and
+    /// unresolved details within the plan's memory allowance and reports omitted item counts.
     pub fn transform_records_for_preview(
         &self,
         plan: &MigrationPlan,
@@ -179,30 +180,41 @@ impl MigrationTransformer {
             .saturating_sub(estimate.reserved_memory_bytes());
         let error_size =
             u64::try_from(std::mem::size_of::<MigrationTransformRecordError>()).unwrap_or(u64::MAX);
-        let budgeted_error_count = if error_size == 0 {
+        let unresolved_size =
+            u64::try_from(std::mem::size_of::<MigrationDryRunUnresolvedItem>()).unwrap_or(u64::MAX);
+        let per_diagnostic_reservation = error_size
+            .checked_add(unresolved_size)
+            .ok_or(MigrationTransformerError::SizeOverflow)?;
+        let budgeted_diagnostic_count = if per_diagnostic_reservation == 0 {
             0
         } else {
-            usize::try_from(remaining_memory / error_size).unwrap_or(usize::MAX)
+            usize::try_from(remaining_memory / per_diagnostic_reservation).unwrap_or(usize::MAX)
         };
-        let max_error_details = if collect_diagnostics {
+        let max_diagnostic_details = if collect_diagnostics {
             records
                 .len()
-                .min(MAX_RETAINED_PREVIEW_ERRORS)
-                .min(budgeted_error_count)
+                .min(MAX_RETAINED_PREVIEW_DIAGNOSTICS)
+                .min(budgeted_diagnostic_count)
         } else {
             0
         };
-        let diagnostic_memory_bytes = u64::try_from(max_error_details)
+        let diagnostic_memory_bytes = u64::try_from(max_diagnostic_details)
             .unwrap_or(u64::MAX)
-            .saturating_mul(error_size);
+            .checked_mul(per_diagnostic_reservation)
+            .ok_or(MigrationTransformerError::SizeOverflow)?;
         let mut record_errors = Vec::new();
         record_errors
-            .try_reserve_exact(max_error_details)
+            .try_reserve_exact(max_diagnostic_details)
+            .map_err(|_| MigrationTransformerError::AllocationFailed)?;
+        let mut unresolved_items = Vec::new();
+        unresolved_items
+            .try_reserve_exact(max_diagnostic_details)
             .map_err(|_| MigrationTransformerError::AllocationFailed)?;
 
         let mut first_record_error = None;
         let mut error_count = 0_u64;
         let mut omitted_error_count = 0_u64;
+        let omitted_unresolved_count = 0_u64;
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"WorldDB.MigrationTransformResult.v2\0");
         hasher.update(plan.fingerprint().as_bytes());
@@ -228,7 +240,7 @@ impl MigrationTransformer {
                     };
                     first_record_error.get_or_insert(error);
                     error_count = error_count.saturating_add(1);
-                    if record_errors.len() < max_error_details {
+                    if record_errors.len() < max_diagnostic_details {
                         record_errors.push(error);
                     } else {
                         omitted_error_count = omitted_error_count.saturating_add(1);
@@ -237,17 +249,18 @@ impl MigrationTransformer {
             }
         }
 
-        let (batch, fingerprint) = if error_count == 0 {
-            let fingerprint = MigrationTransformFingerprint(*hasher.finalize().as_bytes());
-            let batch = retain_output.then_some(MigrationTransformBatch {
-                records: output,
-                fingerprint,
-                estimate,
-            });
-            (batch, Some(fingerprint))
-        } else {
-            (None, None)
-        };
+        let (batch, fingerprint) =
+            if error_count == 0 && unresolved_items.is_empty() && omitted_unresolved_count == 0 {
+                let fingerprint = MigrationTransformFingerprint(*hasher.finalize().as_bytes());
+                let batch = retain_output.then_some(MigrationTransformBatch {
+                    records: output,
+                    fingerprint,
+                    estimate,
+                });
+                (batch, Some(fingerprint))
+            } else {
+                (None, None)
+            };
 
         Ok(MigrationTransformPreview {
             batch,
@@ -255,6 +268,8 @@ impl MigrationTransformer {
             estimate,
             first_record_error,
             record_errors,
+            unresolved_items,
+            omitted_unresolved_count,
             error_count,
             omitted_error_count,
             diagnostic_memory_bytes,
@@ -334,6 +349,8 @@ pub struct MigrationTransformPreview {
     estimate: MigrationTransformEstimate,
     first_record_error: Option<MigrationTransformRecordError>,
     record_errors: Vec<MigrationTransformRecordError>,
+    unresolved_items: Vec<MigrationDryRunUnresolvedItem>,
+    omitted_unresolved_count: u64,
     error_count: u64,
     omitted_error_count: u64,
     diagnostic_memory_bytes: u64,
@@ -346,7 +363,7 @@ impl MigrationTransformPreview {
         self.estimate
     }
 
-    /// Fingerprint of the exact result, absent when any source frame failed validation.
+    /// Fingerprint of the exact result, absent when validation or semantic findings remain.
     #[must_use]
     pub const fn fingerprint(&self) -> Option<MigrationTransformFingerprint> {
         self.fingerprint
@@ -362,6 +379,22 @@ impl MigrationTransformPreview {
     #[must_use]
     pub fn record_errors(&self) -> &[MigrationTransformRecordError] {
         &self.record_errors
+    }
+
+    /// Retained semantic items that need an explicit administrator decision.
+    #[must_use]
+    pub fn unresolved_items(&self) -> &[MigrationDryRunUnresolvedItem] {
+        &self.unresolved_items
+    }
+
+    /// Semantic unresolved items omitted because the bounded diagnostic budget was exhausted.
+    #[must_use]
+    pub const fn omitted_unresolved_count(&self) -> u64 {
+        self.omitted_unresolved_count
+    }
+
+    pub(crate) fn take_unresolved_items(&mut self) -> Vec<MigrationDryRunUnresolvedItem> {
+        std::mem::take(&mut self.unresolved_items)
     }
 
     /// Total number of invalid input records.

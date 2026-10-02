@@ -838,9 +838,11 @@ pub use migration::{
     SchemaIdentityTransitionError, SourceSchemaPrecondition,
 };
 pub use migration_dry_run::{
-    MigrationDryRun, MigrationDryRunError, MigrationDryRunErrorKind, MigrationDryRunOutput,
+    MigrationAdminDecision, MigrationDecisionError, MigrationDryRun, MigrationDryRunError,
+    MigrationDryRunErrorKind, MigrationDryRunInputFingerprint, MigrationDryRunOutput,
     MigrationDryRunReport, MigrationDryRunUnresolvedItem, MigrationDryRunUnresolvedReason,
-    MigrationDryRunWarning, MigrationDryRunWarningCode,
+    MigrationDryRunWarning, MigrationDryRunWarningCode, MigrationItemResolution,
+    ValidatedMigrationDecisions,
 };
 pub use migration_transform::{
     MigrationTransformBatch, MigrationTransformEstimate, MigrationTransformFingerprint,
