@@ -20,6 +20,7 @@ mod required_audit;
 mod salvage;
 mod security_segment;
 mod segment;
+mod sharing_export;
 mod storage_upgrade;
 mod verify;
 mod wal;
@@ -81,6 +82,9 @@ pub use security_segment::{
 };
 pub use segment::{
     ContentDigest, HistorySegment, HistorySegmentReceipt, HistorySegmentStore, SegmentError,
+};
+pub use sharing_export::{
+    SharingExport, SharingExportError, SharingExportManager, SharingExportScope,
 };
 pub use storage_upgrade::{
     StorageFormatProfile, StorageUpgradeAdminAction, StorageUpgradeBudget, StorageUpgradeError,

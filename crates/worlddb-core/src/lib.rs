@@ -744,6 +744,27 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates the WAL operation identity for one sharing-export audit boundary.
+    #[doc(hidden)]
+    pub fn generate_sharing_export_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-record identity for one sharing-export boundary.
+    #[doc(hidden)]
+    pub fn generate_sharing_export_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-operation identity shared by export authorization and completion.
+    #[doc(hidden)]
+    pub fn generate_sharing_export_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates an audit identity for one raw-read page attempt.
     #[doc(hidden)]
     pub fn generate_raw_read_audit_record_id()
