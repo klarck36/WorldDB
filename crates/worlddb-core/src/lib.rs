@@ -636,6 +636,7 @@ mod single_value_resolution;
 mod snapshot_lease;
 mod source_evidence_projection;
 mod source_provenance;
+mod source_provenance_indexes;
 mod storage_contract;
 mod temporal;
 mod transaction;
@@ -965,6 +966,11 @@ pub use source_provenance::{
     ProvenanceEdgeHistory, ProvenanceEndpointRef, ProvenanceEndpointSide, ProvenanceRelation,
     ProvenanceRetraction, Source, SourceContentDigest, SourceEvidenceProvenanceError,
     SourceLocator, SourceMetadata, SourceMetadataEntry, project_active_provenance_edges,
+};
+pub use source_provenance_indexes::{
+    EvidenceNeighborhoodIndex, ProvenanceAdjacencyIndex, ProvenanceIndexDirection,
+    SourceProvenanceIndexError, full_scan_authorized_evidence_neighborhood_index,
+    full_scan_authorized_provenance_adjacency_index,
 };
 pub use storage_contract::{
     DurabilityLevel, ProductionStorage, StorageBackend, StorageCapabilities, StorageFeature,
