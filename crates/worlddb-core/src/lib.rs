@@ -578,6 +578,7 @@ mod cursor;
 mod database_close;
 mod diagnostics;
 mod errors;
+mod event_indexes;
 mod event_projection;
 mod event_relations;
 mod events;
@@ -784,6 +785,9 @@ pub use errors::{
     ResourceLookupFailure, RetryHint, Retryability, SecurityError, Severity, StorageError,
     StorageFailureClass, StorageOperation, ValidationError, map_resource_lookup_error,
     recovery_action, to_public_error, to_public_job_error,
+};
+pub use event_indexes::{
+    EventIndexError, EventMaskIndex, EventRelationIndex, EventSearchIndex, EventTimeIndex,
 };
 pub use event_projection::{
     EventCandidate, EventCandidateQuery, EventCorrection, EventHistory, EventProjectionError,

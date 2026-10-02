@@ -914,6 +914,8 @@ mod tests {
     use std::error::Error;
     use std::fmt;
 
+    use crate::event_indexes::{EventIndexError, EventRelationIndex};
+
     use super::{
         EventGraphError, EventRelation, EventRelationBatch, EventRelationError,
         EventRelationHistory, EventRelationInputKind, EventRelationKind, EventRelationRetraction,
@@ -932,6 +934,7 @@ mod tests {
     enum TestError {
         Relation(EventRelationError),
         Graph(EventGraphError),
+        Index(EventIndexError),
         Id(IdValidationError),
         Revision(RevisionError),
         Policy(crate::security::SecurityPolicyError),
@@ -944,6 +947,7 @@ mod tests {
             match self {
                 Self::Relation(error) => write!(formatter, "{error}"),
                 Self::Graph(error) => write!(formatter, "{error}"),
+                Self::Index(error) => write!(formatter, "{error}"),
                 Self::Id(error) => write!(formatter, "{error}"),
                 Self::Revision(error) => write!(formatter, "{error}"),
                 Self::Policy(error) => write!(formatter, "{error}"),
@@ -967,6 +971,7 @@ mod tests {
 
     error_conversion!(EventRelationError, Relation);
     error_conversion!(EventGraphError, Graph);
+    error_conversion!(EventIndexError, Index);
     error_conversion!(IdValidationError, Id);
     error_conversion!(RevisionError, Revision);
     error_conversion!(crate::security::SecurityPolicyError, Policy);
@@ -1259,6 +1264,57 @@ mod tests {
             RecordedAsOf::from_published_revision(value!(revision(5))),
         )?;
         assert_eq!(after_retraction, vec![causes]);
+        Ok(())
+    }
+
+    #[test]
+    fn relation_index_returns_only_explicit_direct_edges() -> TestResult {
+        let first = uuid::<EventId>(140)?;
+        let middle = uuid::<EventId>(141)?;
+        let last = uuid::<EventId>(142)?;
+        let unrelated = uuid::<EventId>(143)?;
+        let first_cause = relation(144, 140, 141, EventRelationInputKind::Causes)?;
+        let second_cause = relation(145, 141, 142, EventRelationInputKind::Causes)?;
+        let direct_before = relation(146, 140, 143, EventRelationInputKind::Before)?;
+        let relations = vec![first_cause, second_cause, direct_before];
+        let index = EventRelationIndex::build(&relations)?;
+        assert_eq!(
+            EventRelationIndex::build(&[first_cause, first_cause]).err(),
+            Some(EventIndexError::DuplicateEventRelationId(first_cause.id()))
+        );
+
+        let mut direct_scan = relations
+            .iter()
+            .filter(|relation| relation.from_event() == first || relation.to_event() == first)
+            .copied()
+            .collect::<Vec<_>>();
+        direct_scan.sort_unstable_by_key(|relation| (relation.key(), relation.id()));
+        assert_eq!(index.for_event(first), direct_scan);
+        assert_eq!(
+            index
+                .for_event(middle)
+                .into_iter()
+                .map(EventRelation::id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [first_cause.id(), second_cause.id()].into_iter().collect()
+        );
+        assert!(index.between(first, last).is_empty());
+        assert_eq!(
+            index
+                .for_event(unrelated)
+                .into_iter()
+                .map(EventRelation::id)
+                .collect::<Vec<_>>(),
+            vec![direct_before.id()]
+        );
+        assert_eq!(
+            index
+                .for_kind(EventRelationKind::Causes)
+                .into_iter()
+                .map(EventRelation::id)
+                .collect::<std::collections::BTreeSet<_>>(),
+            [first_cause.id(), second_cause.id()].into_iter().collect()
+        );
         Ok(())
     }
 

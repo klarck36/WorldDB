@@ -938,6 +938,7 @@ mod tests {
     use crate::archive::ArchiveTargetRef;
     use crate::archive_projection::{ArchiveHistoryReferenceModel, ArchiveTargetRecord};
     use crate::catalog::{HistorySpaceCatalog, HistorySpaceDefinition};
+    use crate::event_indexes::{EventIndexError, EventMaskIndex, EventSearchIndex, EventTimeIndex};
     use crate::event_projection::{
         EventCandidateQuery, EventHistory, EventProjectionError, EventTimeFilter,
         event_is_authorized, full_scan_event_candidates, prepare_event_correction,
@@ -973,6 +974,7 @@ mod tests {
         Symbol(SymbolError),
         Temporal(TemporalError),
         EventProjection(EventProjectionError),
+        Index(EventIndexError),
         Archive(crate::archive_projection::ArchiveProjectionError),
         History(crate::catalog::HistorySpaceError),
         Layer(LayerSchemaError),
@@ -991,6 +993,7 @@ mod tests {
                 Self::Symbol(error) => write!(formatter, "{error}"),
                 Self::Temporal(error) => write!(formatter, "{error}"),
                 Self::EventProjection(error) => write!(formatter, "{error}"),
+                Self::Index(error) => write!(formatter, "{error}"),
                 Self::Archive(error) => write!(formatter, "{error}"),
                 Self::History(error) => write!(formatter, "{error}"),
                 Self::Layer(error) => write!(formatter, "{error}"),
@@ -1020,6 +1023,7 @@ mod tests {
     error_conversion!(SymbolError, Symbol);
     error_conversion!(TemporalError, Temporal);
     error_conversion!(EventProjectionError, EventProjection);
+    error_conversion!(EventIndexError, Index);
     error_conversion!(crate::archive_projection::ArchiveProjectionError, Archive);
     error_conversion!(crate::catalog::HistorySpaceError, History);
     error_conversion!(LayerSchemaError, Layer);
@@ -1155,6 +1159,311 @@ mod tests {
             })
             .collect::<Result<Vec<_>, TestError>>()?;
         Ok(ArchiveHistoryReferenceModel::new(targets, Vec::new())?)
+    }
+
+    fn event_record(
+        id: u8,
+        kind: &EventKindDefinition,
+        participant_entities: &[u8],
+        event_time: EventTime,
+        created_revision: Revision,
+    ) -> Result<Event, TestError> {
+        let draft = EventDraft::new(
+            value!(uuid::<HistorySpaceId>(5)),
+            value!(uuid::<LayerId>(6)),
+            kind,
+            participants(participant_entities)?,
+            attributes()?,
+            event_time,
+        )?;
+        Ok(value!(Event::new(
+            value!(uuid::<EventId>(id)),
+            draft,
+            created_revision,
+        )))
+    }
+
+    #[test]
+    fn event_kind_role_and_time_indexes_preserve_reference_candidates() -> TestResult {
+        let root = value!(uuid::<HistorySpaceId>(5));
+        let (layer_snapshot, _) = projection_layers()?;
+        let history_spaces = value!(HistorySpaceCatalog::new(vec![HistorySpaceDefinition::new(
+            root,
+            None,
+            Revision::GENESIS,
+        )?]));
+        let timeline = Timeline::new(value!(uuid::<TimelineId>(105)));
+        let kind = event_kind(
+            EventTimeForm::OpenSpanAllowed,
+            1,
+            Some(2),
+            Revision::GENESIS,
+        )?;
+        let open_span = event_record(
+            108,
+            &kind,
+            &[8],
+            EventTime::Span {
+                start: WorldTime::from_nanoseconds(timeline, 9),
+                end: None,
+            },
+            value!(revision(2)),
+        )?;
+        let events = vec![
+            event_record(
+                106,
+                &kind,
+                &[8],
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 5)),
+                value!(revision(2)),
+            )?,
+            event_record(
+                107,
+                &kind,
+                &[9],
+                value!(EventTime::span(
+                    WorldTime::from_nanoseconds(timeline, 4),
+                    Some(WorldTime::from_nanoseconds(timeline, 8)),
+                )),
+                value!(revision(2)),
+            )?,
+            open_span.clone(),
+            event_record(
+                109,
+                &kind,
+                &[9],
+                EventTime::Instant(WorldTime::from_nanoseconds(timeline, 8)),
+                value!(revision(2)),
+            )?,
+        ];
+        let search = EventSearchIndex::build(&events)?;
+        assert_eq!(
+            EventSearchIndex::build(&[open_span.clone(), open_span.clone()]).err(),
+            Some(EventIndexError::DuplicateEventId(open_span.id()))
+        );
+        assert_eq!(
+            EventTimeIndex::build(&[open_span.clone(), open_span.clone()]).err(),
+            Some(EventIndexError::DuplicateEventId(open_span.id()))
+        );
+        let kind_scan = events
+            .iter()
+            .filter(|event| event.event_kind_id() == kind.event_kind_id())
+            .map(Event::id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(search.for_kind(kind.event_kind_id()), kind_scan);
+        let role_id = value!(uuid::<EventRoleId>(1));
+        let role_scan = events
+            .iter()
+            .filter(|event| {
+                event
+                    .participants()
+                    .as_slice()
+                    .iter()
+                    .any(|participant| participant.role_id() == role_id)
+            })
+            .map(Event::id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(search.for_role(role_id), role_scan);
+        let entity_id = value!(uuid::<EntityId>(8));
+        let participant_scan = events
+            .iter()
+            .filter(|event| {
+                event.participants().as_slice().iter().any(|participant| {
+                    participant.role_id() == role_id && participant.entity_id() == entity_id
+                })
+            })
+            .map(Event::id)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(search.for_participant(role_id, entity_id), participant_scan);
+
+        let time_index = EventTimeIndex::build(&events)?;
+        let closure = value!(EventSpanClosure::new(
+            value!(uuid::<EventSpanClosureId>(110)),
+            &open_span,
+            WorldTime::from_nanoseconds(timeline, 10),
+            value!(revision(3)),
+        ));
+        let closures = [closure];
+        let archive = archive_events(&events)?;
+        let as_of = RecordedAsOf::from_published_revision(value!(revision(4)));
+        for filter in [
+            EventTimeFilter::At(WorldTime::from_nanoseconds(timeline, 10)),
+            EventTimeFilter::Overlaps {
+                start: WorldTime::from_nanoseconds(timeline, 8),
+                end: WorldTime::from_nanoseconds(timeline, 10),
+            },
+        ] {
+            let query = EventCandidateQuery::new(root, LayerSelection::BaseOnly, as_of, filter);
+            let full_scan = full_scan_event_candidates(
+                EventHistory::new(
+                    &events,
+                    &closures,
+                    &[],
+                    &archive,
+                    std::slice::from_ref(&kind),
+                ),
+                &history_spaces,
+                &layer_snapshot,
+                &query,
+            )?;
+            let time_candidates = time_index.candidates(filter)?;
+            let full_ids = full_scan
+                .iter()
+                .map(|candidate| candidate.event().id())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(full_ids.is_subset(&time_candidates));
+
+            let narrowed_events = events
+                .iter()
+                .filter(|event| time_candidates.contains(&event.id()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let narrowed_ids = narrowed_events
+                .iter()
+                .map(Event::id)
+                .collect::<std::collections::BTreeSet<_>>();
+            let narrowed_closures = closures
+                .iter()
+                .filter(|item| narrowed_ids.contains(&item.event_id()))
+                .copied()
+                .collect::<Vec<_>>();
+            let narrowed_archive = archive_events(&narrowed_events)?;
+            let indexed_scan = full_scan_event_candidates(
+                EventHistory::new(
+                    &narrowed_events,
+                    &narrowed_closures,
+                    &[],
+                    &narrowed_archive,
+                    std::slice::from_ref(&kind),
+                ),
+                &history_spaces,
+                &layer_snapshot,
+                &query,
+            )?;
+            assert_eq!(
+                indexed_scan
+                    .iter()
+                    .map(|candidate| candidate.event().id())
+                    .collect::<Vec<_>>(),
+                full_scan
+                    .iter()
+                    .map(|candidate| candidate.event().id())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let other_timeline = Timeline::new(value!(uuid::<TimelineId>(118)));
+        let other_timeline_event = event_record(
+            119,
+            &kind,
+            &[8],
+            EventTime::Instant(WorldTime::from_nanoseconds(other_timeline, 5)),
+            value!(revision(2)),
+        )?;
+        let mut mixed_events = events.clone();
+        mixed_events.push(other_timeline_event.clone());
+        let mixed_index = EventTimeIndex::build(&mixed_events)?;
+        let mixed_candidates = mixed_index.candidates(EventTimeFilter::At(
+            WorldTime::from_nanoseconds(timeline, 5),
+        ))?;
+        assert!(mixed_candidates.contains(&other_timeline_event.id()));
+        let mixed_archive = archive_events(&mixed_events)?;
+        let mismatch_query = EventCandidateQuery::new(
+            root,
+            LayerSelection::BaseOnly,
+            as_of,
+            EventTimeFilter::At(WorldTime::from_nanoseconds(timeline, 5)),
+        );
+        let full_mixed_result = full_scan_event_candidates(
+            EventHistory::new(
+                &mixed_events,
+                &closures,
+                &[],
+                &mixed_archive,
+                std::slice::from_ref(&kind),
+            ),
+            &history_spaces,
+            &layer_snapshot,
+            &mismatch_query,
+        );
+        assert!(matches!(
+            full_mixed_result,
+            Err(EventProjectionError::Temporal(
+                TemporalError::IncomparableTimelines { .. }
+            ))
+        ));
+        let narrowed_mixed_events = mixed_events
+            .iter()
+            .filter(|event| mixed_candidates.contains(&event.id()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let narrowed_mixed_ids = narrowed_mixed_events
+            .iter()
+            .map(Event::id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let narrowed_mixed_closures = closures
+            .iter()
+            .filter(|item| narrowed_mixed_ids.contains(&item.event_id()))
+            .copied()
+            .collect::<Vec<_>>();
+        let narrowed_mixed_archive = archive_events(&narrowed_mixed_events)?;
+        assert!(matches!(
+            full_scan_event_candidates(
+                EventHistory::new(
+                    &narrowed_mixed_events,
+                    &narrowed_mixed_closures,
+                    &[],
+                    &narrowed_mixed_archive,
+                    std::slice::from_ref(&kind),
+                ),
+                &history_spaces,
+                &layer_snapshot,
+                &mismatch_query,
+            ),
+            Err(EventProjectionError::Temporal(
+                TemporalError::IncomparableTimelines { .. }
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn event_mask_index_returns_only_the_concrete_target_mask() -> TestResult {
+        let root = value!(uuid::<HistorySpaceId>(111));
+        let layer = value!(uuid::<LayerId>(112));
+        let first_event = value!(uuid::<EventId>(113));
+        let second_event = value!(uuid::<EventId>(114));
+        let first_mask = EventMask::new(
+            value!(uuid::<EventMaskId>(115)),
+            root,
+            layer,
+            first_event,
+            value!(revision(3)),
+        );
+        let second_mask = EventMask::new(
+            value!(uuid::<EventMaskId>(116)),
+            root,
+            layer,
+            second_event,
+            value!(revision(3)),
+        );
+        let masks = [first_mask, second_mask];
+        let index = EventMaskIndex::build(&masks)?;
+        assert_eq!(
+            EventMaskIndex::build(&[first_mask, first_mask]).err(),
+            Some(EventIndexError::DuplicateEventMaskId(first_mask.id()))
+        );
+        for target in [first_event, second_event] {
+            let indexed = index.for_event(target);
+            let scan = masks
+                .iter()
+                .filter(|mask| mask.target_event() == target)
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(indexed, scan);
+        }
+        assert!(index.for_event(value!(uuid::<EventId>(117))).is_empty());
+        Ok(())
     }
 
     #[test]

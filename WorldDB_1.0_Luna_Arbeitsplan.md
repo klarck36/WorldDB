@@ -206,7 +206,7 @@ Die Reihenfolge folgt dem Master-Implementierungsplan M0–M10. **Die Zeilenfolg
 - [x] **M6-02 – Record-/Operation-/Schema-Indizes.** RecordId, OperationId, SchemaId/Revision und Lifecycle Lookup bauen. **Fertig wenn** jeder Treffer gegen Full-Scan-Orakel stimmt.
 - [x] **M6-03 – Assertion-Point-/History-Index.** Space/Layer/Perspective/Mode/Subject/Predicate/Revision samt Parent-Cutoff indizieren. **Fertig wenn** Point und Entity-/Predicate-History über Branches differential gleich sind.
 - [x] **M6-04 – Zeit-/Mask-/Boundary-Indizes.** AssertionValidity, MaskSelector, ContextPrecedence und ReplacementBoundary separat indizieren. **Fertig wenn** adversariale Mask-/Layer-/Zeitcorpora gegen Full Scan gleich bleiben.
-- [ ] **M6-05 – Eventindizes.** EventKind, ParticipantRole, EventTime, EventRelation und EventMask unterstützen. **Fertig wenn** Eventsuche keine zeitliche oder kausale Relation erfindet.
+- [x] **M6-05 – Eventindizes.** EventKind, ParticipantRole, EventTime, EventRelation und EventMask unterstützen. **Fertig wenn** Eventsuche keine zeitliche oder kausale Relation erfindet.
 - [ ] **M6-06 – Evidence-/Provenance-Nachbarschaft.** Sichtbare Source-/Target- und Graphkantenindizes bauen. **Fertig wenn** berechtigte Graphabfragen differential stimmen und verdeckte Endpunkte nicht leaken.
 - [ ] **M6-07 – Atomarer Index-Rebuild.** Auf gepinntem Snapshot bauen, nachfolgende Deltas aufholen und vollständige Generation atomar publizieren. **Fertig wenn** Crash nur alte oder neue vollständige Generation zeigt. (`WDB-IDX-003`)
 - [ ] **M6-08 – Produktive Raw/Resolved/Explain-Engine.** Ports aus M3 mit Indizes und Full-Scan-Fallback verbinden. **Fertig wenn** geordnete Ergebnisse und Contributors exakt dem M2-Orakel sowie Security-Filter entsprechen.
