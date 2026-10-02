@@ -564,6 +564,7 @@ mod archive;
 mod archive_projection;
 mod archive_transaction;
 mod assertion_correction;
+mod assertion_point_index;
 mod assertion_projection;
 mod assertions;
 mod audit;
@@ -736,6 +737,10 @@ pub use assertion_correction::{
     AssertionCorrectionCommand, AssertionCorrectionCommitError,
     AssertionCorrectionCommitValidationError, AssertionCorrectionError,
     PreparedAssertionCorrection, commit_assertion_correction, prepare_assertion_correction,
+};
+pub use assertion_point_index::{
+    AssertionEntityHistoryQuery, AssertionIndexHit, AssertionPointHistoryIndex,
+    AssertionPointIndexError, AssertionPointQuery, AssertionPredicateHistoryQuery,
 };
 pub use assertion_projection::{AssertionLifecycleProjection, AssertionProjectionError};
 pub use assertions::{
