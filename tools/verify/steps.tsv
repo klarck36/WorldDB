@@ -27,6 +27,8 @@ step	dev	contract-sources	run	python	-B -X utf8 docs/contract/build_contract_sou
 step	dev	contract-docs	run	python	-B -X utf8 docs/contract/verify_contract_docs.py	-
 step	dev	source-check	run	python	-B -X utf8 WorldDB_1.0_Sourcecheck.py	-
 step	dev	plan-check	run	python	-B -X utf8 WorldDB_1.0_Plancheck.py	-
+step	dev	m6-14a-corpus-manifest	run	python	-B -X utf8 tools/m6-14a/verify_corpus.py --metadata-only	-
+step	dev	m6-14a-manifest-tests	run	python	-B -X utf8 -m unittest discover -s tools/m6-14a -p test_*.py -v	-
 step	dev	write-record-matrix	run	python	-B -X utf8 tools/check_write_record_matrix.py	-
 step	dev	ci-matrix-contract	run	python	-B -X utf8 tools/check_ci_matrix.py	-
 step	dev	ci-matrix-contract-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_ci_matrix.py -v	-

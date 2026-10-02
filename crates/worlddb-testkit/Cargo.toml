@@ -26,3 +26,7 @@ required-features = ["sqlite-reference"]
 name = "fault-probe"
 path = "src/bin/fault_probe.rs"
 required-features = ["fault-injection"]
+
+[[bin]]
+name = "m6-14a-corpus"
+path = "src/bin/m6_14a_corpus.rs"
