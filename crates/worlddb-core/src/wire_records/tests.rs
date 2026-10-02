@@ -21,16 +21,16 @@ use crate::{
     MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure,
     MigrationCalendarDirection, MigrationCalendarShift, MigrationCategory, MigrationPlan,
     MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
-    MigrationTargetSchema, MigrationTransformerVersion, PerspectiveDefinitionRevision,
-    PerspectiveRetirement, PerspectiveScope, Polarity, PredicateDefinition,
-    PredicateDefinitionSpec, PropositionKey, ProvenanceEdge, ProvenanceEndpointRef,
-    ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef, ReplacementBoundary,
-    ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, ResolutionPolicy, Revision,
-    RoleCardinality, SchemaDefinitionId, SchemaIdentityTransition, SchemaRevision, Source,
-    SourceContentDigest, SourceLocator, SourceMetadata, SourceMetadataEntry,
-    SourceSchemaPrecondition, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId,
-    TlvDecoder, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint, ValueKind,
-    WorldTime, decode_frame, encode_frame, encode_id,
+    MigrationStepTargetSchema, MigrationTargetSchema, MigrationTransformerVersion,
+    PerspectiveDefinitionRevision, PerspectiveRetirement, PerspectiveScope, Polarity,
+    PredicateDefinition, PredicateDefinitionSpec, PropositionKey, ProvenanceEdge,
+    ProvenanceEndpointRef, ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef,
+    ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
+    ResolutionPolicy, Revision, RoleCardinality, SchemaDefinitionId, SchemaIdentityTransition,
+    SchemaRevision, Source, SourceContentDigest, SourceLocator, SourceMetadata,
+    SourceMetadataEntry, SourceSchemaPrecondition, Subject, Symbol, Time, TimeInterval, Timeline,
+    TimelineId, TlvDecoder, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint,
+    ValueKind, WorldTime, decode_frame, encode_frame, encode_id,
 };
 
 fn id<T: DomainId>(tail: u8) -> Option<T> {
@@ -46,9 +46,14 @@ fn symbol(text: &str) -> Option<Symbol> {
 }
 
 fn migration_plan_frame_with_field_replaced(field_tag: u32, value: &[u8]) -> Option<Vec<u8>> {
+    let fixture_name = if field_tag == 14 {
+        "migration_plan_step_targets"
+    } else {
+        "migration_plan_calendar_shift"
+    };
     let record = fixtures()?
         .into_iter()
-        .find(|(name, _)| *name == "migration_plan_calendar_shift")?
+        .find(|(name, _)| *name == fixture_name)?
         .1;
     let encoded = encode_record(&record).ok()?;
     let frame = decode_frame(&encoded).ok()?;
@@ -170,6 +175,7 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
             [0x22; 32],
         ),
         steps: vec![step_id],
+        step_targets: None,
         schema_changes: vec![schema_change],
         transformer_version: MigrationTransformerVersion::new(1).ok()?,
         calendar_shift: None,
@@ -183,6 +189,17 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
             CalendarPeriod::new(1, 2, 3).ok()?,
             MigrationCalendarDirection::Future,
         )),
+        ..migration_plan_spec.clone()
+    })
+    .ok()?;
+    let migration_plan_step_targets = MigrationPlan::new(MigrationPlanSpec {
+        step_targets: Some(vec![MigrationStepTargetSchema::new(
+            step_id,
+            MigrationTargetSchema::new(
+                SchemaRevision::from_published_revision(Revision::FIRST_COMMIT),
+                [0x22; 32],
+            ),
+        )]),
         ..migration_plan_spec
     })
     .ok()?;
@@ -246,6 +263,10 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
         (
             "migration_plan_calendar_shift",
             Record::MigrationPlan(migration_plan_calendar_shift),
+        ),
+        (
+            "migration_plan_step_targets",
+            Record::MigrationPlan(migration_plan_step_targets),
         ),
         (
             "migration_run",
@@ -1507,6 +1528,18 @@ fn migration_plan_decoder_reports_precise_invalid_fields() {
             Err(RecordCodecError::InvalidFieldValue {
                 kind: 0x100b,
                 field: 10
+            })
+        ));
+    }
+
+    let invalid_step_targets = migration_plan_frame_with_field_replaced(14, &[0]);
+    assert!(invalid_step_targets.is_some());
+    if let Some(frame) = invalid_step_targets {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 14
             })
         ));
     }

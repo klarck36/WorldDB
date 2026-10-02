@@ -725,6 +725,7 @@ mod tests {
                 [0x22; 32],
             ),
             steps: vec![step_id],
+            step_targets: None,
             schema_changes: vec![change],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,

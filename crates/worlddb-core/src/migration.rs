@@ -291,6 +291,36 @@ impl MigrationTargetSchema {
     }
 }
 
+/// Fingerprinted schema state published by one ordered migration step.
+///
+/// Plans may omit these checkpoints for wire compatibility, but migration
+/// execution requires a checkpoint for every step.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MigrationStepTargetSchema {
+    step_id: MigrationStepId,
+    schema: MigrationTargetSchema,
+}
+
+impl MigrationStepTargetSchema {
+    /// Binds one stable plan step to the exact schema state it publishes.
+    #[must_use]
+    pub const fn new(step_id: MigrationStepId, schema: MigrationTargetSchema) -> Self {
+        Self { step_id, schema }
+    }
+
+    /// Stable step identity from the ordered migration plan.
+    #[must_use]
+    pub const fn step_id(self) -> MigrationStepId {
+        self.step_id
+    }
+
+    /// Exact intermediate schema revision and fingerprint.
+    #[must_use]
+    pub const fn schema(self) -> MigrationTargetSchema {
+        self.schema
+    }
+}
+
 /// Positive, explicit version for the migration transformer's implementation contract.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct MigrationTransformerVersion(NonZeroU32);
@@ -408,6 +438,8 @@ pub struct MigrationPlanSpec {
     pub target_schema: MigrationTargetSchema,
     /// Ordered, unique step identities.
     pub steps: Vec<MigrationStepId>,
+    /// Optional exact schema checkpoint after every step; required by execution.
+    pub step_targets: Option<Vec<MigrationStepTargetSchema>>,
     /// Canonically ordered schema identity changes represented by the plan.
     pub schema_changes: Vec<SchemaIdentityTransition>,
     /// Version of the deterministic transformer to be used by later run tasks.
@@ -437,6 +469,7 @@ pub struct MigrationPlan {
     source_schema: SourceSchemaPrecondition,
     target_schema: MigrationTargetSchema,
     steps: Vec<MigrationStepId>,
+    step_targets: Option<Vec<MigrationStepTargetSchema>>,
     schema_changes: Vec<SchemaIdentityTransition>,
     transformer_version: MigrationTransformerVersion,
     calendar_shift: Option<MigrationCalendarShift>,
@@ -455,6 +488,14 @@ impl MigrationPlan {
             if !unique_steps.insert(*step) {
                 return Err(MigrationPlanError::DuplicateStepId(*step));
             }
+        }
+        if let Some(step_targets) = &spec.step_targets {
+            validate_step_targets(
+                &spec.steps,
+                spec.source_schema,
+                spec.target_schema,
+                step_targets,
+            )?;
         }
         if spec.schema_changes.is_empty() {
             return Err(MigrationPlanError::EmptySchemaChanges);
@@ -486,6 +527,7 @@ impl MigrationPlan {
             source_schema: spec.source_schema,
             target_schema: spec.target_schema,
             steps: spec.steps,
+            step_targets: spec.step_targets,
             schema_changes: spec.schema_changes,
             transformer_version: spec.transformer_version,
             calendar_shift: spec.calendar_shift,
@@ -522,6 +564,12 @@ impl MigrationPlan {
     #[must_use]
     pub fn steps(&self) -> &[MigrationStepId] {
         &self.steps
+    }
+
+    /// Exact schema checkpoint after each ordered step, when present.
+    #[must_use]
+    pub fn step_targets(&self) -> Option<&[MigrationStepTargetSchema]> {
+        self.step_targets.as_deref()
     }
 
     /// Canonically ordered schema identity transitions classified by this plan.
@@ -621,7 +669,9 @@ impl MigrationPlan {
 
 fn compute_plan_fingerprint(spec: &MigrationPlanSpec) -> MigrationPlanFingerprint {
     let mut hasher = blake3::Hasher::new();
-    if spec.calendar_shift.is_some() {
+    if spec.step_targets.is_some() {
+        hasher.update(b"WorldDB.MigrationPlan.v3\0");
+    } else if spec.calendar_shift.is_some() {
         hasher.update(b"WorldDB.MigrationPlan.v2\0");
     } else {
         // Plans without a calendar transform retain the M7-01 fingerprint contract.
@@ -663,9 +713,57 @@ fn compute_plan_fingerprint(spec: &MigrationPlanSpec) -> MigrationPlanFingerprin
         hasher.update(&shift.period.days().to_be_bytes());
         hasher.update(&[shift.direction.wire_tag()]);
     }
+    if let Some(step_targets) = &spec.step_targets {
+        hasher.update(
+            &u64::try_from(step_targets.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        for target in step_targets {
+            hasher.update(&target.step_id.to_bytes());
+            hasher.update(&target.schema.revision.revision().value().to_be_bytes());
+            hasher.update(&target.schema.fingerprint);
+        }
+    }
     hasher.update(&spec.budget.max_work_units().to_be_bytes());
     hasher.update(&spec.budget.max_memory_bytes().to_be_bytes());
     MigrationPlanFingerprint(*hasher.finalize().as_bytes())
+}
+
+fn validate_step_targets(
+    steps: &[MigrationStepId],
+    source: SourceSchemaPrecondition,
+    target: MigrationTargetSchema,
+    step_targets: &[MigrationStepTargetSchema],
+) -> Result<(), MigrationPlanError> {
+    if steps.len() != step_targets.len() {
+        return Err(MigrationPlanError::StepTargetsDoNotMatchSteps);
+    }
+
+    let mut previous_revision = source.revision();
+    for (step_id, step_target) in steps.iter().zip(step_targets) {
+        if *step_id != step_target.step_id() {
+            return Err(MigrationPlanError::StepTargetsDoNotMatchSteps);
+        }
+        let expected_revision = previous_revision
+            .revision()
+            .next_commit()
+            .map_err(|_| MigrationPlanError::StepTargetRevisionOverflow)?;
+        if step_target.schema().revision()
+            != SchemaRevision::from_published_revision(expected_revision)
+        {
+            return Err(MigrationPlanError::StepTargetRevisionNotContiguous);
+        }
+        previous_revision = step_target.schema().revision();
+    }
+
+    let Some(last) = step_targets.last() else {
+        return Err(MigrationPlanError::StepTargetsDoNotMatchSteps);
+    };
+    if last.schema() != target {
+        return Err(MigrationPlanError::StepTargetFinalSchemaMismatch);
+    }
+    Ok(())
 }
 
 fn update_optional_schema_id(hasher: &mut blake3::Hasher, identity: Option<SchemaDefinitionId>) {
@@ -695,6 +793,14 @@ pub enum MigrationPlanError {
     CategoryDoesNotMatchChanges,
     /// Target schema revision must follow the exact source precondition revision.
     TargetSchemaNotLater,
+    /// Step schema checkpoints must align exactly with the ordered plan steps.
+    StepTargetsDoNotMatchSteps,
+    /// Every step schema checkpoint must advance one published transaction revision.
+    StepTargetRevisionNotContiguous,
+    /// A step schema checkpoint would overflow the published revision space.
+    StepTargetRevisionOverflow,
+    /// The final step checkpoint must equal the plan's declared target schema.
+    StepTargetFinalSchemaMismatch,
     /// Transformer versions start at 1.
     ZeroTransformerVersion,
     /// The implementation available at start/resume differs from the planned version.
@@ -730,6 +836,18 @@ impl fmt::Display for MigrationPlanError {
             }
             Self::TargetSchemaNotLater => {
                 formatter.write_str("migration target schema does not follow its source")
+            }
+            Self::StepTargetsDoNotMatchSteps => {
+                formatter.write_str("migration step schema checkpoints do not match its steps")
+            }
+            Self::StepTargetRevisionNotContiguous => {
+                formatter.write_str("migration step schema revisions are not contiguous")
+            }
+            Self::StepTargetRevisionOverflow => {
+                formatter.write_str("migration step schema revision space is exhausted")
+            }
+            Self::StepTargetFinalSchemaMismatch => {
+                formatter.write_str("final migration step schema differs from plan target")
             }
             Self::ZeroTransformerVersion => {
                 formatter.write_str("migration transformer version must be positive")
@@ -875,8 +993,8 @@ impl MigrationStepCommitIdentity {
 mod tests {
     use super::{
         MigrationCategory, MigrationPlan, MigrationPlanError, MigrationPlanSpec, MigrationRun,
-        MigrationRunState, MigrationStepCommitIdentity, MigrationTargetSchema,
-        MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId,
+        MigrationRunState, MigrationStepCommitIdentity, MigrationStepTargetSchema,
+        MigrationTargetSchema, MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId,
         SchemaIdentityTransition, SchemaIdentityTransitionError, SourceSchemaPrecondition,
     };
     use crate::JobBudget;
@@ -915,6 +1033,7 @@ mod tests {
                 [0x22; 32],
             ),
             steps: vec![step],
+            step_targets: None,
             schema_changes: vec![change],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,
@@ -943,6 +1062,81 @@ mod tests {
         first
             .verify_fingerprint(first.fingerprint())
             .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    #[test]
+    fn migration_step_targets_bind_every_contiguous_intermediate_schema() -> Result<(), String> {
+        let mut spec = additive_spec()?;
+        let second_step = uuid::<MigrationStepId>(4).map_err(|error| error.to_string())?;
+        spec.steps.push(second_step);
+        spec.target_schema = MigrationTargetSchema::new(
+            SchemaRevision::from_published_revision(
+                Revision::new(2).map_err(|error| error.to_string())?,
+            ),
+            [0x33; 32],
+        );
+        let first_schema = MigrationTargetSchema::new(
+            SchemaRevision::from_published_revision(Revision::FIRST_COMMIT),
+            [0x22; 32],
+        );
+        let first_step = spec
+            .steps
+            .first()
+            .copied()
+            .ok_or_else(|| String::from("first step is missing"))?;
+        let second_step = spec
+            .steps
+            .get(1)
+            .copied()
+            .ok_or_else(|| String::from("second step is missing"))?;
+        spec.step_targets = Some(vec![
+            MigrationStepTargetSchema::new(first_step, first_schema),
+            MigrationStepTargetSchema::new(second_step, spec.target_schema),
+        ]);
+
+        let plan = MigrationPlan::new(spec.clone()).map_err(|error| error.to_string())?;
+        assert_eq!(plan.step_targets().map(<[_]>::len), Some(2));
+
+        let mut changed_intermediate = spec.clone();
+        changed_intermediate
+            .step_targets
+            .as_mut()
+            .and_then(|targets| targets.first_mut())
+            .ok_or_else(|| String::from("first step target is missing"))?
+            .schema = MigrationTargetSchema::new(first_schema.revision(), [0x23; 32]);
+        let changed_plan =
+            MigrationPlan::new(changed_intermediate).map_err(|error| error.to_string())?;
+        assert_ne!(plan.fingerprint(), changed_plan.fingerprint());
+
+        let mut skipped_revision = spec.clone();
+        skipped_revision
+            .step_targets
+            .as_mut()
+            .and_then(|targets| targets.first_mut())
+            .ok_or_else(|| String::from("first step target is missing"))?
+            .schema = MigrationTargetSchema::new(
+            SchemaRevision::from_published_revision(
+                Revision::new(2).map_err(|error| error.to_string())?,
+            ),
+            [0x22; 32],
+        );
+        assert_eq!(
+            MigrationPlan::new(skipped_revision).err(),
+            Some(MigrationPlanError::StepTargetRevisionNotContiguous)
+        );
+
+        let mut wrong_final = spec;
+        wrong_final
+            .step_targets
+            .as_mut()
+            .and_then(|targets| targets.last_mut())
+            .ok_or_else(|| String::from("last step target is missing"))?
+            .schema = MigrationTargetSchema::new(wrong_final.target_schema.revision(), [0x34; 32]);
+        assert_eq!(
+            MigrationPlan::new(wrong_final).err(),
+            Some(MigrationPlanError::StepTargetFinalSchemaMismatch)
+        );
         Ok(())
     }
 

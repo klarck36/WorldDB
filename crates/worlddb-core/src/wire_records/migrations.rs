@@ -5,8 +5,9 @@ use crate::wire::{decode_id, encode_id};
 use crate::{
     CalendarPeriod, JobBudget, MigrationCalendarDirection, MigrationCalendarShift,
     MigrationCategory, MigrationPlan, MigrationPlanSpec, MigrationRun, MigrationRunState,
-    MigrationStepCommitIdentity, MigrationTargetSchema, MigrationTransformerVersion,
-    RecordCodecError, RecordKind, SchemaIdentityTransition, SourceSchemaPrecondition, TimelineId,
+    MigrationStepCommitIdentity, MigrationStepTargetSchema, MigrationTargetSchema,
+    MigrationTransformerVersion, RecordCodecError, RecordKind, SchemaIdentityTransition,
+    SourceSchemaPrecondition, TimelineId,
 };
 
 use super::{
@@ -15,7 +16,7 @@ use super::{
     required_field,
 };
 
-const PLAN_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const PLAN_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
 pub(super) fn encode_plan(value: &MigrationPlan) -> Result<Vec<u8>, RecordCodecError> {
     let steps = value
@@ -49,6 +50,13 @@ pub(super) fn encode_plan(value: &MigrationPlan) -> Result<Vec<u8>, RecordCodecE
     ];
     if let Some(calendar_shift) = value.calendar_shift() {
         fields.push((13, encode_calendar_shift(calendar_shift)?));
+    }
+    if let Some(step_targets) = value.step_targets() {
+        let encoded_targets = step_targets
+            .iter()
+            .map(encode_step_target)
+            .collect::<Result<Vec<_>, _>>()?;
+        fields.push((14, encode_array(&encoded_targets)));
     }
     encode_fields(RecordKind::MigrationPlan, fields)
 }
@@ -99,6 +107,20 @@ pub(super) fn decode_plan(
         .find(|(tag, _)| *tag == 13)
         .map(|(_, bytes)| decode_calendar_shift(kind, bytes, limits))
         .transpose()?;
+    let step_targets = fields
+        .iter()
+        .find(|(tag, _)| *tag == 14)
+        .map(|(_, bytes)| {
+            let encoded_targets =
+                decode_array_with_limits(bytes, limits).map_err(RecordCodecError::Wire)?;
+            collect_results_limited(
+                encoded_targets
+                    .into_iter()
+                    .map(|bytes| decode_step_target(bytes, limits)),
+                limits,
+            )
+        })
+        .transpose()?;
 
     let plan = MigrationPlan::new(MigrationPlanSpec {
         migration_id,
@@ -106,6 +128,7 @@ pub(super) fn decode_plan(
         source_schema: SourceSchemaPrecondition::new(source_revision, source_fingerprint),
         target_schema: MigrationTargetSchema::new(target_revision, target_fingerprint),
         steps,
+        step_targets,
         schema_changes,
         transformer_version,
         calendar_shift,
@@ -119,6 +142,10 @@ pub(super) fn decode_plan(
         crate::MigrationPlanError::CategoryDoesNotMatchChanges => invalid_field(kind, 2),
         crate::MigrationPlanError::EmptySchemaChanges
         | crate::MigrationPlanError::DuplicateSchemaChange => invalid_field(kind, 12),
+        crate::MigrationPlanError::StepTargetsDoNotMatchSteps
+        | crate::MigrationPlanError::StepTargetRevisionNotContiguous
+        | crate::MigrationPlanError::StepTargetRevisionOverflow
+        | crate::MigrationPlanError::StepTargetFinalSchemaMismatch => invalid_field(kind, 14),
         crate::MigrationPlanError::ZeroTransformerVersion => invalid_field(kind, 8),
         crate::MigrationPlanError::TransformerVersionMismatch { .. } => invalid_field(kind, 8),
         crate::MigrationPlanError::RunPlanIdentityMismatch => invalid_field(kind, 1),
@@ -129,6 +156,44 @@ pub(super) fn decode_plan(
         return Err(invalid_field(kind, 11));
     }
     Ok(plan)
+}
+
+fn encode_step_target(target: &MigrationStepTargetSchema) -> Result<Vec<u8>, RecordCodecError> {
+    encode_fields(
+        RecordKind::MigrationPlan,
+        vec![
+            (1, encode_id(target.step_id()).to_vec()),
+            (2, encode_schema_revision(target.schema().revision())),
+            (3, target.schema().fingerprint().to_vec()),
+        ],
+    )
+}
+
+fn decode_step_target(
+    bytes: &[u8],
+    limits: &DecoderLimits,
+) -> Result<MigrationStepTargetSchema, RecordCodecError> {
+    let kind = RecordKind::MigrationPlan;
+    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3], limits)
+        .map_err(|_| invalid_field(kind, 14))?;
+    let step_id = decode_id(required_field(kind, &fields, 1).map_err(|_| invalid_field(kind, 14))?)
+        .map_err(|_| invalid_field(kind, 14))?;
+    let revision = decode_schema_revision(
+        kind,
+        2,
+        required_field(kind, &fields, 2).map_err(|_| invalid_field(kind, 14))?,
+    )
+    .map_err(|_| invalid_field(kind, 14))?;
+    let fingerprint = decode_fingerprint(
+        kind,
+        3,
+        required_field(kind, &fields, 3).map_err(|_| invalid_field(kind, 14))?,
+    )
+    .map_err(|_| invalid_field(kind, 14))?;
+    Ok(MigrationStepTargetSchema::new(
+        step_id,
+        MigrationTargetSchema::new(revision, fingerprint),
+    ))
 }
 
 fn encode_calendar_shift(shift: MigrationCalendarShift) -> Result<Vec<u8>, RecordCodecError> {

@@ -10,7 +10,7 @@
 - An explicit decision either supplies exact canonical record bytes or explicitly omits the source record. It is bound to the exact report, source schema, transformer version, ordered input fingerprint, and unresolved item.
 - Validation requires exactly one decision for every retained unresolved item, rejects missing, duplicate, extra, stale, malformed, unauthorized, or over-budget decisions, and requires `MigrationExecute` for the supplied target scope. The validated object records the actor and effective-rights fingerprint.
 
-`ValidatedMigrationDecisions` is a decision-validation result, not a commit permit. M7-05 and M7-10a must consume it while rechecking current authorization, source OCC, target-schema semantics, backup, audit, and commit requirements. The current version-1 transformer copies canonical records exactly and therefore emits no semantic unresolved items; unit tests construct internal unresolved reports to exercise the decision protocol until a transformer version can emit those outcomes.
+`ValidatedMigrationDecisions` is a decision-validation result, not a commit permit. M7-05 accepts only compatible categories and fails closed for Restrictive/Breaking; it does not consume administrative decisions. M7-10a must consume the validated decision set for those guarded categories while rechecking current authorization, source OCC, target-schema semantics, backup, audit, and commit requirements. The current version-1 transformer copies canonical records exactly and therefore emits no semantic unresolved items; unit tests construct internal unresolved reports to exercise the decision protocol until a transformer version can emit those outcomes.
 
 ## Evidence
 

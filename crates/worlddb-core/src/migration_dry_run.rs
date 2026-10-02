@@ -863,6 +863,7 @@ mod tests {
                 [0x22; 32],
             ),
             steps: vec![uuid::<MigrationStepId>(2)?],
+            step_targets: None,
             schema_changes: vec![transition],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,

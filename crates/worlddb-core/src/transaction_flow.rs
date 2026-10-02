@@ -187,6 +187,33 @@ where
             phase: PhantomData,
         })
     }
+
+    /// Runs validation with read-only access to the transaction's pinned backend snapshot.
+    ///
+    /// The backend remains exclusively borrowed for the entire validation and commit flow, so
+    /// `base_revision` cannot be advanced by another writer between the historical read and
+    /// publication. The callback can compare the full history at that revision with the complete
+    /// staged batch before any record becomes visible.
+    pub fn validate_with_backend<E>(
+        self,
+        validate: impl FnOnce(&B, Revision, &[T]) -> Result<(), E>,
+    ) -> Result<ValidatedTransaction<'backend, B, T>, E> {
+        let Self {
+            backend,
+            base_revision,
+            entries,
+            cancellation,
+            phase: _,
+        } = self;
+        validate(backend, base_revision, &entries)?;
+        Ok(WriteTransaction {
+            backend,
+            base_revision,
+            entries,
+            cancellation,
+            phase: PhantomData,
+        })
+    }
 }
 
 impl<B, T> WriteTransaction<'_, B, T, Validated>
@@ -298,6 +325,7 @@ mod tests {
                 [2; 32],
             ),
             steps: vec![step_id],
+            step_targets: None,
             schema_changes: vec![schema_change],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,

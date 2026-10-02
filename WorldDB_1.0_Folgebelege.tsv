@@ -91,7 +91,7 @@ WDB-PRV-013	M4-04c	DONE	artifact:docs/M4-04c-verification.md;test:provenance_gra
 WDB-PRV-013	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once;test:provenance_graph::tests::mixed_relation_cycle_is_rejected_stably	PASS	2026-10-01T12:19:07+02:00	A valid Provenance edge is checked in the mixed commit; the composed graph validator is invoked before publication and its mixed-relation cycle case rejects.
 WDB-MIG-005	M7-10b	PLANNED				
 WDB-MIG-009	M7-10a	PLANNED				
-WDB-MIG-010	M7-05	PLANNED				Dry Run/Execution parity will be evidenced after both sinks use the shared transformer.
+WDB-MIG-010	M7-05	DONE	artifact:docs/M7-05-verification.md;test:migration_execution::tests::compatible_step_publishes_a_fingerprint_validated_intermediate_schema;test:migration_dry_run::tests::restrictive_and_breaking_dry_runs_use_the_shared_transformer	PASS	2026-10-02T15:58:39+02:00	Kompatible Execution und Dry Run verwenden denselben versionierten Transformer; M7-10a weist den Restrictive-/Breaking-Pfad separat nach.
 WDB-MIG-010	M7-10a	PLANNED				Restrictive and breaking paths must retain the shared transform function.
 WDB-MIG-012	M7-04	PLANNED				Validated administrative review state remains to be integrated.
 WDB-MIG-012	M7-05	PLANNED				Execution must reject plans without the required review authorization.

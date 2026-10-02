@@ -593,6 +593,7 @@ mod mask_time_indexes;
 mod masks;
 mod migration;
 mod migration_dry_run;
+mod migration_execution;
 mod migration_transform;
 mod multi_value_resolution;
 #[cfg(test)]
@@ -833,9 +834,9 @@ pub use masks::{
 pub use migration::{
     MigrationCalendarDirection, MigrationCalendarShift, MigrationCategory, MigrationPlan,
     MigrationPlanError, MigrationPlanFingerprint, MigrationPlanSpec, MigrationRun,
-    MigrationRunState, MigrationStepCommitIdentity, MigrationTargetSchema,
-    MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId, SchemaIdentityTransition,
-    SchemaIdentityTransitionError, SourceSchemaPrecondition,
+    MigrationRunState, MigrationStepCommitIdentity, MigrationStepTargetSchema,
+    MigrationTargetSchema, MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId,
+    SchemaIdentityTransition, SchemaIdentityTransitionError, SourceSchemaPrecondition,
 };
 pub use migration_dry_run::{
     MigrationAdminDecision, MigrationDecisionError, MigrationDryRun, MigrationDryRunError,
@@ -843,6 +844,11 @@ pub use migration_dry_run::{
     MigrationDryRunReport, MigrationDryRunUnresolvedItem, MigrationDryRunUnresolvedReason,
     MigrationDryRunWarning, MigrationDryRunWarningCode, MigrationItemResolution,
     ValidatedMigrationDecisions,
+};
+pub use migration_execution::{
+    MigrationExecutionError, MigrationExecutionFailure, MigrationExecutionResult,
+    MigrationStepCommitReceipt, MigrationStepInput, MigrationStepValidationError,
+    execute_compatible_migration,
 };
 pub use migration_transform::{
     MigrationTransformBatch, MigrationTransformEstimate, MigrationTransformFingerprint,
