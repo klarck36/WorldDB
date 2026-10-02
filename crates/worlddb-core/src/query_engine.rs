@@ -2,11 +2,10 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::mem::size_of;
 
 use crate::archive_projection::ArchiveHistoryReferenceModel;
-use crate::assertion_point_index::{
-    AssertionIndexHit, AssertionPointHistoryIndex, AssertionPointIndexError, AssertionPointQuery,
-};
+use crate::assertion_point_index::{AssertionPointHistoryIndex, AssertionPointIndexError};
 use crate::candidate_scan::{
     AssertionCandidate, AssertionCandidateQuery, AssertionCandidateSecurityContext,
     AssertionHistoryRecord, AssertionPointCandidateFilter, CandidateScanError,
@@ -55,6 +54,7 @@ use crate::reference_query::{
     ExplainStage, ExplainStageError, ExplainStageKind, RawHistoryError, RawHistoryRow,
     ReferenceExplain, ReferenceExplainError, ResolvedView, ResolvedViewError,
 };
+use crate::resource_profile::{MemoryReservation, ResourceClass};
 use crate::schema::{PredicateDefinition, ResolutionPolicy};
 use crate::security::{
     AuthorizationDecision, Capability, FieldSelector, PolicyTarget, SecurityPolicyHistory,
@@ -64,6 +64,8 @@ use crate::single_value_resolution::{
     SingleValueResolutionError, SingleValueSlot, resolve_single_value_replace,
 };
 use crate::values::Value;
+
+const MAX_PAGE_SORT_KEY_BYTES: usize = 64 * 1024;
 
 /// Optional typed Assertion point index plus its durable family metadata.
 #[derive(Clone, Copy)]
@@ -228,7 +230,6 @@ impl ProductiveQueryEngine {
         ensure_active(context)?;
         require_full_scan_budget(scan_budget)?;
         let query = full_scan_owned_authorized_raw_history(history, context, policies, record_ref)?;
-        enforce_result_limit(context, query.value().len())?;
         ensure_active(context)?;
         Ok(QueryEngineOutput {
             query,
@@ -321,6 +322,9 @@ impl ProductiveQueryEngine {
             if request.limit().get() > execution.max_page_size.get() {
                 return Err(QueryEngineError::InvalidPageRequest);
             }
+            if u64::from(request.limit().get()) > context.budget().max_results().get() {
+                return Err(QueryEngineError::BudgetExceeded(BudgetDimension::Results));
+            }
             ensure_active(context)?;
             context
                 .ensure_snapshot_live(execution.now_ms)
@@ -406,7 +410,8 @@ impl ProductiveQueryEngine {
                 CandidateStream::from_items(source.map(|item| item.map_err(QueryItemError::Item)));
             let page_limit = usize::try_from(request.limit().get())
                 .map_err(|_| QueryEngineError::InvalidPageRequest)?;
-            let mut results = Vec::with_capacity(page_limit);
+            let mut results = Vec::new();
+            let mut page_reservations = Vec::<MemoryReservation>::new();
             let mut last_visible_key = (!cursor_state.after_sort_key.is_empty())
                 .then(|| cursor_state.after_sort_key.clone());
             let mut candidates_seen = cursor_state.candidates_seen;
@@ -436,6 +441,7 @@ impl ProductiveQueryEngine {
 
                 let key = sort_key(&item);
                 if key.is_empty()
+                    || key.len() > MAX_PAGE_SORT_KEY_BYTES
                     || last_visible_key
                         .as_ref()
                         .is_some_and(|previous| previous.as_slice() >= key.as_slice())
@@ -474,7 +480,24 @@ impl ProductiveQueryEngine {
                     has_more = true;
                     break;
                 }
+                let reservation_bytes =
+                    size_of::<T>().saturating_add(key.len()).saturating_add(128);
+                let reservation = context
+                    .resource_budget()
+                    .reserve(
+                        ResourceClass::Query,
+                        u64::try_from(reservation_bytes)
+                            .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?,
+                    )
+                    .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+                results
+                    .try_reserve(1)
+                    .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+                page_reservations
+                    .try_reserve(1)
+                    .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
                 results.push((item, key));
+                page_reservations.push(reservation);
             }
             ensure_active(context)?;
 
@@ -483,8 +506,19 @@ impl ProductiveQueryEngine {
                 .checked_add(u64::try_from(results.len()).unwrap_or(u64::MAX))
                 .ok_or(QueryEngineError::BudgetExceeded(BudgetDimension::Results))?;
             let next_after_key = results.last().map(|(_, key)| key.clone());
-            let page_rows = results.into_iter().map(|(row, _)| row).collect::<Vec<_>>();
-            let query = OwnedQueryResult::bind(context, policies, page_rows)?;
+            let mut page_rows = Vec::new();
+            page_rows
+                .try_reserve_exact(results.len())
+                .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+            for (row, _) in results {
+                page_rows.push(row);
+            }
+            let query = OwnedQueryResult::bind_with_memory_reservations(
+                context,
+                policies,
+                page_rows,
+                page_reservations,
+            )?;
 
             let next_cursor = if has_more {
                 let Some(last_key) = next_after_key else {
@@ -742,19 +776,16 @@ where
             let Some(index) = point_index.index else {
                 return Err(QueryEngineError::IndexPayloadUnavailable);
             };
-            match collect_point_index_hits(index, context, slot) {
-                Ok(hits) => (
-                    indexed_authorized_assertion_candidates(
-                        archive,
-                        index,
-                        &hits,
-                        &query,
-                        layers,
-                        AssertionCandidateSecurityContext::new(security.snapshot(), context),
-                        AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
-                    )?,
-                    QueryExecutionPath::Indexed { generation_id },
-                ),
+            match indexed_authorized_assertion_candidates(
+                archive,
+                index,
+                &query,
+                layers,
+                AssertionCandidateSecurityContext::new(security.snapshot(), context),
+                AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
+            ) {
+                Ok(Ok(candidates)) => (candidates, QueryExecutionPath::Indexed { generation_id }),
+                Ok(Err(error)) => return Err(error.into()),
                 Err(_) => {
                     let fallback = plan_index_access(
                         IndexAvailability::Corrupt,
@@ -770,15 +801,16 @@ where
                             return Err(QueryEngineError::IndexPayloadUnavailable);
                         }
                     };
+                    let candidates = full_scan_authorized_point_assertion_candidates(
+                        history,
+                        archive,
+                        &query,
+                        layers,
+                        AssertionCandidateSecurityContext::new(security.snapshot(), context),
+                        AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
+                    )?;
                     (
-                        full_scan_authorized_point_assertion_candidates(
-                            history,
-                            archive,
-                            &query,
-                            layers,
-                            AssertionCandidateSecurityContext::new(security.snapshot(), context),
-                            AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
-                        )?,
+                        candidates,
                         QueryExecutionPath::IndexFallback {
                             reason: fallback_reason,
                         },
@@ -935,31 +967,6 @@ fn point_requirement(context: &QueryContext) -> Result<IndexQueryRequirement, Qu
         IndexFormatVersion::V1_0,
         build_version,
     ))
-}
-
-fn collect_point_index_hits<'a>(
-    index: &'a AssertionPointHistoryIndex,
-    context: &QueryContext,
-    slot: MultiValueSlot,
-) -> Result<Vec<AssertionIndexHit<'a>>, AssertionPointIndexError> {
-    let mut hits = Vec::new();
-    for layer_id in context.layers().resolved().as_slice() {
-        let query_context = ContextKey::new(
-            context.history_space(),
-            *layer_id,
-            context.perspective(),
-            context.epistemic_mode(),
-        )
-        .map_err(|_| AssertionPointIndexError::UnknownHistorySpace)?;
-        let query = AssertionPointQuery::new(
-            query_context,
-            slot.subject(),
-            slot.predicate_id(),
-            context.recorded_as_of().revision(),
-        );
-        hits.extend(index.point(query)?);
-    }
-    Ok(hits)
 }
 
 fn candidate_ids(candidates: &[AssertionCandidate]) -> Vec<AssertionId> {
@@ -1126,6 +1133,7 @@ pub enum QueryEngineError {
     IndexPayloadUnavailable,
     IndexConfigurationUnavailable,
     BudgetExceeded(BudgetDimension),
+    ResourceBudgetExceeded,
     FullScanBudgetExceeded(BudgetDimension),
     Resolution(ResolutionFailure),
     RawHistory,
@@ -1169,6 +1177,9 @@ impl fmt::Display for QueryEngineError {
             Self::BudgetExceeded(_) | Self::FullScanBudgetExceeded(_) => {
                 "query budget does not allow a complete result"
             }
+            Self::ResourceBudgetExceeded => {
+                "query process memory budget does not allow a complete result"
+            }
             Self::Resolution(_) => "query resolution schema does not match the selected slot",
             Self::RawHistory => "authorized raw history could not be read",
             Self::SecurityHistory => "query authorization history could not be resolved",
@@ -1199,9 +1210,27 @@ macro_rules! error_from {
     };
 }
 
-error_from!(RawHistoryError, RawHistory);
+impl From<RawHistoryError> for QueryEngineError {
+    fn from(error: RawHistoryError) -> Self {
+        match error {
+            RawHistoryError::BudgetExceeded(dimension) => Self::BudgetExceeded(dimension),
+            RawHistoryError::History(_)
+            | RawHistoryError::SecurityHistory(_)
+            | RawHistoryError::DuplicateRecordRef { .. }
+            | RawHistoryError::AllocationFailed => Self::RawHistory,
+        }
+    }
+}
 error_from!(SecurityPolicyHistoryError, SecurityHistory);
-error_from!(CandidateScanError, CandidateHistory);
+impl From<CandidateScanError> for QueryEngineError {
+    fn from(error: CandidateScanError) -> Self {
+        match error {
+            CandidateScanError::BudgetExceeded(dimension) => Self::BudgetExceeded(dimension),
+            CandidateScanError::ResourceBudgetExceeded => Self::ResourceBudgetExceeded,
+            _ => Self::CandidateHistory,
+        }
+    }
+}
 error_from!(AssertionPointIndexError, Index);
 error_from!(ContextError, Context);
 error_from!(crate::mask_projection::MaskProjectionError, MaskProjection);
@@ -2280,6 +2309,157 @@ mod tests {
     }
 
     #[test]
+    fn hidden_index_entries_do_not_consume_candidate_budget() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_candidate_budget(&fixture.context, 2)?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let indexed = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.hidden_policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                available_index(&fixture),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+        assert_eq!(
+            indexed.query().value().contributors(),
+            &[fixture.visible_id, fixture.second_visible_id]
+        );
+
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let fallback = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.hidden_policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+        assert_eq!(
+            fallback.query().value().contributors(),
+            indexed.query().value().contributors()
+        );
+
+        let too_small = context_with_candidate_budget(&fixture.context, 1)?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let indexed_error = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.hidden_policies),
+            point_request(
+                &too_small,
+                masks,
+                boundaries,
+                available_index(&fixture),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            indexed_error,
+            Err(QueryEngineError::BudgetExceeded(
+                BudgetDimension::Candidates
+            ))
+        ));
+
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let fallback_error = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.hidden_policies),
+            point_request(
+                &too_small,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            fallback_error,
+            Err(QueryEngineError::BudgetExceeded(
+                BudgetDimension::Candidates
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn process_memory_admission_fails_closed_and_releases_partial_reservations() -> TestResult {
+        let fixture = fixture()?;
+        let profile = crate::ProcessResourceProfile::new(
+            1,
+            1,
+            1,
+            crate::ResourceClassLimits::new(1, 1, 1, 1, 1),
+        )
+        .map_err(std::io::Error::other)?;
+        let memory_budget = profile.memory_budget();
+        let context = context_with_process_memory_budget(&fixture.context, memory_budget.clone())?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let result = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                available_index(&fixture),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            result,
+            Err(QueryEngineError::ResourceBudgetExceeded)
+        ));
+        assert_eq!(
+            memory_budget
+                .reserved_bytes()
+                .map_err(std::io::Error::other)?,
+            0
+        );
+
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let fallback = ProductiveQueryEngine::resolved_point(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            fallback,
+            Err(QueryEngineError::ResourceBudgetExceeded)
+        ));
+        assert_eq!(
+            memory_budget
+                .reserved_bytes()
+                .map_err(std::io::Error::other)?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn incompatible_indexes_fall_back_or_fail_before_returning_partial_results() -> TestResult {
         let fixture = fixture()?;
         let (masks, boundaries) = empty_mask_and_boundary_sources();
@@ -2513,6 +2693,53 @@ mod tests {
         })?)
     }
 
+    fn context_with_candidate_budget(
+        context: &QueryContext,
+        max_candidates: u64,
+    ) -> TestResult<QueryContext> {
+        let work = context.budget().max_work_units().get();
+        let results = context.budget().max_results().get();
+        let limits = QueryBudgetLimits::new(max_candidates, work, results)?;
+        let budget = QueryBudget::new(max_candidates, work, results, limits)?;
+        Ok(QueryContext::new(QueryContextInput {
+            snapshot: context.snapshot(),
+            snapshot_revision: context.snapshot_revision(),
+            recorded_as_of: context.recorded_as_of(),
+            history_space: context.history_space(),
+            layers: context.layers().clone(),
+            world_time: context.world_time(),
+            perspective: context.perspective(),
+            epistemic_mode: context.epistemic_mode(),
+            schema_binding: context.schema_binding(),
+            security: context.security(),
+            budget,
+            cancellation: CancellationToken::new(),
+        })?)
+    }
+
+    fn context_with_process_memory_budget(
+        context: &QueryContext,
+        resource_budget: crate::ProcessMemoryBudget,
+    ) -> TestResult<QueryContext> {
+        Ok(QueryContext::new_with_resource_budget(
+            QueryContextInput {
+                snapshot: context.snapshot(),
+                snapshot_revision: context.snapshot_revision(),
+                recorded_as_of: context.recorded_as_of(),
+                history_space: context.history_space(),
+                layers: context.layers().clone(),
+                world_time: context.world_time(),
+                perspective: context.perspective(),
+                epistemic_mode: context.epistemic_mode(),
+                schema_binding: context.schema_binding(),
+                security: context.security(),
+                budget: context.budget(),
+                cancellation: CancellationToken::new(),
+            },
+            resource_budget,
+        )?)
+    }
+
     #[test]
     fn productive_pages_pull_to_boundary_and_release_the_cursor_on_completion() -> TestResult {
         use std::cell::Cell;
@@ -2647,6 +2874,34 @@ mod tests {
         );
         assert!(matches!(cancelled, Err(QueryEngineError::Cancelled)));
         assert_eq!(cursors.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn raw_history_budget_exhaustion_fails_before_returning_a_partial_result() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_result_budget(&fixture.context, 3)?;
+        let result = ProductiveQueryEngine::raw_history(
+            &fixture.history,
+            &context,
+            &fixture.policies,
+            FullScanBudget::Available,
+            |record| match record {
+                AssertionHistoryRecord::Assertion(assertion) => {
+                    RecordRef::Assertion(assertion.id())
+                }
+                AssertionHistoryRecord::ValidityClosure(closure) => {
+                    RecordRef::AssertionValidityClosure(closure.id())
+                }
+                AssertionHistoryRecord::Retraction(retraction) => {
+                    RecordRef::AssertionRetraction(retraction.id())
+                }
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(QueryEngineError::BudgetExceeded(BudgetDimension::Results))
+        ));
         Ok(())
     }
 

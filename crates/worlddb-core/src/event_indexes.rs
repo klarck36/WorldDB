@@ -9,6 +9,10 @@ use crate::events::{Event, EventMask};
 use crate::ids::{
     EntityId, EventId, EventKindId, EventMaskId, EventRelationId, EventRoleId, TimelineId,
 };
+use crate::resource_profile::{
+    MemoryReservation, ProcessMemoryBudget, estimated_index_memory_bytes, process_memory_budget,
+    reserve_index_memory_with_budget,
+};
 use crate::temporal::{EventTime, TemporalError, TimeInterval};
 
 /// Kind and participant candidate postings for schema-validated Event records.
@@ -18,12 +22,40 @@ pub struct EventSearchIndex {
     by_kind: BTreeMap<EventKindId, BTreeSet<EventId>>,
     by_role: BTreeMap<EventRoleId, BTreeSet<EventId>>,
     by_role_entity: BTreeMap<(EventRoleId, EntityId), BTreeSet<EventId>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl EventSearchIndex {
     /// Builds exact EventKind, participant-role, and role/entity postings.
     pub fn build(events: &[Event]) -> Result<Self, EventIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(events, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        events: &[Event],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, EventIndexError> {
+        let participant_count = events
+            .iter()
+            .try_fold(0_usize, |total, event| {
+                total.checked_add(event.participants().as_slice().len())
+            })
+            .ok_or(EventIndexError::ResourceBudgetExceeded)?;
+        let bytes = estimated_index_memory_bytes(events.len(), 192)
+            .and_then(|base| {
+                estimated_index_memory_bytes(participant_count, 128).and_then(|participants| {
+                    base.checked_add(participants)
+                        .ok_or(crate::ResourceBudgetError::ArithmeticOverflow)
+                })
+            })
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for event in events {
             if !index.event_ids.insert(event.id()) {
                 return Err(EventIndexError::DuplicateEventId(event.id()));
@@ -95,12 +127,28 @@ struct TimePosting {
 pub struct EventTimeIndex {
     event_ids: BTreeSet<EventId>,
     by_timeline_start: BTreeMap<TimelineId, BTreeMap<i128, Vec<TimePosting>>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl EventTimeIndex {
     /// Builds temporal candidate postings from stored EventTime values.
     pub fn build(events: &[Event]) -> Result<Self, EventIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(events, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        events: &[Event],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, EventIndexError> {
+        let bytes = estimated_index_memory_bytes(events.len(), 192)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for event in events {
             if !index.event_ids.insert(event.id()) {
                 return Err(EventIndexError::DuplicateEventId(event.id()));
@@ -227,12 +275,28 @@ fn stored_time_overlaps(
 pub struct EventMaskIndex {
     by_target_event: BTreeMap<EventId, Vec<EventMask>>,
     mask_ids: BTreeSet<EventMaskId>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl EventMaskIndex {
     /// Builds exact target Event postings and rejects repeated Mask identities.
     pub fn build(masks: &[EventMask]) -> Result<Self, EventIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(masks, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        masks: &[EventMask],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, EventIndexError> {
+        let bytes = estimated_index_memory_bytes(masks.len(), 192)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for mask in masks {
             if !index.mask_ids.insert(mask.id()) {
                 return Err(EventIndexError::DuplicateEventMaskId(mask.id()));
@@ -266,6 +330,7 @@ pub struct EventRelationIndex {
     by_event: BTreeMap<EventId, BTreeSet<usize>>,
     by_kind: BTreeMap<EventRelationKind, BTreeSet<usize>>,
     relation_ids: BTreeSet<EventRelationId>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl EventRelationIndex {
@@ -275,7 +340,22 @@ impl EventRelationIndex {
     /// retracted record and a later replacement; as-of lifecycle validation is
     /// performed by `project_active_event_relations` before querying this index.
     pub fn build(relations: &[EventRelation]) -> Result<Self, EventIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(relations, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        relations: &[EventRelation],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, EventIndexError> {
+        let bytes = estimated_index_memory_bytes(relations.len(), 256)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| EventIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for relation in relations {
             if !index.relation_ids.insert(relation.id()) {
                 return Err(EventIndexError::DuplicateEventRelationId(relation.id()));
@@ -347,6 +427,8 @@ impl EventRelationIndex {
 pub enum EventIndexError {
     /// A source Event identity occurs more than once.
     DuplicateEventId(EventId),
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
     /// A source EventMask identity occurs more than once.
     DuplicateEventMaskId(EventMaskId),
     /// A source EventRelation identity occurs more than once.
@@ -361,6 +443,9 @@ impl fmt::Display for EventIndexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateEventId(id) => write!(formatter, "duplicate EventId {id}"),
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("Event index exceeded the process index-memory budget")
+            }
             Self::DuplicateEventMaskId(id) => write!(formatter, "duplicate EventMaskId {id}"),
             Self::DuplicateEventRelationId(id) => {
                 write!(formatter, "duplicate EventRelationId {id}")
@@ -376,3 +461,48 @@ impl fmt::Display for EventIndexError {
 }
 
 impl std::error::Error for EventIndexError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{EventIndexError, EventMaskIndex};
+    use crate::ProcessResourceProfile;
+    use crate::events::EventMask;
+    use crate::ids::{DomainId, EventId, EventMaskId, HistorySpaceId, LayerId, Revision};
+
+    fn id<T: DomainId>(tail: u8) -> Option<T> {
+        let mut bytes = [0_u8; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        bytes[15] = tail;
+        T::try_from_bytes(bytes).ok()
+    }
+
+    #[test]
+    fn event_index_rejects_memory_admission_over_the_configured_limit() {
+        let profile = ProcessResourceProfile::new(
+            1,
+            512,
+            1024,
+            crate::ResourceClassLimits::new(512, 512, 1, 512, 512),
+        );
+        assert!(profile.is_ok());
+        let Ok(profile) = profile else {
+            return;
+        };
+        let budget = profile.memory_budget();
+        let (Some(mask_id), Some(history_space), Some(layer), Some(event)) = (
+            id::<EventMaskId>(1),
+            id::<HistorySpaceId>(2),
+            id::<LayerId>(3),
+            id::<EventId>(4),
+        ) else {
+            return;
+        };
+        let mask = EventMask::new(mask_id, history_space, layer, event, Revision::GENESIS);
+        assert_eq!(
+            EventMaskIndex::build_with_memory_budget(&[mask], &budget).err(),
+            Some(EventIndexError::ResourceBudgetExceeded)
+        );
+        assert_eq!(budget.reserved_bytes(), Ok(0));
+    }
+}

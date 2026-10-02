@@ -120,6 +120,16 @@ impl<T> HistorySpaceReferenceModel<T> {
         history_space_id: HistorySpaceId,
         as_of: Revision,
     ) -> Result<Vec<(Revision, HistorySpaceId, &T)>, HistorySpaceModelError> {
+        Ok(self.iter_at(history_space_id, as_of)?.collect())
+    }
+
+    /// Streams one HistorySpace through `as_of` without first allocating all visible rows.
+    pub fn iter_at(
+        &self,
+        history_space_id: HistorySpaceId,
+        as_of: Revision,
+    ) -> Result<impl Iterator<Item = (Revision, HistorySpaceId, &T)> + '_, HistorySpaceModelError>
+    {
         let definition = self
             .catalog
             .definition(history_space_id)
@@ -131,16 +141,12 @@ impl<T> HistorySpaceReferenceModel<T> {
             });
         }
 
-        let mut visible = Vec::new();
-        for (revision, entry) in self.history.read_at(as_of)? {
-            if self
-                .visible_cutoff(history_space_id, entry.history_space_id, as_of)
-                .is_some_and(|cutoff| revision <= cutoff)
-            {
-                visible.push((revision, entry.history_space_id, &entry.value));
-            }
-        }
-        Ok(visible)
+        let history = self.history.read_at(as_of)?;
+        Ok(history.filter_map(move |(revision, entry)| {
+            self.visible_cutoff(history_space_id, entry.history_space_id, as_of)
+                .filter(|cutoff| revision <= *cutoff)
+                .map(|_| (revision, entry.history_space_id, &entry.value))
+        }))
     }
 
     fn visible_cutoff(
@@ -423,6 +429,12 @@ mod tests {
                 (child_three, child, &30),
                 (grandchild_six, grandchild, &60),
             ]
+        );
+        assert_eq!(
+            model
+                .iter_at(grandchild, grandchild_six)?
+                .collect::<Vec<_>>(),
+            model.read_at(grandchild, grandchild_six)?
         );
         assert_eq!(model.latest_published(), grandchild_six);
         assert!(child_four < root_five && root_five < grandchild_six);

@@ -5,6 +5,10 @@ use std::fmt;
 
 use crate::ids::{OperationId, Revision, SchemaRevision};
 use crate::record_refs::{LifecycleTargetRef, RecordRef, SchemaRecordRef};
+use crate::resource_profile::{
+    MemoryReservation, ProcessMemoryBudget, estimated_index_memory_bytes, process_memory_budget,
+    reserve_index_memory_with_budget,
+};
 use crate::schema_history::SchemaDefinition;
 use crate::wire_records::Record;
 
@@ -51,18 +55,35 @@ impl RecordIdIndexEntry {
 pub struct RecordIdIndex {
     entries: Vec<RecordIdIndexEntry>,
     by_id: BTreeMap<RecordRef, usize>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl RecordIdIndex {
     /// Builds the index and rejects duplicate typed record identities.
     pub fn build(entries: Vec<RecordIdIndexEntry>) -> Result<Self, LookupIndexError> {
+        Self::build_with_memory_budget(entries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        entries: Vec<RecordIdIndexEntry>,
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let bytes = estimated_index_memory_bytes(entries.len(), 192)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         let mut by_id = BTreeMap::new();
         for (position, entry) in entries.iter().enumerate() {
             if by_id.insert(entry.record, position).is_some() {
                 return Err(LookupIndexError::DuplicateRecordId(entry.record));
             }
         }
-        Ok(Self { entries, by_id })
+        Ok(Self {
+            entries,
+            by_id,
+            _memory_reservation: Some(reservation),
+        })
     }
 
     /// Resolves an exact typed record identity.
@@ -142,18 +163,35 @@ impl OperationIdIndexEntry {
 pub struct OperationIdIndex {
     entries: Vec<OperationIdIndexEntry>,
     by_id: BTreeMap<OperationId, usize>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl OperationIdIndex {
     /// Builds the index and rejects duplicate operation IDs.
     pub fn build(entries: Vec<OperationIdIndexEntry>) -> Result<Self, LookupIndexError> {
+        Self::build_with_memory_budget(entries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        entries: Vec<OperationIdIndexEntry>,
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let bytes = estimated_index_memory_bytes(entries.len(), 192)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         let mut by_id = BTreeMap::new();
         for (position, entry) in entries.iter().enumerate() {
             if by_id.insert(entry.operation_id, position).is_some() {
                 return Err(LookupIndexError::DuplicateOperationId(entry.operation_id));
             }
         }
-        Ok(Self { entries, by_id })
+        Ok(Self {
+            entries,
+            by_id,
+            _memory_reservation: Some(reservation),
+        })
     }
 
     /// Resolves the exact durable state for an operation ID.
@@ -209,11 +247,31 @@ pub struct SchemaIdRevisionIndex {
     entries: Vec<SchemaIdRevisionIndexEntry>,
     by_revision: BTreeMap<(SchemaRecordRef, SchemaRevision), usize>,
     by_id: BTreeMap<SchemaRecordRef, Vec<usize>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl SchemaIdRevisionIndex {
     /// Builds the indexes and rejects duplicate ID/revision pairs.
     pub fn build(entries: Vec<SchemaIdRevisionIndexEntry>) -> Result<Self, LookupIndexError> {
+        Self::build_with_memory_budget(entries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        entries: Vec<SchemaIdRevisionIndexEntry>,
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let bytes = estimated_index_memory_bytes(entries.len(), 384)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        Self::build_with_reservation(entries, reservation)
+    }
+
+    fn build_with_reservation(
+        entries: Vec<SchemaIdRevisionIndexEntry>,
+        reservation: MemoryReservation,
+    ) -> Result<Self, LookupIndexError> {
         let mut by_revision = BTreeMap::new();
         let mut by_id = BTreeMap::<SchemaRecordRef, Vec<usize>>::new();
         for (position, entry) in entries.iter().enumerate() {
@@ -235,6 +293,7 @@ impl SchemaIdRevisionIndex {
             entries,
             by_revision,
             by_id,
+            _memory_reservation: Some(reservation),
         })
     }
 
@@ -243,7 +302,37 @@ impl SchemaIdRevisionIndex {
     /// Layer snapshots are materialized state, not additional schema identities. Event roles
     /// and attributes inherit the revision of their enclosing EventKind definition.
     pub fn from_definitions(definitions: &[SchemaDefinition]) -> Result<Self, LookupIndexError> {
+        Self::from_definitions_with_memory_budget(definitions, process_memory_budget())
+    }
+
+    /// Extracts and indexes schema identities under an explicit memory ledger.
+    pub fn from_definitions_with_memory_budget(
+        definitions: &[SchemaDefinition],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let entry_count = definitions
+            .iter()
+            .try_fold(0_usize, |count, definition| {
+                let added = match definition {
+                    SchemaDefinition::Layer(_)
+                    | SchemaDefinition::EntityType(_)
+                    | SchemaDefinition::Predicate(_) => 1,
+                    SchemaDefinition::LayerSnapshot(_) => 0,
+                    SchemaDefinition::EventKind(value) => 1_usize
+                        .checked_add(value.roles().len())?
+                        .checked_add(value.attributes().len())?,
+                };
+                count.checked_add(added)
+            })
+            .ok_or(LookupIndexError::ResourceBudgetExceeded)?;
+        let bytes = estimated_index_memory_bytes(entry_count, 384)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(entry_count)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         for (source_position, definition) in definitions.iter().enumerate() {
             let location = checked_location(source_position)?;
             match definition {
@@ -292,7 +381,7 @@ impl SchemaIdRevisionIndex {
                 }
             }
         }
-        Self::build(entries)
+        Self::build_with_reservation(entries, reservation)
     }
 
     /// Resolves one exact schema identity and revision.
@@ -382,11 +471,31 @@ pub struct LifecycleIndex {
     entries: Vec<LifecycleIndexEntry>,
     by_target: BTreeMap<LifecycleTargetRef, Vec<usize>>,
     by_record: BTreeMap<RecordRef, usize>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl LifecycleIndex {
     /// Builds target histories and rejects duplicate lifecycle identities.
     pub fn build(entries: Vec<LifecycleIndexEntry>) -> Result<Self, LookupIndexError> {
+        Self::build_with_memory_budget(entries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        entries: Vec<LifecycleIndexEntry>,
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let bytes = estimated_index_memory_bytes(entries.len(), 384)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        Self::build_with_reservation(entries, reservation)
+    }
+
+    fn build_with_reservation(
+        entries: Vec<LifecycleIndexEntry>,
+        reservation: MemoryReservation,
+    ) -> Result<Self, LookupIndexError> {
         let mut by_target = BTreeMap::<LifecycleTargetRef, Vec<usize>>::new();
         let mut by_record = BTreeMap::new();
         for (position, entry) in entries.iter().enumerate() {
@@ -408,103 +517,37 @@ impl LifecycleIndex {
             entries,
             by_target,
             by_record,
+            _memory_reservation: Some(reservation),
         })
     }
 
     /// Extracts all indexed domain lifecycle records from a decoded record stream.
     pub fn from_records(records: &[Record]) -> Result<Self, LookupIndexError> {
+        Self::from_records_with_memory_budget(records, process_memory_budget())
+    }
+
+    /// Extracts and indexes lifecycle records under an explicit memory ledger.
+    pub fn from_records_with_memory_budget(
+        records: &[Record],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, LookupIndexError> {
+        let entry_count = records
+            .iter()
+            .filter(|record| Self::lifecycle_record_target(record).is_some())
+            .count();
+        let bytes = estimated_index_memory_bytes(entry_count, 384)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(entry_count)
+            .map_err(|_| LookupIndexError::ResourceBudgetExceeded)?;
         for (source_position, record) in records.iter().enumerate() {
             let location = checked_location(source_position)?;
-            let row = match record {
-                Record::AssertionValidityClosure(value) => Some((
-                    LifecycleTargetRef::Assertion(value.assertion_id()),
-                    RecordRef::AssertionValidityClosure(value.id()),
-                    value.created_revision(),
-                )),
-                Record::AssertionRetraction(value) => Some((
-                    LifecycleTargetRef::Assertion(value.assertion_id()),
-                    RecordRef::AssertionRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::MaskValidityClosure(value) => Some((
-                    LifecycleTargetRef::Mask(value.mask_id()),
-                    RecordRef::MaskValidityClosure(value.id()),
-                    value.created_revision(),
-                )),
-                Record::MaskRetraction(value) => Some((
-                    LifecycleTargetRef::Mask(value.mask_id()),
-                    RecordRef::MaskRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::ReplacementBoundaryValidityClosure(value) => Some((
-                    LifecycleTargetRef::ReplacementBoundary(value.replacement_boundary_id()),
-                    RecordRef::ReplacementBoundaryValidityClosure(value.id()),
-                    value.created_revision(),
-                )),
-                Record::ReplacementBoundaryRetraction(value) => Some((
-                    LifecycleTargetRef::ReplacementBoundary(value.replacement_boundary_id()),
-                    RecordRef::ReplacementBoundaryRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::EventSpanClosure(value) => Some((
-                    LifecycleTargetRef::Event(value.event_id()),
-                    RecordRef::EventSpanClosure(value.id()),
-                    value.created_revision(),
-                )),
-                Record::EventRetraction(value) => Some((
-                    LifecycleTargetRef::Event(value.event_id()),
-                    RecordRef::EventRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::EventMaskRetraction(value) => Some((
-                    LifecycleTargetRef::EventMask(value.event_mask_id()),
-                    RecordRef::EventMaskRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::EventRelationRetraction(value) => Some((
-                    LifecycleTargetRef::EventRelation(value.event_relation_id()),
-                    RecordRef::EventRelationRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::EvidenceRetraction(value) => Some((
-                    LifecycleTargetRef::Evidence(value.evidence_id()),
-                    RecordRef::EvidenceRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                Record::ProvenanceRetraction(value) => Some((
-                    LifecycleTargetRef::Provenance(value.provenance_id()),
-                    RecordRef::ProvenanceRetraction(value.id()),
-                    value.created_revision(),
-                )),
-                // These closed record families do not use LifecycleTargetRef. Catalog retirement
-                // and schema lifecycle remain in their separate typed histories.
-                Record::HistorySpaceDefinition(_)
-                | Record::Entity(_)
-                | Record::EntityRetirement(_)
-                | Record::PerspectiveDefinitionRevision(_)
-                | Record::PerspectiveRetirement(_)
-                | Record::LayerDefinition(_)
-                | Record::LayerSchemaSnapshot(_)
-                | Record::EntityTypeDefinition(_)
-                | Record::PredicateDefinition(_)
-                | Record::EventKindDefinition(_)
-                | Record::MigrationPlan(_)
-                | Record::MigrationRun(_)
-                | Record::MigrationStepCommitIdentity(_)
-                | Record::Assertion(_)
-                | Record::Mask(_)
-                | Record::ReplacementBoundary(_)
-                | Record::ArchiveTransition(_)
-                | Record::Event(_)
-                | Record::EventMask(_)
-                | Record::EventRelation(_)
-                | Record::Source(_)
-                | Record::Evidence(_)
-                | Record::Provenance(_)
-                | Record::TransferLineage(_) => None,
-            };
-            if let Some((target, lifecycle_record, revision)) = row {
+            if let Some((target, lifecycle_record, revision)) =
+                Self::lifecycle_record_target(record)
+            {
                 entries.push(LifecycleIndexEntry::new(
                     target,
                     lifecycle_record,
@@ -513,7 +556,101 @@ impl LifecycleIndex {
                 )?);
             }
         }
-        Self::build(entries)
+        Self::build_with_reservation(entries, reservation)
+    }
+
+    /// Returns the typed lifecycle edge represented by one domain record.
+    fn lifecycle_record_target(
+        record: &Record,
+    ) -> Option<(LifecycleTargetRef, RecordRef, Revision)> {
+        match record {
+            Record::AssertionValidityClosure(value) => Some((
+                LifecycleTargetRef::Assertion(value.assertion_id()),
+                RecordRef::AssertionValidityClosure(value.id()),
+                value.created_revision(),
+            )),
+            Record::AssertionRetraction(value) => Some((
+                LifecycleTargetRef::Assertion(value.assertion_id()),
+                RecordRef::AssertionRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::MaskValidityClosure(value) => Some((
+                LifecycleTargetRef::Mask(value.mask_id()),
+                RecordRef::MaskValidityClosure(value.id()),
+                value.created_revision(),
+            )),
+            Record::MaskRetraction(value) => Some((
+                LifecycleTargetRef::Mask(value.mask_id()),
+                RecordRef::MaskRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::ReplacementBoundaryValidityClosure(value) => Some((
+                LifecycleTargetRef::ReplacementBoundary(value.replacement_boundary_id()),
+                RecordRef::ReplacementBoundaryValidityClosure(value.id()),
+                value.created_revision(),
+            )),
+            Record::ReplacementBoundaryRetraction(value) => Some((
+                LifecycleTargetRef::ReplacementBoundary(value.replacement_boundary_id()),
+                RecordRef::ReplacementBoundaryRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::EventSpanClosure(value) => Some((
+                LifecycleTargetRef::Event(value.event_id()),
+                RecordRef::EventSpanClosure(value.id()),
+                value.created_revision(),
+            )),
+            Record::EventRetraction(value) => Some((
+                LifecycleTargetRef::Event(value.event_id()),
+                RecordRef::EventRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::EventMaskRetraction(value) => Some((
+                LifecycleTargetRef::EventMask(value.event_mask_id()),
+                RecordRef::EventMaskRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::EventRelationRetraction(value) => Some((
+                LifecycleTargetRef::EventRelation(value.event_relation_id()),
+                RecordRef::EventRelationRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::EvidenceRetraction(value) => Some((
+                LifecycleTargetRef::Evidence(value.evidence_id()),
+                RecordRef::EvidenceRetraction(value.id()),
+                value.created_revision(),
+            )),
+            Record::ProvenanceRetraction(value) => Some((
+                LifecycleTargetRef::Provenance(value.provenance_id()),
+                RecordRef::ProvenanceRetraction(value.id()),
+                value.created_revision(),
+            )),
+            // These closed record families do not use LifecycleTargetRef. Catalog retirement
+            // and schema lifecycle remain in their separate typed histories.
+            Record::HistorySpaceDefinition(_)
+            | Record::Entity(_)
+            | Record::EntityRetirement(_)
+            | Record::PerspectiveDefinitionRevision(_)
+            | Record::PerspectiveRetirement(_)
+            | Record::LayerDefinition(_)
+            | Record::LayerSchemaSnapshot(_)
+            | Record::EntityTypeDefinition(_)
+            | Record::PredicateDefinition(_)
+            | Record::EventKindDefinition(_)
+            | Record::MigrationPlan(_)
+            | Record::MigrationRun(_)
+            | Record::MigrationStepCommitIdentity(_)
+            | Record::Assertion(_)
+            | Record::Mask(_)
+            | Record::ReplacementBoundary(_)
+            | Record::ArchiveTransition(_)
+            | Record::Event(_)
+            | Record::EventMask(_)
+            | Record::EventRelation(_)
+            | Record::Source(_)
+            | Record::Evidence(_)
+            | Record::Provenance(_)
+            | Record::TransferLineage(_) => None,
+        }
     }
 
     /// Returns lifecycle events for a target through the selected revision.
@@ -583,6 +720,8 @@ fn lifecycle_target_matches(record: RecordRef, target: LifecycleTargetRef) -> bo
 /// Invalid duplicate index keys or a lifecycle edge that crosses record families.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LookupIndexError {
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
     /// One typed domain RecordRef appears more than once.
     DuplicateRecordId(RecordRef),
     /// One durable OperationId appears more than once.
@@ -606,6 +745,9 @@ pub enum LookupIndexError {
 impl fmt::Display for LookupIndexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("lookup index exceeded the process index-memory budget")
+            }
             Self::DuplicateRecordId(record) => write!(formatter, "duplicate record ID {record:?}"),
             Self::DuplicateOperationId(operation) => {
                 write!(formatter, "duplicate operation ID {operation}")
@@ -648,6 +790,7 @@ mod tests {
         EventKindId, EventRoleId, LayerId, OperationId, PredicateId, Revision, SchemaRevision,
     };
     use crate::record_refs::{LifecycleTargetRef, RecordRef, SchemaRecordRef};
+    use crate::resource_profile::{ProcessResourceProfile, ResourceClass};
     use crate::schema::{
         ConstraintSet, EntityTypeConstraint, EntityTypeDefinition, EventAttributeDefinition,
         EventKindDefinition, EventRoleDefinition, EventTimeConstraint, EventTimeForm, Lifecycle,
@@ -662,6 +805,7 @@ mod tests {
         Id(crate::ids::IdValidationError),
         Revision(crate::ids::RevisionError),
         Index(LookupIndexError),
+        Resource(crate::ResourceBudgetError),
         Symbol(crate::SymbolError),
         Schema(SchemaDefinitionError),
     }
@@ -684,6 +828,12 @@ mod tests {
         }
     }
 
+    impl From<crate::ResourceBudgetError> for TestError {
+        fn from(error: crate::ResourceBudgetError) -> Self {
+            Self::Resource(error)
+        }
+    }
+
     impl From<crate::SymbolError> for TestError {
         fn from(error: crate::SymbolError) -> Self {
             Self::Symbol(error)
@@ -702,6 +852,7 @@ mod tests {
                 Self::Id(error) => std::fmt::Display::fmt(error, formatter),
                 Self::Revision(error) => std::fmt::Display::fmt(error, formatter),
                 Self::Index(error) => std::fmt::Display::fmt(error, formatter),
+                Self::Resource(error) => std::fmt::Display::fmt(error, formatter),
                 Self::Symbol(error) => std::fmt::Display::fmt(error, formatter),
                 Self::Schema(error) => std::fmt::Display::fmt(error, formatter),
             }
@@ -726,6 +877,49 @@ mod tests {
 
     fn schema_revision(value: u64) -> Result<SchemaRevision, crate::ids::RevisionError> {
         Ok(SchemaRevision::from_published_revision(revision(value)?))
+    }
+
+    #[test]
+    fn lookup_indexes_admit_and_release_their_shared_memory_reservation() -> TestResult {
+        let profile = ProcessResourceProfile::new(
+            1,
+            512,
+            1024,
+            crate::ResourceClassLimits::new(512, 512, 512, 512, 512),
+        )?;
+        let budget = profile.memory_budget();
+        let entry = RecordIdIndexEntry::new(
+            RecordRef::Assertion(uuid::<AssertionId>(90)?),
+            revision(1)?,
+            0,
+        );
+        let index = RecordIdIndex::build_with_memory_budget(vec![entry], &budget)?;
+        assert_eq!(budget.reserved_bytes(), Ok(192));
+        assert_eq!(
+            budget.profile().class_limit_bytes(ResourceClass::Index),
+            512
+        );
+        drop(index);
+        assert_eq!(budget.reserved_bytes(), Ok(0));
+
+        let small_profile = ProcessResourceProfile::new(
+            1,
+            512,
+            1024,
+            crate::ResourceClassLimits::new(512, 512, 100, 512, 512),
+        )?;
+        let small_budget = small_profile.memory_budget();
+        let entry = RecordIdIndexEntry::new(
+            RecordRef::Assertion(uuid::<AssertionId>(91)?),
+            revision(1)?,
+            0,
+        );
+        assert_eq!(
+            RecordIdIndex::build_with_memory_budget(vec![entry], &small_budget).err(),
+            Some(LookupIndexError::ResourceBudgetExceeded)
+        );
+        assert_eq!(small_budget.reserved_bytes(), Ok(0));
+        Ok(())
     }
 
     #[test]

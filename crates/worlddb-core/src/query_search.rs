@@ -2,15 +2,22 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::mem::size_of;
 
 use crate::ids::{HistorySpaceId, LayerId};
 use crate::query_context::QueryContext;
 use crate::query_ports::OwnedQueryResult;
 use crate::record_refs::RecordRef;
+use crate::resource_profile::{MemoryReservation, ResourceClass};
 use crate::security::{
     AuthorizationDecision, Capability, FieldSelector, PolicyTarget, SecurityPolicyHistory,
     SecurityPolicyHistoryError,
 };
+
+const MAX_SEARCH_FIELDS: usize = 256;
+const MAX_SEARCH_TERMS: usize = 4096;
+const MAX_SEARCH_TOKEN_BYTES: usize = 4096;
+const MAX_SEARCH_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Token matching semantics for deterministic search.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -29,7 +36,10 @@ impl SearchToken {
     /// Creates a token with the fixed 1.0 lexical rules.
     pub fn new(value: impl Into<String>) -> Result<Self, QuerySearchError> {
         let value = value.into();
-        if value.is_empty() || value.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        if value.is_empty()
+            || value.len() > MAX_SEARCH_TOKEN_BYTES
+            || value.bytes().any(|byte| byte.is_ascii_whitespace())
+        {
             return Err(QuerySearchError::InvalidToken);
         }
         Ok(Self(value))
@@ -59,6 +69,9 @@ impl SearchSpec {
     ) -> Result<Self, QuerySearchError> {
         if fields.is_empty() || terms.is_empty() {
             return Err(QuerySearchError::EmptySpec);
+        }
+        if fields.len() > MAX_SEARCH_FIELDS || terms.len() > MAX_SEARCH_TERMS {
+            return Err(QuerySearchError::RequestTooLarge);
         }
         fields.sort_unstable();
         if fields.windows(2).any(|pair| {
@@ -131,6 +144,13 @@ impl SearchDocument {
         layer: LayerId,
         text_fields: Vec<SearchTextField>,
     ) -> Result<Self, QuerySearchError> {
+        if text_fields.len() > MAX_SEARCH_FIELDS
+            || text_fields
+                .iter()
+                .any(|field| field.text.len() > MAX_SEARCH_TEXT_BYTES)
+        {
+            return Err(QuerySearchError::RequestTooLarge);
+        }
         let mut selectors = text_fields
             .iter()
             .map(SearchTextField::selector)
@@ -186,10 +206,6 @@ pub fn full_scan_token_search(
     context: &QueryContext,
     policies: &SecurityPolicyHistory,
 ) -> Result<OwnedQueryResult<Vec<SearchHit>>, QuerySearchError> {
-    let text_fields = schema_text_fields.iter().copied().collect::<BTreeSet<_>>();
-    if spec.fields.iter().any(|field| !text_fields.contains(field)) {
-        return Err(QuerySearchError::FieldNotTextValued);
-    }
     let security = policies.resolve(context)?;
     let policy = security.snapshot();
     let principal = context.security().principal_id();
@@ -198,16 +214,20 @@ pub fn full_scan_token_search(
     {
         return Err(QuerySearchError::Unauthorized);
     }
+    let text_fields = schema_text_fields.iter().copied().collect::<BTreeSet<_>>();
+    if spec.fields.iter().any(|field| !text_fields.contains(field)) {
+        return Err(QuerySearchError::FieldNotTextValued);
+    }
 
-    let mut authorized = documents.iter().collect::<Vec<_>>();
-    authorized.sort_by_key(|document| document.result_key);
+    let mut authorized = Vec::<(&SearchDocument, MemoryReservation)>::new();
     let mut hits = Vec::new();
     let mut seen = BTreeSet::new();
     let mut candidates = 0_u64;
     let mut work = 0_u64;
+    let mut result_reservations = Vec::new();
     let budget = context.budget();
 
-    for document in authorized {
+    for document in documents {
         check_cancelled(context)?;
         let Some(record_capability) = record_read_capability(document.result_key) else {
             continue;
@@ -252,6 +272,27 @@ pub fn full_scan_token_search(
         if candidates > budget.max_candidates().get() {
             return Err(QuerySearchError::BudgetExceeded);
         }
+        let reservation_bytes = u64::try_from(
+            size_of::<(&SearchDocument, MemoryReservation)>()
+                .saturating_add(size_of::<SearchHit>())
+                .saturating_add(spec.fields.len().saturating_mul(size_of::<FieldSelector>()))
+                .saturating_add(96),
+        )
+        .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
+        let reservation = context
+            .resource_budget()
+            .reserve(ResourceClass::Query, reservation_bytes)
+            .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
+        authorized
+            .try_reserve(1)
+            .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
+        authorized.push((document, reservation));
+    }
+
+    authorized.sort_by_key(|(document, _)| document.result_key);
+
+    for (document, reservation) in authorized {
+        check_cancelled(context)?;
         if !seen.insert(document.result_key) {
             return Err(QuerySearchError::DuplicateResultKey);
         }
@@ -286,6 +327,9 @@ pub fn full_scan_token_search(
                     if token.as_bytes() == term.as_str().as_bytes() {
                         matched_terms.insert(index);
                         if !matched_fields.contains(&field.selector) {
+                            matched_fields
+                                .try_reserve(1)
+                                .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
                             matched_fields.push(field.selector);
                         }
                     }
@@ -301,14 +345,21 @@ pub fn full_scan_token_search(
                 return Err(QuerySearchError::BudgetExceeded);
             }
             matched_fields.sort_unstable();
+            hits.try_reserve(1)
+                .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
+            result_reservations
+                .try_reserve(1)
+                .map_err(|_| QuerySearchError::ResourceBudgetExceeded)?;
             hits.push(SearchHit {
                 result_key: document.result_key,
                 matched_fields,
             });
+            result_reservations.push(reservation);
         }
     }
 
-    OwnedQueryResult::bind(context, policies, hits).map_err(QuerySearchError::Security)
+    OwnedQueryResult::bind_with_memory_reservations(context, policies, hits, result_reservations)
+        .map_err(QuerySearchError::Security)
 }
 
 fn check_cancelled(context: &QueryContext) -> Result<(), QuerySearchError> {
@@ -397,6 +448,9 @@ pub enum QuerySearchError {
     DuplicateResultKey,
     /// Candidate, work, or result budget was exhausted; no partial result is returned.
     BudgetExceeded,
+    /// Request or process memory exceeded its finite limit; no partial result is returned.
+    RequestTooLarge,
+    ResourceBudgetExceeded,
     /// The host cancelled the query; no partial result is returned.
     Cancelled,
     /// Query policy selection could not be resolved.
@@ -413,6 +467,8 @@ impl fmt::Display for QuerySearchError {
             Self::Unauthorized => "search is not authorized",
             Self::DuplicateResultKey => "search contains duplicate visible result keys",
             Self::BudgetExceeded => "search budget exceeded",
+            Self::RequestTooLarge => "search request exceeds its finite input limit",
+            Self::ResourceBudgetExceeded => "search process memory budget exceeded",
             Self::Cancelled => "search was cancelled",
             Self::Security(_) => "search security context is invalid",
         })
@@ -652,6 +708,30 @@ pub(crate) mod tests {
             layer,
             selector,
         }
+    }
+
+    pub(crate) fn context_with_resource_budget(
+        context: &QueryContext,
+        resource_budget: crate::ProcessMemoryBudget,
+    ) -> QueryContext {
+        QueryContext::new_with_resource_budget(
+            QueryContextInput {
+                snapshot: context.snapshot(),
+                snapshot_revision: context.snapshot_revision(),
+                recorded_as_of: context.recorded_as_of(),
+                history_space: context.history_space(),
+                layers: context.layers().clone(),
+                world_time: context.world_time(),
+                perspective: context.perspective(),
+                epistemic_mode: context.epistemic_mode(),
+                schema_binding: context.schema_binding(),
+                security: context.security(),
+                budget: context.budget(),
+                cancellation: context.cancellation().clone(),
+            },
+            resource_budget,
+        )
+        .unwrap_or_else(|_| unreachable!("test query resource budget must be valid"))
     }
 
     fn rule(
@@ -992,11 +1072,92 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn process_memory_budget_rejects_search_without_leaking_a_partial_reservation()
+    -> Result<(), QuerySearchError> {
+        let fixture = fixture(None, 10);
+        let memory_budget = crate::ProcessResourceProfile::new(
+            1,
+            1,
+            1,
+            crate::ResourceClassLimits::new(1, 1, 1, 1, 1),
+        )
+        .unwrap_or_else(|_| unreachable!("test memory profile is valid"))
+        .memory_budget();
+        let context = context_with_resource_budget(&fixture.context, memory_budget.clone());
+        let documents = [document(&fixture, 8, "needle")?];
+        let request = SearchSpec::new(
+            vec![fixture.selector],
+            vec![SearchToken::new("needle")?],
+            SearchMatch::AnyTerm,
+        )?;
+        assert!(matches!(
+            full_scan_token_search(
+                &documents,
+                &request,
+                &[fixture.selector],
+                &context,
+                &fixture.policies,
+            ),
+            Err(QuerySearchError::ResourceBudgetExceeded)
+        ));
+        assert!(
+            memory_budget
+                .reserved_bytes()
+                .is_ok_and(|reserved| reserved == 0)
+        );
+
+        let result_budget = crate::ProcessResourceProfile::new(
+            1,
+            1024 * 1024,
+            2 * 1024 * 1024,
+            crate::ResourceClassLimits::new(
+                1024 * 1024,
+                1024 * 1024,
+                1024 * 1024,
+                1024 * 1024,
+                1024 * 1024,
+            ),
+        )
+        .unwrap_or_else(|_| unreachable!("test memory profile is valid"))
+        .memory_budget();
+        let result_context = context_with_resource_budget(&fixture.context, result_budget.clone());
+        let result = full_scan_token_search(
+            &documents,
+            &request,
+            &[fixture.selector],
+            &result_context,
+            &fixture.policies,
+        )?;
+        assert_eq!(result.value().len(), 1);
+        assert!(
+            result_budget
+                .reserved_bytes()
+                .is_ok_and(|reserved| reserved > 0)
+        );
+        drop(result);
+        assert!(
+            result_budget
+                .reserved_bytes()
+                .is_ok_and(|reserved| reserved == 0)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn search_rejects_invalid_terms_and_nontext_schema_fields() -> Result<(), QuerySearchError> {
         let fixture = fixture(None, 10);
         assert_eq!(
             SearchToken::new("two words"),
             Err(QuerySearchError::InvalidToken)
+        );
+        let oversized_terms = vec![SearchToken::new("needle")?; super::MAX_SEARCH_TERMS + 1];
+        assert_eq!(
+            SearchSpec::new(
+                vec![fixture.selector],
+                oversized_terms,
+                SearchMatch::AnyTerm,
+            ),
+            Err(QuerySearchError::RequestTooLarge)
         );
         let request = SearchSpec::new(
             vec![fixture.selector],

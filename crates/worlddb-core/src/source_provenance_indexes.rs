@@ -7,6 +7,7 @@ use crate::catalog::HistorySpaceCatalog;
 use crate::ids::{EvidenceId, ProvenanceId, SourceId};
 use crate::provenance_graph::{ProvenanceGraphError, project_authorized_provenance_edges};
 use crate::query_context::QueryContext;
+use crate::resource_profile::{MemoryReservation, ResourceClass};
 use crate::security::{PolicyTarget, SecurityPolicySnapshot};
 use crate::source_evidence_projection::{
     EvidenceHistoryEntry, SourceEvidenceError, SourceEvidenceHistory, SourceEvidenceProjection,
@@ -41,12 +42,29 @@ pub struct EvidenceNeighborhoodIndex<'a> {
     by_source: BTreeMap<SourceId, BTreeSet<EvidenceId>>,
     by_target: HashMap<EvidenceTargetRef, BTreeSet<EvidenceId>>,
     by_relation: HashMap<EvidenceRelation, BTreeSet<EvidenceId>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl<'a> EvidenceNeighborhoodIndex<'a> {
     fn from_authorized_projection(
         projection: SourceEvidenceProjection<'a>,
+        context: &QueryContext,
     ) -> Result<Self, SourceProvenanceIndexError> {
+        let source_bytes = u64::try_from(projection.sources().len())
+            .ok()
+            .and_then(|count| count.checked_mul(192))
+            .ok_or(SourceProvenanceIndexError::ResourceBudgetExceeded)?;
+        let evidence_bytes = u64::try_from(projection.evidence().len())
+            .ok()
+            .and_then(|count| count.checked_mul(320))
+            .ok_or(SourceProvenanceIndexError::ResourceBudgetExceeded)?;
+        let reservation_bytes = source_bytes
+            .checked_add(evidence_bytes)
+            .ok_or(SourceProvenanceIndexError::ResourceBudgetExceeded)?;
+        let reservation = context
+            .resource_budget()
+            .reserve(ResourceClass::Query, reservation_bytes)
+            .map_err(|_| SourceProvenanceIndexError::ResourceBudgetExceeded)?;
         let mut source_ids = BTreeSet::new();
         for source in projection.sources() {
             if !source_ids.insert(source.id()) {
@@ -63,6 +81,7 @@ impl<'a> EvidenceNeighborhoodIndex<'a> {
             by_source: BTreeMap::new(),
             by_target: HashMap::new(),
             by_relation: HashMap::new(),
+            _memory_reservation: Some(reservation),
         };
         for (position, entry) in index.projection.evidence().iter().enumerate() {
             let evidence = entry.evidence();
@@ -173,7 +192,7 @@ pub fn full_scan_authorized_evidence_neighborhood_index<'a>(
 ) -> Result<EvidenceNeighborhoodIndex<'a>, SourceProvenanceIndexError> {
     let projection =
         full_scan_authorized_source_evidence(history, history_spaces, query, policy, context)?;
-    EvidenceNeighborhoodIndex::from_authorized_projection(projection)
+    EvidenceNeighborhoodIndex::from_authorized_projection(projection, context)
 }
 
 /// Direct Provenance adjacency index over active edges authorized for one query.
@@ -186,11 +205,26 @@ pub struct ProvenanceAdjacencyIndex {
     by_from: BTreeMap<ProvenanceEndpointRef, BTreeSet<ProvenanceId>>,
     by_to: BTreeMap<ProvenanceEndpointRef, BTreeSet<ProvenanceId>>,
     by_relation: BTreeMap<ProvenanceRelation, BTreeSet<ProvenanceId>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl ProvenanceAdjacencyIndex {
-    fn from_authorized_edges(edges: &[ProvenanceEdge]) -> Result<Self, SourceProvenanceIndexError> {
-        let mut index = Self::default();
+    fn from_authorized_edges(
+        edges: &[ProvenanceEdge],
+        context: &QueryContext,
+    ) -> Result<Self, SourceProvenanceIndexError> {
+        let reservation_bytes = u64::try_from(edges.len())
+            .ok()
+            .and_then(|count| count.checked_mul(384))
+            .ok_or(SourceProvenanceIndexError::ResourceBudgetExceeded)?;
+        let reservation = context
+            .resource_budget()
+            .reserve(ResourceClass::Query, reservation_bytes)
+            .map_err(|_| SourceProvenanceIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for edge in edges {
             let id = edge.id();
             if index.edges.insert(id, *edge).is_some() {
@@ -301,12 +335,14 @@ pub fn full_scan_authorized_provenance_adjacency_index(
     context: &QueryContext,
 ) -> Result<ProvenanceAdjacencyIndex, SourceProvenanceIndexError> {
     let edges = project_authorized_provenance_edges(history, endpoint_targets, policy, context)?;
-    ProvenanceAdjacencyIndex::from_authorized_edges(&edges)
+    ProvenanceAdjacencyIndex::from_authorized_edges(&edges, context)
 }
 
 /// Authorization or duplicate-identity failure while creating a visible adjacency index.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceProvenanceIndexError {
+    /// The shared query-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
     /// The authorized Source projection contains a repeated identity.
     DuplicateVisibleSource(SourceId),
     /// The authorized Evidence projection contains a repeated identity.
@@ -333,10 +369,15 @@ impl From<ProvenanceGraphError> for SourceProvenanceIndexError {
 
 impl fmt::Display for SourceProvenanceIndexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "Source/Evidence adjacency index failed: {self:?}"
-        )
+        match self {
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("Source/Provenance query index exceeded its memory budget")
+            }
+            _ => write!(
+                formatter,
+                "Source/Evidence adjacency index failed: {self:?}"
+            ),
+        }
     }
 }
 
@@ -347,15 +388,19 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        ProvenanceIndexDirection, full_scan_authorized_evidence_neighborhood_index,
+        ProvenanceIndexDirection, SourceProvenanceIndexError,
+        full_scan_authorized_evidence_neighborhood_index,
         full_scan_authorized_provenance_adjacency_index,
     };
+    use crate::ProcessResourceProfile;
     use crate::catalog::{HistorySpaceCatalog, HistorySpaceDefinition};
     use crate::ids::{
         AssertionId, EvidenceId, EvidenceRetractionId, HistorySpaceId, PolicyRuleId, ProvenanceId,
         Revision, SourceId,
     };
-    use crate::query_search::tests::{Fixture, fixture_with_denials, id};
+    use crate::query_search::tests::{
+        Fixture, context_with_resource_budget, fixture_with_denials, id,
+    };
     use crate::record_refs::RecordRef;
     use crate::security::{
         Capability, CapabilityGrant, CapabilityRule, GrantEffect, PolicyScope, PolicySubject,
@@ -571,6 +616,27 @@ mod tests {
             Some(EvidenceHistoryStatus::RetractedAt(revision(2)?))
         );
         assert_eq!(index.source_ids().len(), 1);
+
+        let tight_profile = ProcessResourceProfile::new(
+            1,
+            512,
+            1024,
+            crate::ResourceClassLimits::new(1, 512, 512, 512, 512),
+        )
+        .map_err(|error| error.to_string())?;
+        let tight_context =
+            context_with_resource_budget(&fixture.context, tight_profile.memory_budget());
+        assert_eq!(
+            full_scan_authorized_evidence_neighborhood_index(
+                SourceEvidenceHistory::new(&sources, &evidence_records, &retractions, &targets),
+                &catalog,
+                query,
+                &policy,
+                &tight_context,
+            )
+            .err(),
+            Some(SourceProvenanceIndexError::ResourceBudgetExceeded)
+        );
 
         let visible_only_records = [visible_edge, retracted_edge];
         let visible_only_history =

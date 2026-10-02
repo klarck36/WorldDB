@@ -619,6 +619,7 @@ mod query_stream;
 mod record_indexes;
 mod record_refs;
 mod reference_query;
+mod resource_profile;
 #[cfg_attr(
     not(test),
     expect(
@@ -900,9 +901,10 @@ pub use query_aggregate::{
     GroupedCountRow, ResolvedAggregateRow, aggregate_visible_resolved,
 };
 pub use query_context::{
-    AuthorizationMode, BudgetDimension, CancellationToken, QueryBudget, QueryBudgetError,
-    QueryBudgetLimits, QueryContext, QueryContextBinding, QueryContextError, QueryContextInput,
-    SecurityContext, SnapshotSelector, ValidatedLayerSelection, WorldTimeSelector,
+    AuthorizationMode, BudgetDimension, CancellationToken, MAX_QUERY_CANDIDATES, MAX_QUERY_RESULTS,
+    MAX_QUERY_WORK_UNITS, QueryBudget, QueryBudgetError, QueryBudgetLimits, QueryContext,
+    QueryContextBinding, QueryContextError, QueryContextInput, SecurityContext, SnapshotSelector,
+    ValidatedLayerSelection, WorldTimeSelector,
 };
 pub use query_engine::{
     AssertionPointIndexAccess, AssertionPointRequest, AssertionQueryStore, ProductiveQueryEngine,
@@ -938,6 +940,11 @@ pub use reference_query::{
     RawHistoryRow, ReferenceExplain, ReferenceExplainError, ResolvedOutcome, ResolvedView,
     ResolvedViewError, canonicalize_raw_history_rows, full_scan_authorized_raw_history,
     full_scan_raw_history,
+};
+pub use resource_profile::{
+    MAX_PROCESS_HARD_MEMORY_BYTES, MemoryReservation, ProcessMemoryBudget, ProcessResourceProfile,
+    RESOURCE_PROFILE_VERSION_V1, ResourceBudgetError, ResourceClass, ResourceClassLimits,
+    configure_process_resource_profile, process_memory_budget,
 };
 pub use revision_backend::{CancellablePublishError, InMemoryRevisionBackend, RevisionBackend};
 pub use revision_history::{

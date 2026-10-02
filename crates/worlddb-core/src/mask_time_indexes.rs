@@ -13,6 +13,10 @@ use crate::ids::{
 use crate::layers::LayerSchemaSnapshot;
 use crate::masks::{Mask, MaskSelector, ReplacementBoundary};
 use crate::multi_value_resolution::MultiValueSlot;
+use crate::resource_profile::{
+    MemoryReservation, ProcessMemoryBudget, estimated_index_memory_bytes, process_memory_budget,
+    reserve_index_memory_with_budget,
+};
 use crate::temporal::{AssertionValidity, WorldTime};
 use crate::values::{Value, canonical_value_equality};
 
@@ -42,6 +46,7 @@ pub struct AssertionValidityIndex {
     entries: BTreeMap<ValidityTarget, ValidityEntry>,
     unbounded: BTreeSet<ValidityTarget>,
     by_timeline_start: BTreeMap<TimelineId, BTreeMap<Option<i128>, Vec<ValidityTarget>>>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl AssertionValidityIndex {
@@ -51,7 +56,29 @@ impl AssertionValidityIndex {
         masks: &[Mask],
         boundaries: &[ReplacementBoundary],
     ) -> Result<Self, ValidityIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(assertions, masks, boundaries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        assertions: &[Assertion],
+        masks: &[Mask],
+        boundaries: &[ReplacementBoundary],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, ValidityIndexError> {
+        let count = assertions
+            .len()
+            .checked_add(masks.len())
+            .and_then(|count| count.checked_add(boundaries.len()))
+            .ok_or(ValidityIndexError::ResourceBudgetExceeded)?;
+        let bytes = estimated_index_memory_bytes(count, 192)
+            .map_err(|_| ValidityIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| ValidityIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for assertion in assertions {
             index.insert(
                 ValidityTarget::Assertion(assertion.id()),
@@ -204,12 +231,46 @@ pub struct MaskSelectorIndex {
     proposition_prefix: BTreeMap<PropositionSelectorKey, Vec<usize>>,
     slot: BTreeMap<SlotSelectorKey, Vec<usize>>,
     mask_ids: BTreeSet<MaskId>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl MaskSelectorIndex {
     /// Builds postings for every member of the closed MaskSelector family.
     pub fn build(masks: &[Mask]) -> Result<Self, MaskSelectorIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(masks, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        masks: &[Mask],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, MaskSelectorIndexError> {
+        let dynamic_bytes = masks
+            .iter()
+            .try_fold(0_u64, |total, mask| {
+                let value_bytes = match mask.selector() {
+                    MaskSelector::Proposition(proposition) => match proposition.value() {
+                        Value::String(value) => u64::try_from(value.len()).ok(),
+                        Value::Symbol(value) => u64::try_from(value.as_str().len()).ok(),
+                        Value::Bytes(value) => u64::try_from(value.as_slice().len()).ok(),
+                        _ => Some(0),
+                    },
+                    MaskSelector::ExactAssertion(_) | MaskSelector::Slot(_) => Some(0),
+                }?;
+                total.checked_add(value_bytes)
+            })
+            .ok_or(MaskSelectorIndexError::ResourceBudgetExceeded)?;
+        let base_bytes = estimated_index_memory_bytes(masks.len(), 384)
+            .map_err(|_| MaskSelectorIndexError::ResourceBudgetExceeded)?;
+        let bytes = base_bytes
+            .checked_add(dynamic_bytes)
+            .ok_or(MaskSelectorIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| MaskSelectorIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for mask in masks {
             if !index.mask_ids.insert(mask.id()) {
                 return Err(MaskSelectorIndexError::DuplicateMaskId(mask.id()));
@@ -329,6 +390,7 @@ pub struct ContextPrecedenceIndex {
     entries: BTreeMap<PrecedenceKey, ContextPrecedence>,
     history_spaces: HistorySpaceCatalog,
     layers: LayerSchemaSnapshot,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl ContextPrecedenceIndex {
@@ -337,10 +399,42 @@ impl ContextPrecedenceIndex {
         history_spaces: &HistorySpaceCatalog,
         layers: &LayerSchemaSnapshot,
     ) -> Result<Self, ContextPrecedenceError> {
+        Self::build_with_memory_budget(history_spaces, layers, process_memory_budget())
+    }
+
+    /// Builds the cache under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        history_spaces: &HistorySpaceCatalog,
+        layers: &LayerSchemaSnapshot,
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, ContextPrecedenceError> {
+        let space_count = history_spaces.definitions().len();
+        let layer_count = layers.definitions().len();
+        let tuple_count = space_count
+            .checked_mul(space_count)
+            .and_then(|count| count.checked_mul(layer_count))
+            .ok_or(ContextPrecedenceError::ResourceBudgetExceeded)?;
+        let tuple_bytes = estimated_index_memory_bytes(tuple_count, 128)
+            .map_err(|_| ContextPrecedenceError::ResourceBudgetExceeded)?;
+        let catalog_bytes = estimated_index_memory_bytes(space_count, 512)
+            .and_then(|spaces| {
+                estimated_index_memory_bytes(layer_count, 512).and_then(|layers| {
+                    spaces
+                        .checked_add(layers)
+                        .ok_or(crate::ResourceBudgetError::ArithmeticOverflow)
+                })
+            })
+            .map_err(|_| ContextPrecedenceError::ResourceBudgetExceeded)?;
+        let bytes = tuple_bytes
+            .checked_add(catalog_bytes)
+            .ok_or(ContextPrecedenceError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| ContextPrecedenceError::ResourceBudgetExceeded)?;
         let mut index = Self {
             entries: BTreeMap::new(),
             history_spaces: history_spaces.clone(),
             layers: layers.clone(),
+            _memory_reservation: Some(reservation),
         };
         for query in history_spaces.definitions() {
             let query_history_space_id = query.history_space_id();
@@ -412,6 +506,7 @@ pub struct ReplacementBoundaryIndex {
     boundaries: Vec<ReplacementBoundary>,
     by_slot: BTreeMap<BoundarySlotKey, Vec<usize>>,
     boundary_ids: BTreeSet<ReplacementBoundaryId>,
+    _memory_reservation: Option<MemoryReservation>,
 }
 
 impl ReplacementBoundaryIndex {
@@ -419,7 +514,22 @@ impl ReplacementBoundaryIndex {
     pub fn build(
         boundaries: &[ReplacementBoundary],
     ) -> Result<Self, ReplacementBoundaryIndexError> {
-        let mut index = Self::default();
+        Self::build_with_memory_budget(boundaries, process_memory_budget())
+    }
+
+    /// Builds the index under an explicit shared process memory ledger.
+    pub fn build_with_memory_budget(
+        boundaries: &[ReplacementBoundary],
+        budget: &ProcessMemoryBudget,
+    ) -> Result<Self, ReplacementBoundaryIndexError> {
+        let bytes = estimated_index_memory_bytes(boundaries.len(), 256)
+            .map_err(|_| ReplacementBoundaryIndexError::ResourceBudgetExceeded)?;
+        let reservation = reserve_index_memory_with_budget(budget, bytes)
+            .map_err(|_| ReplacementBoundaryIndexError::ResourceBudgetExceeded)?;
+        let mut index = Self {
+            _memory_reservation: Some(reservation),
+            ..Self::default()
+        };
         for boundary in boundaries {
             if !index.boundary_ids.insert(boundary.id()) {
                 return Err(ReplacementBoundaryIndexError::DuplicateBoundaryId(
@@ -477,6 +587,8 @@ impl ReplacementBoundaryIndex {
 pub enum ValidityIndexError {
     /// One typed assertion, Mask, or boundary identity appears more than once.
     DuplicateTarget(ValidityTarget),
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
 }
 
 impl fmt::Display for ValidityIndexError {
@@ -484,6 +596,9 @@ impl fmt::Display for ValidityIndexError {
         match self {
             Self::DuplicateTarget(target) => {
                 write!(formatter, "duplicate validity target {target:?}")
+            }
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("validity index exceeded the process index-memory budget")
             }
         }
     }
@@ -498,6 +613,8 @@ pub enum MaskSelectorIndexError {
     DuplicateMaskId(MaskId),
     /// Proposition value equality needs a schema-aware temporal comparator.
     TemporalValueComparisonUnavailable,
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
 }
 
 impl fmt::Display for MaskSelectorIndexError {
@@ -506,6 +623,9 @@ impl fmt::Display for MaskSelectorIndexError {
             Self::DuplicateMaskId(id) => write!(formatter, "duplicate MaskId {id}"),
             Self::TemporalValueComparisonUnavailable => {
                 formatter.write_str("temporal proposition value requires schema-aware equality")
+            }
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("Mask selector index exceeded the process index-memory budget")
             }
         }
     }
@@ -518,12 +638,17 @@ impl std::error::Error for MaskSelectorIndexError {}
 pub enum ReplacementBoundaryIndexError {
     /// One ReplacementBoundary identity appears more than once.
     DuplicateBoundaryId(ReplacementBoundaryId),
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
 }
 
 impl fmt::Display for ReplacementBoundaryIndexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateBoundaryId(id) => write!(formatter, "duplicate boundary ID {id}"),
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("boundary index exceeded the process index-memory budget")
+            }
         }
     }
 }
@@ -578,6 +703,7 @@ mod tests {
         Temporal(crate::temporal::TemporalError),
         Mask(crate::masks::MaskRecordError),
         Boundary(crate::masks::ReplacementBoundaryError),
+        Resource(crate::ResourceBudgetError),
         Schema(crate::schema::SchemaDefinitionError),
         Symbol(crate::values::SymbolError),
         Precedence(crate::context_precedence::ContextPrecedenceError),
@@ -599,6 +725,9 @@ mod tests {
                 Self::Temporal(error) => write!(formatter, "invalid test time: {error}"),
                 Self::Mask(error) => write!(formatter, "invalid test Mask: {error}"),
                 Self::Boundary(error) => write!(formatter, "invalid test boundary: {error}"),
+                Self::Resource(error) => {
+                    write!(formatter, "invalid test resource profile: {error}")
+                }
                 Self::Schema(error) => write!(formatter, "invalid test schema: {error}"),
                 Self::Symbol(error) => write!(formatter, "invalid test symbol: {error}"),
                 Self::Precedence(error) => write!(formatter, "invalid test precedence: {error}"),
@@ -633,6 +762,7 @@ mod tests {
     test_error_from!(crate::temporal::TemporalError, Temporal);
     test_error_from!(crate::masks::MaskRecordError, Mask);
     test_error_from!(crate::masks::ReplacementBoundaryError, Boundary);
+    test_error_from!(crate::ResourceBudgetError, Resource);
     test_error_from!(crate::schema::SchemaDefinitionError, Schema);
     test_error_from!(crate::values::SymbolError, Symbol);
     test_error_from!(
@@ -680,6 +810,38 @@ mod tests {
             end.map(|nanos| WorldTime::from_nanoseconds(timeline, nanos)),
         )
         .map(AssertionValidity::new)
+    }
+
+    #[test]
+    fn mask_index_rejects_admission_before_copying_its_entries() -> TestResult {
+        let profile = crate::ProcessResourceProfile::new(
+            1,
+            512,
+            1024,
+            crate::ResourceClassLimits::new(512, 512, 1, 512, 512),
+        )?;
+        let budget = profile.memory_budget();
+        let history_space = id::<HistorySpaceId>(180)?;
+        let (_, layer, _) = layers()?;
+        let context = context(
+            history_space,
+            layer,
+            PerspectiveScope::World,
+            EpistemicMode::WorldState,
+        )?;
+        let mask = mask(
+            181,
+            context,
+            MaskSelector::ExactAssertion(id::<AssertionId>(182)?),
+            None,
+            revision(1)?,
+        )?;
+        assert_eq!(
+            MaskSelectorIndex::build_with_memory_budget(&[mask], &budget).err(),
+            Some(super::MaskSelectorIndexError::ResourceBudgetExceeded)
+        );
+        assert_eq!(budget.reserved_bytes(), Ok(0));
+        Ok(())
     }
 
     struct AssertionSpec {
@@ -1114,7 +1276,7 @@ mod tests {
                     assertion: assertion.clone(),
                     source_history_space_id: source,
                     query_history_space_id: child,
-                    selected_layer_ids: selected_layers.clone(),
+                    selected_layer_ids: std::sync::Arc::new(selected_layers.clone()),
                     precedence: ContextPrecedence::for_context(
                         child,
                         source,
@@ -1122,6 +1284,7 @@ mod tests {
                         &catalog,
                         &layers,
                     )?,
+                    _memory_reservation: None,
                 })
             })
             .collect::<Result<Vec<_>, ContextPrecedenceError>>()
@@ -1442,24 +1605,27 @@ mod tests {
                 assertion: candidate_assertion,
                 source_history_space_id: root,
                 query_history_space_id: child,
-                selected_layer_ids: layer_ids.clone(),
+                selected_layer_ids: std::sync::Arc::new(layer_ids.clone()),
                 precedence: ContextPrecedence::for_context(child, root, base, &catalog, &layers)?,
+                _memory_reservation: None,
             },
             crate::AssertionCandidate {
                 assertion: child_base_assertion,
                 source_history_space_id: child,
                 query_history_space_id: child,
-                selected_layer_ids: layer_ids.clone(),
+                selected_layer_ids: std::sync::Arc::new(layer_ids.clone()),
                 precedence: ContextPrecedence::for_context(child, child, base, &catalog, &layers)?,
+                _memory_reservation: None,
             },
             crate::AssertionCandidate {
                 assertion: child_overlay_assertion,
                 source_history_space_id: child,
                 query_history_space_id: child,
-                selected_layer_ids: layer_ids.clone(),
+                selected_layer_ids: std::sync::Arc::new(layer_ids.clone()),
                 precedence: ContextPrecedence::for_context(
                     child, child, overlay, &catalog, &layers,
                 )?,
+                _memory_reservation: None,
             },
         ];
         let archive = boundaries

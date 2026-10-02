@@ -2,11 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::mem::size_of;
 
 use crate::ids::{HistorySpaceId, LayerId};
 use crate::query_context::{QueryContext, QueryContextBinding};
 use crate::query_ports::OwnedQueryResult;
 use crate::record_refs::RecordRef;
+use crate::resource_profile::{MemoryReservation, ResourceClass};
 use crate::security::{
     AuthorizationDecision, Capability, PolicyTarget, RelationshipSelector, SecurityPolicyHistory,
     SecurityPolicyHistoryError,
@@ -280,6 +282,7 @@ pub fn full_scan_authorized_graph_traversal(
     }
 
     let mut visible_nodes = BTreeMap::<RecordRef, GraphNode>::new();
+    let mut scratch_reservations = Vec::<MemoryReservation>::new();
     let mut authorized_node_candidates = 0_u64;
     let mut work = 0_u64;
     for node in &candidates.nodes {
@@ -295,7 +298,7 @@ pub fn full_scan_authorized_graph_traversal(
             None,
         );
         if policy.authorize(principal, capability, target) == AuthorizationDecision::Allow {
-            if visible_nodes.insert(node.record_ref, *node).is_some() {
+            if visible_nodes.contains_key(&node.record_ref) {
                 return Err(GraphError::DuplicateVisibleNode);
             }
             authorized_node_candidates = authorized_node_candidates
@@ -308,6 +311,13 @@ pub fn full_scan_authorized_graph_traversal(
             if work > context.budget().max_work_units().get() {
                 return Err(GraphError::BudgetExceeded);
             }
+            let reservation =
+                reserve_query_memory(context, size_of::<GraphNode>().saturating_add(160))?;
+            scratch_reservations
+                .try_reserve(1)
+                .map_err(|_| GraphError::ResourceBudgetExceeded)?;
+            visible_nodes.insert(node.record_ref, *node);
+            scratch_reservations.push(reservation);
         }
     }
 
@@ -328,7 +338,16 @@ pub fn full_scan_authorized_graph_traversal(
             if work > context.budget().max_work_units().get() {
                 return Err(GraphError::BudgetExceeded);
             }
+            let reservation =
+                reserve_query_memory(context, size_of::<GraphEdge>().saturating_add(320))?;
+            scratch_reservations
+                .try_reserve(1)
+                .map_err(|_| GraphError::ResourceBudgetExceeded)?;
+            visible_edges
+                .try_reserve(1)
+                .map_err(|_| GraphError::ResourceBudgetExceeded)?;
             visible_edges.push(*edge);
+            scratch_reservations.push(reservation);
         }
     }
     visible_edges.sort_unstable();
@@ -438,12 +457,40 @@ pub fn full_scan_authorized_graph_traversal(
             }
         }
     }
+    let result_bytes = emitted_nodes
+        .len()
+        .saturating_mul(size_of::<RecordRef>())
+        .saturating_add(
+            traversal_edges
+                .capacity()
+                .saturating_mul(size_of::<TraversedGraphEdge>()),
+        )
+        .saturating_add(64);
+    let result_reservation = reserve_query_memory(context, result_bytes)?;
     let result = GraphResult {
         nodes: emitted_nodes.into_iter().collect(),
         edges: traversal_edges,
         max_depth_reached,
     };
-    OwnedQueryResult::bind(context, policies, result).map_err(GraphError::Security)
+    drop(scratch_reservations);
+    OwnedQueryResult::bind_with_memory_reservations(
+        context,
+        policies,
+        result,
+        vec![result_reservation],
+    )
+    .map_err(GraphError::Security)
+}
+
+fn reserve_query_memory(
+    context: &QueryContext,
+    bytes: usize,
+) -> Result<MemoryReservation, GraphError> {
+    let bytes = u64::try_from(bytes).map_err(|_| GraphError::ResourceBudgetExceeded)?;
+    context
+        .resource_budget()
+        .reserve(ResourceClass::Query, bytes)
+        .map_err(|_| GraphError::ResourceBudgetExceeded)
 }
 
 fn edge_is_authorized(
@@ -564,6 +611,8 @@ pub enum GraphError {
     InvalidCandidates,
     /// Node, edge, work, or output budget was exhausted; no partial graph is returned.
     BudgetExceeded,
+    /// The process query-memory admission budget was exhausted; no partial graph is returned.
+    ResourceBudgetExceeded,
     /// The host cancelled traversal; no partial graph is returned.
     Cancelled,
     /// Query policy selection could not be resolved.
@@ -582,6 +631,7 @@ impl fmt::Display for GraphError {
             }
             Self::InvalidCandidates => "graph candidate source is invalid",
             Self::BudgetExceeded => "graph traversal budget exceeded",
+            Self::ResourceBudgetExceeded => "graph process memory budget exceeded",
             Self::Cancelled => "graph traversal was cancelled",
             Self::Security(_) => "graph security context is invalid",
         })

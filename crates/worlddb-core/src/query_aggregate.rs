@@ -2,16 +2,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::mem::size_of;
+use std::sync::Arc;
 
 use crate::ids::{HistorySpaceId, LayerId};
 use crate::query_context::QueryContext;
 use crate::query_ports::OwnedQueryResult;
 use crate::record_refs::RecordRef;
+use crate::resource_profile::{MemoryReservation, ResourceClass};
 use crate::schema::ValueKind;
 use crate::security::{
     AuthorizationDecision, Capability, FieldSelector, PolicyTarget, SecurityPolicyHistory,
     SecurityPolicyHistoryError,
 };
+
+const MAX_AGGREGATE_FIELDS: usize = 256;
 
 /// Opaque canonical typed key returned by the schema-aware field normalizer.
 ///
@@ -20,16 +25,16 @@ use crate::security::{
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GroupValueKey {
     value_kind: ValueKind,
-    canonical_value: Vec<u8>,
+    canonical_value: Arc<[u8]>,
 }
 
 impl GroupValueKey {
     /// Binds one schema-normalized value to its closed ValueKind tag.
     #[must_use]
-    pub const fn new(value_kind: ValueKind, canonical_value: Vec<u8>) -> Self {
+    pub fn new(value_kind: ValueKind, canonical_value: Vec<u8>) -> Self {
         Self {
             value_kind,
-            canonical_value,
+            canonical_value: Arc::from(canonical_value),
         }
     }
 }
@@ -51,6 +56,9 @@ impl ResolvedAggregateRow {
         layer: LayerId,
         mut group_values: Vec<(FieldSelector, Option<GroupValueKey>)>,
     ) -> Result<Self, AggregateError> {
+        if group_values.len() > MAX_AGGREGATE_FIELDS {
+            return Err(AggregateError::RequestTooLarge);
+        }
         group_values.sort_by_key(|(field, _)| *field);
         if group_values.windows(2).any(|pair| {
             pair.first()
@@ -84,6 +92,9 @@ impl AggregateSpec {
     pub fn grouped_count(mut fields: Vec<FieldSelector>) -> Result<Self, AggregateError> {
         if fields.is_empty() {
             return Err(AggregateError::EmptyGroupFields);
+        }
+        if fields.len() > MAX_AGGREGATE_FIELDS {
+            return Err(AggregateError::RequestTooLarge);
         }
         fields.sort_unstable();
         if fields.windows(2).any(|pair| {
@@ -183,6 +194,7 @@ pub fn aggregate_visible_resolved(
     let mut visible_keys = BTreeSet::new();
     let mut group_kinds = BTreeMap::<FieldSelector, ValueKind>::new();
     let mut groups = BTreeMap::<Vec<(FieldSelector, AggregateGroupValue)>, u64>::new();
+    let mut memory_reservations = Vec::<MemoryReservation>::new();
 
     for row in resolved.value() {
         if context.cancellation().is_cancelled() {
@@ -190,9 +202,6 @@ pub fn aggregate_visible_resolved(
         }
         if !record_is_visible(policy, principal, row) {
             continue;
-        }
-        if !visible_keys.insert(row.result_key) {
-            return Err(AggregateError::DuplicateResultKey);
         }
         if requested_fields.iter().any(|field| {
             let target = PolicyTarget::new(
@@ -220,37 +229,74 @@ pub fn aggregate_visible_resolved(
         if candidates > budget.max_candidates().get() || work > budget.max_work_units().get() {
             return Err(AggregateError::BudgetExceeded);
         }
+        let reservation_bytes = size_of::<RecordRef>()
+            .saturating_add(size_of::<Vec<(FieldSelector, AggregateGroupValue)>>())
+            .saturating_add(
+                requested_fields
+                    .len()
+                    .saturating_mul(size_of::<(FieldSelector, AggregateGroupValue)>()),
+            )
+            .saturating_add(192);
+        let reservation = context
+            .resource_budget()
+            .reserve(
+                ResourceClass::Query,
+                u64::try_from(reservation_bytes)
+                    .map_err(|_| AggregateError::ResourceBudgetExceeded)?,
+            )
+            .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+        memory_reservations
+            .try_reserve(1)
+            .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+        if !visible_keys.insert(row.result_key) {
+            return Err(AggregateError::DuplicateResultKey);
+        }
         count = count.checked_add(1).ok_or(AggregateError::CountOverflow)?;
 
         if let AggregateSpec::GroupedCount { fields } = spec {
-            let key = fields
-                .iter()
-                .map(|field| {
-                    let value = row
-                        .group_values
-                        .binary_search_by_key(field, |(selector, _)| *selector)
-                        .ok()
-                        .and_then(|index| row.group_values.get(index))
-                        .and_then(|(_, value)| value.clone())
-                        .map_or(AggregateGroupValue::Missing, AggregateGroupValue::Value);
-                    if let AggregateGroupValue::Value(value) = &value {
-                        if group_kinds
-                            .insert(*field, value.value_kind)
-                            .is_some_and(|previous| previous != value.value_kind)
-                        {
-                            return Err(AggregateError::IncomparableGroupValues);
-                        }
+            let mut key = Vec::new();
+            key.try_reserve_exact(fields.len())
+                .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+            for field in fields {
+                let value = row
+                    .group_values
+                    .binary_search_by_key(field, |(selector, _)| *selector)
+                    .ok()
+                    .and_then(|index| row.group_values.get(index))
+                    .and_then(|(_, value)| value.clone())
+                    .map_or(AggregateGroupValue::Missing, AggregateGroupValue::Value);
+                if let AggregateGroupValue::Value(value) = &value {
+                    if group_kinds
+                        .insert(*field, value.value_kind)
+                        .is_some_and(|previous| previous != value.value_kind)
+                    {
+                        return Err(AggregateError::IncomparableGroupValues);
                     }
-                    Ok((*field, value))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                }
+                key.push((*field, value));
+            }
             let group_count = groups.entry(key).or_default();
             *group_count = group_count
                 .checked_add(1)
                 .ok_or(AggregateError::CountOverflow)?;
         }
+        memory_reservations.push(reservation);
     }
 
+    let result_bytes = match spec {
+        AggregateSpec::Count | AggregateSpec::Exists => size_of::<AggregateResult>(),
+        AggregateSpec::GroupedCount { .. } => groups
+            .len()
+            .saturating_mul(size_of::<GroupedCountRow>())
+            .saturating_add(64),
+    };
+    let result_reservation = context
+        .resource_budget()
+        .reserve(
+            ResourceClass::Query,
+            u64::try_from(result_bytes).map_err(|_| AggregateError::ResourceBudgetExceeded)?,
+        )
+        .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
     let result = match spec {
         AggregateSpec::Count => AggregateResult::Count(count),
         AggregateSpec::Exists => AggregateResult::Exists(count > 0),
@@ -258,19 +304,31 @@ pub fn aggregate_visible_resolved(
             if groups.len() as u64 > budget.max_results().get() {
                 return Err(AggregateError::BudgetExceeded);
             }
-            AggregateResult::GroupedCount(
-                groups
-                    .into_iter()
-                    .map(|(values, count)| GroupedCountRow { values, count })
-                    .collect(),
-            )
+            let mut rows = Vec::new();
+            rows.try_reserve_exact(groups.len())
+                .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+            for (values, count) in groups {
+                rows.push(GroupedCountRow { values, count });
+            }
+            AggregateResult::GroupedCount(rows)
         }
     };
     if context.cancellation().is_cancelled() {
         return Err(AggregateError::Cancelled);
     }
-    let owned =
-        OwnedQueryResult::bind(context, policies, result).map_err(AggregateError::Security)?;
+    drop(memory_reservations);
+    let mut result_reservations = Vec::new();
+    result_reservations
+        .try_reserve_exact(1)
+        .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+    result_reservations.push(result_reservation);
+    let owned = OwnedQueryResult::bind_with_memory_reservations(
+        context,
+        policies,
+        result,
+        result_reservations,
+    )
+    .map_err(AggregateError::Security)?;
     if context.cancellation().is_cancelled() {
         return Err(AggregateError::Cancelled);
     }
@@ -334,6 +392,8 @@ fn record_read_capability(record_ref: RecordRef) -> Option<Capability> {
 pub enum AggregateError {
     /// Grouping requires at least one field.
     EmptyGroupFields,
+    /// Field selectors or row groups exceeded their finite structural bound.
+    RequestTooLarge,
     /// One field was selected more than once or occurs twice in a row.
     DuplicateGroupField,
     /// Multiple visible resolved rows have the same caller-visible result identity.
@@ -350,6 +410,8 @@ pub enum AggregateError {
     CountOverflow,
     /// Candidate, work, or grouped-result budget was exhausted; no partial output is returned.
     BudgetExceeded,
+    /// The process query-memory admission budget was exhausted; no partial output is returned.
+    ResourceBudgetExceeded,
     /// The host cancelled the query; no partial output is returned.
     Cancelled,
     /// Policy selection could not be resolved.
@@ -360,6 +422,7 @@ impl fmt::Display for AggregateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::EmptyGroupFields => "grouped count requires at least one field",
+            Self::RequestTooLarge => "aggregate request exceeds its finite input limit",
             Self::DuplicateGroupField => "aggregate request contains a duplicate group field",
             Self::DuplicateResultKey => "aggregate contains duplicate visible result keys",
             Self::IncomparableGroupValues => "aggregate group values are incomparable",
@@ -368,6 +431,7 @@ impl fmt::Display for AggregateError {
             Self::Unauthorized => "aggregation is not authorized",
             Self::CountOverflow => "aggregate count exceeds the supported range",
             Self::BudgetExceeded => "aggregate budget exceeded",
+            Self::ResourceBudgetExceeded => "aggregate process memory budget exceeded",
             Self::Cancelled => "aggregation was cancelled",
             Self::Security(_) => "aggregate security context is invalid",
         })

@@ -429,8 +429,9 @@ mod tests {
             assertion,
             source_history_space_id: root,
             query_history_space_id: child,
-            selected_layer_ids: [layer].into_iter().collect(),
+            selected_layer_ids: std::sync::Arc::new([layer].into_iter().collect()),
             precedence,
+            _memory_reservation: None,
         };
         Ok(Fixture {
             candidate,
@@ -474,8 +475,9 @@ mod tests {
             assertion,
             source_history_space_id: source,
             query_history_space_id: f.child,
-            selected_layer_ids: [f.layer].into_iter().collect(),
+            selected_layer_ids: std::sync::Arc::new([f.layer].into_iter().collect()),
             precedence,
+            _memory_reservation: None,
         })
     }
 
@@ -507,8 +509,9 @@ mod tests {
             assertion,
             source_history_space_id: f.root,
             query_history_space_id: f.child,
-            selected_layer_ids: [f.layer].into_iter().collect(),
+            selected_layer_ids: std::sync::Arc::new([f.layer].into_iter().collect()),
             precedence,
+            _memory_reservation: None,
         })
     }
 

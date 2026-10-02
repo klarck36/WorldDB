@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "probe": "m6-14b-windows-query-history-v1",
-  "generated_at_utc": "2026-10-02T08:12:21Z",
+  "generated_at_utc": "2026-10-02T08:07:07Z",
   "host": {
     "os_caption": "Microsoft Windows 11 Home",
     "os_version": "10.0.26200",
@@ -18,7 +18,7 @@
     "storage_bus": "NVMe",
     "storage_media": "",
     "storage_size_bytes": 1000204886016,
-    "volume_free_bytes": 238541398016,
+    "volume_free_bytes": 237649305600,
     "output_location": "LOCALAPPDATA, outside the repository and OneDrive path"
   },
   "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
@@ -31,7 +31,7 @@
   "point_cold_cache_note": "Cold label denotes eviction of CPU cache with a touched 64 MiB buffer; the OS/file cache was not evicted.",
   "history_cold_cache_note": "Each page sample starts after CPU-cache eviction; corpus and source index remain resident and Windows file cache is untouched.",
   "peak_rss_sampling": "Windows PROCESS_MEMORY_COUNTERS_EX.PeakWorkingSetSize on the benchmark test process",
-  "peak_working_set_bytes": 938717184,
+  "peak_working_set_bytes": 938991616,
   "summary": {
     "history_page_cold_cpu_cache": {
       "samples": 32670,
@@ -39,13 +39,13 @@
       "result_count_min": 21,
       "result_count_max": 64,
       "latency_ns": {
-        "p50": 54400,
-        "p95": 96200,
-        "p99": 129600,
-        "minimum": 27400,
-        "maximum": 446800
+        "p50": 54000,
+        "p95": 86500,
+        "p99": 124500,
+        "minimum": 25400,
+        "maximum": 1309300
       },
-      "peak_working_set_bytes": 938717184,
+      "peak_working_set_bytes": 938991616,
       "cache_state": "CPU cache evicted with a 64 MiB memory-resident buffer; file/OS cache left intact"
     },
     "history_page_warm": {
@@ -54,13 +54,13 @@
       "result_count_min": 21,
       "result_count_max": 64,
       "latency_ns": {
-        "p50": 36900,
-        "p95": 42100,
-        "p99": 73300,
-        "minimum": 20000,
-        "maximum": 327500
+        "p50": 36500,
+        "p95": 40400,
+        "p99": 71700,
+        "minimum": 19800,
+        "maximum": 316400
       },
-      "peak_working_set_bytes": 938717184,
+      "peak_working_set_bytes": 938991616,
       "cache_state": "warm process and memory-resident corpus"
     },
     "point_resolution_cold_cpu_cache": {
@@ -69,13 +69,13 @@
       "result_count_min": 1,
       "result_count_max": 1,
       "latency_ns": {
-        "p50": 9848100,
-        "p95": 10560500,
-        "p99": 11318300,
-        "minimum": 9410100,
-        "maximum": 11318300
+        "p50": 9788100,
+        "p95": 11601800,
+        "p99": 11747100,
+        "minimum": 9475100,
+        "maximum": 11747100
       },
-      "peak_working_set_bytes": 938717184,
+      "peak_working_set_bytes": 938991616,
       "cache_state": "CPU cache evicted with a 64 MiB memory-resident buffer; file/OS cache left intact"
     },
     "point_resolution_warm": {
@@ -84,18 +84,18 @@
       "result_count_min": 1,
       "result_count_max": 1,
       "latency_ns": {
-        "p50": 9635600,
-        "p95": 9943000,
-        "p99": 10257000,
-        "minimum": 9298600,
-        "maximum": 10257000
+        "p50": 9663000,
+        "p95": 10074000,
+        "p99": 10104100,
+        "minimum": 9296600,
+        "maximum": 10104100
       },
-      "peak_working_set_bytes": 938717184,
+      "peak_working_set_bytes": 938991616,
       "cache_state": "warm process and memory-resident corpus"
     }
   },
-  "raw_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run3\\windows-query-history.csv",
-  "per_page_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run3\\windows-query-history-page-summary.csv",
-  "rust_output": "running 1 test\ntest m6_14b_windows_full_corpus_query_and_history_probe ... assertions=1000000 selected_history_rows=69653 page_size=64 pages=1089 repeats=30 raw_csv=C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run3\\windows-query-history-probe.csv\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 131.72s",
+  "raw_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run2\\windows-query-history.csv",
+  "per_page_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run2\\windows-query-history-page-summary.csv",
+  "rust_output": "running 1 test\ntest m6_14b_windows_full_corpus_query_and_history_probe ... assertions=1000000 selected_history_rows=69653 page_size=64 pages=1089 repeats=30 raw_csv=C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-after-shared-assertions-run2\\windows-query-history-probe.csv\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 131.30s",
   "platform_scope": "Windows only; Linux/macOS deferred by user instruction"
 }

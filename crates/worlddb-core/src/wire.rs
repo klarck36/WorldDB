@@ -8,6 +8,7 @@ use std::fmt;
 
 use crate::ids::{DomainId, IdValidationError, WireId};
 use crate::numbers::{decode_u128_varint_prefix, encode_u128_varint};
+use crate::resource_profile::{ProcessResourceProfile, ResourceClass, process_memory_budget};
 use crate::{
     Bytes, Decimal, DecimalError, Duration, Int, IntegerError, Symbol, SymbolError, Time, UInt,
     Value,
@@ -63,6 +64,26 @@ impl DecoderLimits {
         max_records_per_batch: 1_000_000,
         max_nesting_depth: 8,
     };
+
+    /// Creates decoder hard limits bounded by one versioned process profile.
+    #[must_use]
+    pub fn for_process_profile(profile: ProcessResourceProfile) -> Self {
+        let parser_limit =
+            usize::try_from(profile.class_limit_bytes(ResourceClass::Parser)).unwrap_or(usize::MAX);
+        Self {
+            max_frame_bytes: Self::DEFAULT.max_frame_bytes.min(parser_limit),
+            max_string_or_bytes: Self::DEFAULT.max_string_or_bytes.min(parser_limit),
+            max_collection_bytes: Self::DEFAULT.max_collection_bytes.min(parser_limit),
+            max_batch_bytes: Self::DEFAULT.max_batch_bytes.min(parser_limit),
+            ..Self::DEFAULT
+        }
+    }
+
+    /// Returns process-configured defaults, initializing the approved profile if needed.
+    #[must_use]
+    pub fn process_default() -> Self {
+        Self::for_process_profile(process_memory_budget().profile())
+    }
 
     pub(crate) fn check_nesting_depth(&self, required: usize) -> Result<(), WireError> {
         if required > self.max_nesting_depth {
@@ -277,7 +298,7 @@ pub fn encode_frame(header: FrameHeader, payload: &[u8]) -> Result<Vec<u8>, Fram
 
 /// Verifies and decodes exactly one complete 1.0 frame without copying payload.
 pub fn decode_frame(bytes: &[u8]) -> Result<Frame<'_>, FrameError> {
-    decode_frame_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_frame_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 /// Verifies and decodes a complete 1.0 frame under an explicit resource policy.
@@ -487,7 +508,7 @@ fn append_length_prefixed(bytes: &mut Vec<u8>, value: &[u8]) {
 
 /// Decodes one closed core `Value`, rejecting unknown tags and alternate bytes.
 pub fn decode_value(bytes: &[u8]) -> Result<Value, WireError> {
-    decode_value_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_value_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 /// Decodes one closed core `Value` under an explicit resource policy.
@@ -809,8 +830,8 @@ pub struct TlvDecoder<'a> {
 impl<'a> TlvDecoder<'a> {
     /// Creates a decoder over one record payload.
     #[must_use]
-    pub const fn new(bytes: &'a [u8]) -> Self {
-        Self::with_limits(bytes, DecoderLimits::DEFAULT)
+    pub fn new(bytes: &'a [u8]) -> Self {
+        Self::with_limits(bytes, DecoderLimits::process_default())
     }
 
     /// Creates a decoder over one record payload with an explicit resource policy.
@@ -1003,6 +1024,29 @@ mod tests {
         encode_frame, encode_value,
     };
     use crate::{Bytes, Decimal, Duration, EntityId, Int, Symbol, Time, TimelineId, UInt, Value};
+
+    #[test]
+    fn decoder_hard_limits_are_clamped_to_the_selected_parser_profile() {
+        let profile = crate::ProcessResourceProfile::new(
+            1,
+            1024,
+            2048,
+            crate::ResourceClassLimits::new(1024, 128, 1024, 1024, 1024),
+        );
+        assert!(profile.is_ok());
+        let Ok(profile) = profile else {
+            return;
+        };
+        let limits = DecoderLimits::for_process_profile(profile);
+        assert_eq!(limits.max_frame_bytes, 128);
+        assert_eq!(limits.max_string_or_bytes, 128);
+        assert_eq!(limits.max_collection_bytes, 128);
+        assert_eq!(limits.max_batch_bytes, 128);
+        assert_eq!(
+            limits.max_records_per_batch,
+            DecoderLimits::DEFAULT.max_records_per_batch
+        );
+    }
 
     #[test]
     fn frame_round_trip_preserves_optional_flags_and_payload() {

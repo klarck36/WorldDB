@@ -5,7 +5,7 @@ use std::fmt;
 use crate::history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
 use crate::ids::{AssertionId, DomainId, HistorySpaceId, Revision};
 use crate::multi_value_resolution::MultiValueOutcome;
-use crate::query_context::QueryContext;
+use crate::query_context::{BudgetDimension, QueryContext};
 use crate::record_refs::{RecordRef, RecordRefWireTag};
 use crate::schema_history::{SchemaHistoryError, SchemaHistoryReferenceModel, SchemaMode};
 use crate::security::{
@@ -152,24 +152,47 @@ pub fn full_scan_authorized_raw_history<T: Clone>(
     let policy_view = policies.resolve(context)?;
     let policy = policy_view.snapshot();
     let principal = context.security().principal_id();
-    let rows = history
-        .read_at(context.history_space(), context.recorded_as_of().revision())?
+    let budget = context.budget();
+    let mut rows = Vec::new();
+    let mut authorized_candidates = 0_u64;
+    let mut work_units = 0_u64;
+    for (revision, owner, value) in
+        history.iter_at(context.history_space(), context.recorded_as_of().revision())?
+    {
+        let record = record_ref(value);
+        let target = PolicyTarget::new(Some(owner), None, Some(record), None, None);
+        let visible = [
+            Capability::HistorySpaceRead,
+            Capability::RawHistoryRead,
+            raw_record_read_capability(record),
+        ]
         .into_iter()
-        .filter_map(|(revision, owner, value)| {
-            let record = record_ref(value);
-            let target = PolicyTarget::new(Some(owner), None, Some(record), None, None);
-            [
-                Capability::HistorySpaceRead,
-                Capability::RawHistoryRead,
-                raw_record_read_capability(record),
-            ]
-            .into_iter()
-            .all(|capability| {
-                policy.authorize(principal, capability, target) == AuthorizationDecision::Allow
-            })
-            .then(|| RawHistoryRow::new(revision, owner, record, value.clone()))
-        })
-        .collect::<Vec<_>>();
+        .all(|capability| {
+            policy.authorize(principal, capability, target) == AuthorizationDecision::Allow
+        });
+        if !visible {
+            continue;
+        }
+
+        authorized_candidates = authorized_candidates
+            .checked_add(1)
+            .ok_or(RawHistoryError::BudgetExceeded(BudgetDimension::Candidates))?;
+        if authorized_candidates > budget.max_candidates().get() {
+            return Err(RawHistoryError::BudgetExceeded(BudgetDimension::Candidates));
+        }
+        work_units = work_units
+            .checked_add(1)
+            .ok_or(RawHistoryError::BudgetExceeded(BudgetDimension::WorkUnits))?;
+        if work_units > budget.max_work_units().get() {
+            return Err(RawHistoryError::BudgetExceeded(BudgetDimension::WorkUnits));
+        }
+        if u64::try_from(rows.len()).unwrap_or(u64::MAX) >= budget.max_results().get() {
+            return Err(RawHistoryError::BudgetExceeded(BudgetDimension::Results));
+        }
+        rows.try_reserve(1)
+            .map_err(|_| RawHistoryError::AllocationFailed)?;
+        rows.push(RawHistoryRow::new(revision, owner, record, value.clone()));
+    }
     canonicalize_raw_history_rows(rows)
 }
 
@@ -536,6 +559,10 @@ pub enum RawHistoryError {
     SecurityHistory(SecurityPolicyHistoryError),
     /// Two records were assigned the same typed identity.
     DuplicateRecordRef { record_ref: RecordRef },
+    /// A caller-visible query budget ended before the complete result was built.
+    BudgetExceeded(BudgetDimension),
+    /// The bounded result could not reserve memory for another row.
+    AllocationFailed,
 }
 
 impl From<HistorySpaceModelError> for RawHistoryError {
@@ -562,6 +589,12 @@ impl fmt::Display for RawHistoryError {
                     formatter,
                     "raw history repeats record reference {record_ref:?}"
                 )
+            }
+            Self::BudgetExceeded(_) => {
+                formatter.write_str("query budget does not allow a complete result")
+            }
+            Self::AllocationFailed => {
+                formatter.write_str("raw history result could not reserve bounded memory")
             }
         }
     }

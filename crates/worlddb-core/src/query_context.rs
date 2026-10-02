@@ -10,10 +10,18 @@ use crate::ids::{HistorySpaceId, LayerId, PrincipalId, Revision, SchemaRevision}
 use crate::layers::{LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
 use crate::record_refs::SnapshotRef;
 use crate::reference_query::HistoricalQueryBinding;
+use crate::resource_profile::{ProcessMemoryBudget, process_memory_budget};
 use crate::schema::NonEmptySet;
 use crate::schema_history::SchemaMode;
 use crate::snapshot_lease::{SnapshotLease, SnapshotLifetimeStatus};
 use crate::temporal::{RecordedAsOf, WorldTime};
+
+/// Absolute candidate ceiling accepted by any one query.
+pub const MAX_QUERY_CANDIDATES: u64 = 1_000_000;
+/// Absolute work-unit ceiling accepted by any one query.
+pub const MAX_QUERY_WORK_UNITS: u64 = 10_000_000;
+/// Absolute result-row ceiling accepted by any one query.
+pub const MAX_QUERY_RESULTS: u64 = 100_000;
 
 /// Temporal interpretation required by every query context.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -87,14 +95,40 @@ impl QueryBudgetLimits {
         max_work_units: u64,
         max_results: u64,
     ) -> Result<Self, QueryBudgetError> {
-        Ok(Self {
+        let limits = Self {
             max_candidates: NonZeroU64::new(max_candidates)
                 .ok_or(QueryBudgetError::ZeroLimit(BudgetDimension::Candidates))?,
             max_work_units: NonZeroU64::new(max_work_units)
                 .ok_or(QueryBudgetError::ZeroLimit(BudgetDimension::WorkUnits))?,
             max_results: NonZeroU64::new(max_results)
                 .ok_or(QueryBudgetError::ZeroLimit(BudgetDimension::Results))?,
-        })
+        };
+        for (dimension, configured, maximum) in [
+            (
+                BudgetDimension::Candidates,
+                limits.max_candidates,
+                MAX_QUERY_CANDIDATES,
+            ),
+            (
+                BudgetDimension::WorkUnits,
+                limits.max_work_units,
+                MAX_QUERY_WORK_UNITS,
+            ),
+            (
+                BudgetDimension::Results,
+                limits.max_results,
+                MAX_QUERY_RESULTS,
+            ),
+        ] {
+            if configured.get() > maximum {
+                return Err(QueryBudgetError::ExceedsAbsoluteMaximum {
+                    dimension,
+                    requested: configured.get(),
+                    maximum,
+                });
+            }
+        }
+        Ok(limits)
     }
 }
 
@@ -188,6 +222,12 @@ pub enum QueryBudgetError {
         requested: u64,
         hard_maximum: u64,
     },
+    /// An engine maximum exceeded the implementation's absolute finite ceiling.
+    ExceedsAbsoluteMaximum {
+        dimension: BudgetDimension,
+        requested: u64,
+        maximum: u64,
+    },
 }
 
 impl fmt::Display for QueryBudgetError {
@@ -203,6 +243,10 @@ impl fmt::Display for QueryBudgetError {
                     "query budget exceeds engine maximum for {dimension:?}"
                 )
             }
+            Self::ExceedsAbsoluteMaximum { dimension, .. } => write!(
+                formatter,
+                "configured query limit exceeds the absolute maximum for {dimension:?}"
+            ),
         }
     }
 }
@@ -315,6 +359,7 @@ pub struct QueryContext {
     security: SecurityContext,
     budget: QueryBudget,
     cancellation: CancellationToken,
+    resource_budget: ProcessMemoryBudget,
     snapshot_lease: Option<SnapshotLease>,
 }
 
@@ -358,6 +403,17 @@ impl QueryContextBinding {
 impl QueryContext {
     /// Validates all cross-field invariants before constructing an executable context.
     pub fn new(input: QueryContextInput) -> Result<Self, QueryContextError> {
+        Self::new_with_resource_budget(input, process_memory_budget().clone())
+    }
+
+    /// Validates all query pins and binds a caller-supplied shared process ledger.
+    ///
+    /// Runtime hosts should pass the same ledger to every context created for one
+    /// process. [`new`](Self::new) uses the configured process default.
+    pub fn new_with_resource_budget(
+        input: QueryContextInput,
+        resource_budget: ProcessMemoryBudget,
+    ) -> Result<Self, QueryContextError> {
         if input.recorded_as_of.revision() > input.snapshot_revision {
             return Err(QueryContextError::AsOfAfterSnapshot);
         }
@@ -389,6 +445,7 @@ impl QueryContext {
             security: input.security,
             budget: input.budget,
             cancellation: input.cancellation,
+            resource_budget,
             snapshot_lease: None,
         })
     }
@@ -553,6 +610,11 @@ impl QueryContext {
     #[must_use]
     pub const fn budget(&self) -> QueryBudget {
         self.budget
+    }
+    /// Shared process ledger for bounded query allocations.
+    #[must_use]
+    pub const fn resource_budget(&self) -> &ProcessMemoryBudget {
+        &self.resource_budget
     }
     /// Shared cancellation token.
     #[must_use]
@@ -1072,6 +1134,22 @@ mod tests {
         assert_eq!(
             QueryBudgetLimits::new(0, 1, 1).err(),
             Some(QueryBudgetError::ZeroLimit(BudgetDimension::Candidates))
+        );
+        assert_eq!(
+            QueryBudgetLimits::new(MAX_QUERY_CANDIDATES + 1, 1, 1).err(),
+            Some(QueryBudgetError::ExceedsAbsoluteMaximum {
+                dimension: BudgetDimension::Candidates,
+                requested: MAX_QUERY_CANDIDATES + 1,
+                maximum: MAX_QUERY_CANDIDATES,
+            })
+        );
+        assert!(
+            QueryBudgetLimits::new(
+                MAX_QUERY_CANDIDATES,
+                MAX_QUERY_WORK_UNITS,
+                MAX_QUERY_RESULTS,
+            )
+            .is_ok()
         );
         let limits = value!(QueryBudgetLimits::new(5, 20, 10));
         assert_eq!(

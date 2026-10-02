@@ -173,6 +173,8 @@ pub enum ContextPrecedenceError {
     UnknownLayer { layer_id: LayerId },
     /// Assertions from different Perspective/Epistemic partitions have no shared rank.
     DifferentPartition,
+    /// The process index-memory admission budget was exhausted while building a precedence cache.
+    ResourceBudgetExceeded,
 }
 
 impl fmt::Display for ContextPrecedenceError {
@@ -191,6 +193,9 @@ impl fmt::Display for ContextPrecedenceError {
             Self::DifferentPartition => formatter.write_str(
                 "Perspective/Epistemic partitions are separate and have no ContextPrecedence comparison",
             ),
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("context precedence index exceeded the process index-memory budget")
+            }
         }
     }
 }

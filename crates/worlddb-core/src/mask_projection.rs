@@ -784,8 +784,9 @@ mod tests {
             assertion: assertion.clone(),
             source_history_space_id: root,
             query_history_space_id: child,
-            selected_layer_ids: [layer].into_iter().collect(),
+            selected_layer_ids: std::sync::Arc::new([layer].into_iter().collect()),
             precedence,
+            _memory_reservation: None,
         };
         Ok(Fixture {
             catalog,

@@ -1,12 +1,14 @@
 //! Index-free assertion candidate oracle for slow reference-model queries.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
+use std::mem::size_of;
+use std::sync::Arc;
 
 use crate::archive::{ArchiveState, ArchiveTargetRef};
 use crate::archive_projection::{ArchiveHistoryReferenceModel, ArchiveProjectionError};
 use crate::assertion_point_index::{
-    AssertionIndexHit, AssertionPointHistoryIndex, AssertionPointIndexError,
+    AssertionIndexHit, AssertionPointHistoryIndex, AssertionPointIndexError, AssertionPointQuery,
 };
 use crate::assertion_projection::{AssertionLifecycleProjection, AssertionProjectionError};
 use crate::assertions::{Assertion, AssertionRetraction, AssertionValidityClosure};
@@ -15,8 +17,9 @@ use crate::context_precedence::{ContextPrecedence, ContextPrecedenceError};
 use crate::history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
 use crate::ids::{AssertionId, HistorySpaceId, PrincipalId, Revision};
 use crate::layers::{LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
-use crate::query_context::{QueryContext, WorldTimeSelector};
+use crate::query_context::{BudgetDimension, QueryContext, WorldTimeSelector};
 use crate::record_refs::RecordRef;
+use crate::resource_profile::{MemoryReservation, ProcessMemoryBudget, ResourceClass};
 use crate::security::{
     AuthorizationDecision, Capability, FieldSelector, PolicyTarget, SecurityPolicySnapshot,
 };
@@ -26,7 +29,7 @@ use crate::temporal::{RecordedAsOf, WorldTime};
 #[derive(Clone, Debug)]
 pub enum AssertionHistoryRecord {
     /// An immutable assertion payload.
-    Assertion(Box<Assertion>),
+    Assertion(Arc<Assertion>),
     /// A world-time validity closure for a prior assertion.
     ValidityClosure(AssertionValidityClosure),
     /// A transaction-time retraction for a prior assertion.
@@ -37,7 +40,7 @@ impl AssertionHistoryRecord {
     /// Wraps an assertion payload for storage in a HistorySpace record batch.
     #[must_use]
     pub fn from_assertion(value: Assertion) -> Self {
-        Self::Assertion(Box::new(value))
+        Self::Assertion(Arc::new(value))
     }
 
     fn created_revision(&self) -> Revision {
@@ -88,8 +91,9 @@ pub struct AssertionCandidate {
     pub(crate) assertion: Assertion,
     pub(crate) source_history_space_id: HistorySpaceId,
     pub(crate) query_history_space_id: HistorySpaceId,
-    pub(crate) selected_layer_ids: BTreeSet<crate::ids::LayerId>,
+    pub(crate) selected_layer_ids: Arc<BTreeSet<crate::ids::LayerId>>,
     pub(crate) precedence: ContextPrecedence,
+    pub(crate) _memory_reservation: Option<MemoryReservation>,
 }
 
 /// Coordinates for one authorized subject/Predicate point lookup, shared by the
@@ -108,6 +112,23 @@ impl AssertionPointCandidateFilter {
         Self {
             subject,
             predicate_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct CandidateScanLimits {
+    candidate_limit: Option<u64>,
+    work_unit_limit: Option<u64>,
+    memory_budget: Option<ProcessMemoryBudget>,
+}
+
+impl CandidateScanLimits {
+    fn from_context(context: &QueryContext) -> Self {
+        Self {
+            candidate_limit: Some(context.budget().max_candidates().get()),
+            work_unit_limit: Some(context.budget().max_work_units().get()),
+            memory_budget: Some(context.resource_budget().clone()),
         }
     }
 }
@@ -162,7 +183,15 @@ pub fn full_scan_assertion_candidates(
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
-    full_scan_assertion_candidates_with_security(history, archive, query, layers, None, None)
+    full_scan_assertion_candidates_with_security(
+        history,
+        archive,
+        query,
+        layers,
+        None,
+        None,
+        CandidateScanLimits::default(),
+    )
 }
 
 /// Full assertion scan with policy filtering before candidate construction.
@@ -201,6 +230,7 @@ pub fn full_scan_authorized_assertion_candidates(
         layers,
         Some((policy, context.security().principal_id())),
         None,
+        CandidateScanLimits::from_context(context),
     )
 }
 
@@ -232,6 +262,7 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
         layers,
         Some((policy, context.security().principal_id())),
         Some(point_filter),
+        CandidateScanLimits::from_context(context),
     )
 }
 
@@ -243,134 +274,192 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
 pub(crate) fn indexed_authorized_assertion_candidates(
     archive: &ArchiveHistoryReferenceModel,
     index: &AssertionPointHistoryIndex,
-    hits: &[AssertionIndexHit<'_>],
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
     security: AssertionCandidateSecurityContext<'_>,
     point_filter: AssertionPointCandidateFilter,
-) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
+) -> Result<Result<Vec<AssertionCandidate>, CandidateScanError>, AssertionPointIndexError> {
     let AssertionCandidateSecurityContext { policy, context } = security;
-    validate_authorized_query_context(query, context, layers)?;
+    if let Err(error) = validate_authorized_query_context(query, context, layers) {
+        return Ok(Err(error));
+    }
     if policy.authorize(
         context.security().principal_id(),
         Capability::QueryResolve,
         PolicyTarget::default(),
     ) != AuthorizationDecision::Allow
     {
-        return Ok(Vec::new());
+        return Ok(Ok(Vec::new()));
     }
 
-    let selected_layer_ids = layers
-        .resolve(&query.layer_selection)?
-        .as_slice()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let selected_layer_ids = match layers.resolve(&query.layer_selection) {
+        Ok(selected) => Arc::new(selected.as_slice().iter().copied().collect::<BTreeSet<_>>()),
+        Err(error) => return Ok(Err(error.into())),
+    };
     let mut seen_assertions = BTreeSet::new();
-    let mut candidates = Vec::with_capacity(hits.len());
-    for hit in hits {
-        let assertion = hit.assertion();
-        let owner_history_space_id = hit.owner_history_space_id();
-        if hit.recorded_revision() != assertion.created_revision() {
-            return Err(CandidateScanError::RecordRevisionMismatch {
-                owner_history_space_id,
-                stored_revision: hit.recorded_revision(),
-                record_revision: assertion.created_revision(),
-            });
-        }
-        if assertion.context().history_space_id() != owner_history_space_id {
-            return Err(CandidateScanError::ContextHistorySpaceMismatch {
-                assertion_id: assertion.id(),
-                owner_history_space_id,
-                context_history_space_id: assertion.context().history_space_id(),
-            });
-        }
-        if assertion.subject() != point_filter.subject
-            || assertion.predicate_id() != point_filter.predicate_id
-        {
-            return Err(CandidateScanError::Index(
-                AssertionPointIndexError::IndexHitMismatch,
-            ));
-        }
-        if !seen_assertions.insert(assertion.id()) {
-            return Err(CandidateScanError::Index(
-                AssertionPointIndexError::DuplicateAssertionId(assertion.id()),
-            ));
-        }
-        if !assertion_candidate_is_authorized(
-            policy,
-            context.security().principal_id(),
-            owner_history_space_id,
-            assertion,
-        ) {
-            continue;
-        }
-        let record_context = assertion.context();
-        if record_context.perspective_scope() != query.perspective_scope
-            || record_context.epistemic_mode() != query.epistemic_mode
-            || !selected_layer_ids.contains(&record_context.layer_id())
-        {
-            return Err(CandidateScanError::Index(
-                AssertionPointIndexError::IndexHitMismatch,
-            ));
-        }
-        let archive_target = ArchiveTargetRef::Assertion(assertion.id());
-        let archive_record = archive.target_record(archive_target).ok_or(
-            CandidateScanError::MissingArchiveInventoryTarget {
-                assertion_id: assertion.id(),
-            },
-        )?;
-        if archive_record.created_revision() != assertion.created_revision() {
-            return Err(CandidateScanError::ArchiveTargetRevisionMismatch {
-                assertion_id: assertion.id(),
-                assertion_revision: assertion.created_revision(),
-                archive_target_revision: archive_record.created_revision(),
-            });
-        }
-        if archive.state_at(archive_target, query.recorded_as_of)? != ArchiveState::Unarchived {
-            continue;
-        }
-        let precedence = ContextPrecedence::for_context(
+    let mut candidates = Vec::new();
+    let mut authorized_candidate_count = 0_u64;
+    let candidate_limit = context.budget().max_candidates().get();
+    for layer_id in selected_layer_ids.iter().copied() {
+        let query_context = match ContextKey::new(
             query.history_space_id,
-            owner_history_space_id,
-            record_context.layer_id(),
-            index.catalog(),
-            layers,
-        )?;
-        candidates.push(AssertionCandidate {
-            assertion: assertion.clone(),
-            source_history_space_id: owner_history_space_id,
-            query_history_space_id: query.history_space_id,
-            selected_layer_ids: selected_layer_ids.clone(),
-            precedence,
-        });
+            layer_id,
+            query.perspective_scope,
+            query.epistemic_mode,
+        ) {
+            Ok(context) => context,
+            Err(error) => return Ok(Err(error.into())),
+        };
+        let point_query = AssertionPointQuery::new(
+            query_context,
+            point_filter.subject,
+            point_filter.predicate_id,
+            query.recorded_as_of.revision(),
+        );
+        match index.try_for_each_point_hit(point_query, |hit: AssertionIndexHit<'_>| {
+            let assertion = hit.assertion();
+            let owner_history_space_id = hit.owner_history_space_id();
+
+            // Authorization precedes validation, accounting, and allocation so
+            // hidden index entries cannot affect caller-visible budgets/errors.
+            if !assertion_candidate_is_authorized(
+                policy,
+                context.security().principal_id(),
+                owner_history_space_id,
+                assertion,
+            ) {
+                return Ok(());
+            }
+            if hit.recorded_revision() != assertion.created_revision() {
+                return Err(CandidateScanError::RecordRevisionMismatch {
+                    owner_history_space_id,
+                    stored_revision: hit.recorded_revision(),
+                    record_revision: assertion.created_revision(),
+                });
+            }
+            if assertion.context().history_space_id() != owner_history_space_id {
+                return Err(CandidateScanError::ContextHistorySpaceMismatch {
+                    assertion_id: assertion.id(),
+                    owner_history_space_id,
+                    context_history_space_id: assertion.context().history_space_id(),
+                });
+            }
+            if assertion.subject() != point_filter.subject
+                || assertion.predicate_id() != point_filter.predicate_id
+            {
+                return Err(CandidateScanError::Index(
+                    AssertionPointIndexError::IndexHitMismatch,
+                ));
+            }
+            let record_context = assertion.context();
+            if record_context.perspective_scope() != query.perspective_scope
+                || record_context.epistemic_mode() != query.epistemic_mode
+                || !selected_layer_ids.contains(&record_context.layer_id())
+            {
+                return Err(CandidateScanError::Index(
+                    AssertionPointIndexError::IndexHitMismatch,
+                ));
+            }
+            if seen_assertions.contains(&assertion.id()) {
+                return Err(CandidateScanError::Index(
+                    AssertionPointIndexError::DuplicateAssertionId(assertion.id()),
+                ));
+            }
+            if authorized_candidate_count >= candidate_limit {
+                return Err(CandidateScanError::BudgetExceeded(
+                    BudgetDimension::Candidates,
+                ));
+            }
+            let memory_reservation =
+                reserve_candidate_memory(Some(context.resource_budget()), assertion)?;
+            seen_assertions.insert(assertion.id());
+            authorized_candidate_count += 1;
+
+            let archive_target = ArchiveTargetRef::Assertion(assertion.id());
+            let archive_record = archive.target_record(archive_target).ok_or(
+                CandidateScanError::MissingArchiveInventoryTarget {
+                    assertion_id: assertion.id(),
+                },
+            )?;
+            if archive_record.created_revision() != assertion.created_revision() {
+                return Err(CandidateScanError::ArchiveTargetRevisionMismatch {
+                    assertion_id: assertion.id(),
+                    assertion_revision: assertion.created_revision(),
+                    archive_target_revision: archive_record.created_revision(),
+                });
+            }
+            if archive.state_at(archive_target, query.recorded_as_of)? != ArchiveState::Unarchived {
+                return Ok(());
+            }
+            let precedence = ContextPrecedence::for_context(
+                query.history_space_id,
+                owner_history_space_id,
+                record_context.layer_id(),
+                index.catalog(),
+                layers,
+            )?;
+            candidates
+                .try_reserve(1)
+                .map_err(|_| CandidateScanError::AllocationFailed)?;
+            candidates.push(AssertionCandidate {
+                assertion: assertion.clone(),
+                source_history_space_id: owner_history_space_id,
+                query_history_space_id: query.history_space_id,
+                selected_layer_ids: Arc::clone(&selected_layer_ids),
+                precedence,
+                _memory_reservation: memory_reservation,
+            });
+            Ok(())
+        }) {
+            Err(error) => return Err(error),
+            Ok(Err(error)) => return Ok(Err(error)),
+            Ok(Ok(())) => {}
+        }
     }
 
     let assertion_ids = candidates
         .iter()
         .map(|candidate| candidate.assertion.id())
         .collect::<BTreeSet<_>>();
-    let (closures, retractions) = index.lifecycle_for_assertions(
+    let (closures, retractions) = match index.lifecycle_for_assertions(
         query.history_space_id,
         query.recorded_as_of.revision(),
         &assertion_ids,
-    )?;
-    let lifecycle = AssertionLifecycleProjection::new(
+        context.budget().max_work_units().get(),
+    ) {
+        Ok(lifecycle) => lifecycle,
+        Err(AssertionPointIndexError::LifecycleBudgetExceeded) => {
+            return Ok(Err(CandidateScanError::BudgetExceeded(
+                BudgetDimension::WorkUnits,
+            )));
+        }
+        Err(AssertionPointIndexError::AllocationFailed) => {
+            return Ok(Err(CandidateScanError::AllocationFailed));
+        }
+        Err(error) => return Ok(Err(CandidateScanError::Index(error))),
+    };
+    let lifecycle = match AssertionLifecycleProjection::new(
         candidates
             .iter()
             .map(|candidate| candidate.assertion.clone())
             .collect(),
         closures,
         retractions,
-    )?;
-    let active_ids = lifecycle
-        .candidates(query.recorded_as_of, query.world_time)?
+    ) {
+        Ok(lifecycle) => lifecycle,
+        Err(error) => return Ok(Err(error.into())),
+    };
+    let active = match lifecycle.candidates(query.recorded_as_of, query.world_time) {
+        Ok(active) => active,
+        Err(error) => return Ok(Err(error.into())),
+    };
+    let active_ids = active
         .into_iter()
         .map(Assertion::id)
         .collect::<BTreeSet<_>>();
     candidates.retain(|candidate| active_ids.contains(&candidate.assertion.id()));
     candidates.sort_by_key(|candidate| candidate.assertion.id());
-    Ok(candidates)
+    Ok(Ok(candidates))
 }
 
 fn validate_authorized_query_context(
@@ -399,6 +488,7 @@ fn full_scan_assertion_candidates_with_security(
     layers: &LayerSchemaSnapshot,
     security: Option<(&SecurityPolicySnapshot, PrincipalId)>,
     point_filter: Option<AssertionPointCandidateFilter>,
+    limits: CandidateScanLimits,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let selected_layers = layers.resolve(&query.layer_selection)?;
     let query_layer = *selected_layers
@@ -411,18 +501,23 @@ fn full_scan_assertion_candidates_with_security(
         query.perspective_scope,
         query.epistemic_mode,
     )?;
-    let selected_layers = selected_layers
-        .as_slice()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    let selected_layers = Arc::new(
+        selected_layers
+            .as_slice()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+    );
 
     let mut assertions = Vec::new();
     let mut closures = Vec::new();
     let mut retractions = Vec::new();
-    let mut source_spaces = BTreeMap::new();
+    let mut source_spaces = HashMap::new();
+    let mut candidate_reservations = HashMap::new();
+    let mut authorized_candidate_count = 0_u64;
+    let mut lifecycle_work_units = 0_u64;
     for (stored_revision, owner_history_space_id, record) in
-        history.read_at(query.history_space_id, query.recorded_as_of.revision())?
+        history.iter_at(query.history_space_id, query.recorded_as_of.revision())?
     {
         match record {
             AssertionHistoryRecord::Assertion(assertion) => {
@@ -461,46 +556,79 @@ fn full_scan_assertion_candidates_with_security(
                     && assertion.context().epistemic_mode() == query.epistemic_mode
                     && selected_layers.contains(&assertion.context().layer_id())
                 {
+                    if let Some(limit) = limits.candidate_limit {
+                        if authorized_candidate_count >= limit {
+                            return Err(CandidateScanError::BudgetExceeded(
+                                BudgetDimension::Candidates,
+                            ));
+                        }
+                    }
+                    let memory_reservation =
+                        reserve_candidate_memory(limits.memory_budget.as_ref(), assertion)?;
+                    source_spaces
+                        .try_reserve(1)
+                        .map_err(|_| CandidateScanError::AllocationFailed)?;
+                    assertions
+                        .try_reserve(1)
+                        .map_err(|_| CandidateScanError::AllocationFailed)?;
                     source_spaces.insert(assertion.id(), owner_history_space_id);
+                    if let Some(reservation) = memory_reservation {
+                        candidate_reservations.insert(assertion.id(), reservation);
+                    }
                     assertions.push((**assertion).clone());
+                    authorized_candidate_count = authorized_candidate_count.saturating_add(1);
                 }
             }
             AssertionHistoryRecord::ValidityClosure(closure) => {
                 if !source_spaces.contains_key(&closure.assertion_id()) {
                     continue;
                 }
+                if limits
+                    .work_unit_limit
+                    .is_some_and(|limit| lifecycle_work_units >= limit)
+                {
+                    return Err(CandidateScanError::BudgetExceeded(
+                        BudgetDimension::WorkUnits,
+                    ));
+                }
                 validate_stored_record_revision(
                     owner_history_space_id,
                     stored_revision,
                     closure.created_revision(),
                 )?;
+                closures
+                    .try_reserve(1)
+                    .map_err(|_| CandidateScanError::AllocationFailed)?;
                 closures.push(*closure);
+                lifecycle_work_units = lifecycle_work_units.saturating_add(1);
             }
             AssertionHistoryRecord::Retraction(retraction) => {
                 if !source_spaces.contains_key(&retraction.assertion_id()) {
                     continue;
+                }
+                if limits
+                    .work_unit_limit
+                    .is_some_and(|limit| lifecycle_work_units >= limit)
+                {
+                    return Err(CandidateScanError::BudgetExceeded(
+                        BudgetDimension::WorkUnits,
+                    ));
                 }
                 validate_stored_record_revision(
                     owner_history_space_id,
                     stored_revision,
                     retraction.created_revision(),
                 )?;
+                retractions
+                    .try_reserve(1)
+                    .map_err(|_| CandidateScanError::AllocationFailed)?;
                 retractions.push(retraction.clone());
+                lifecycle_work_units = lifecycle_work_units.saturating_add(1);
             }
         }
     }
 
     let lifecycle = AssertionLifecycleProjection::new(assertions, closures, retractions)?;
-    let ordinary_targets = if point_filter.is_none() {
-        Some(
-            archive
-                .ordinary_targets_at(query.recorded_as_of)?
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-        )
-    } else {
-        None
-    };
     for assertion in lifecycle.assertions() {
         let target = ArchiveTargetRef::Assertion(assertion.id());
         let archive_record = archive.target_record(target).ok_or(
@@ -521,10 +649,8 @@ fn full_scan_assertion_candidates_with_security(
     for assertion in lifecycle.candidates(query.recorded_as_of, query.world_time)? {
         let context = assertion.context();
         let target = ArchiveTargetRef::Assertion(assertion.id());
-        let is_ordinary = match &ordinary_targets {
-            Some(targets) => targets.contains(&target),
-            None => archive.state_at(target, query.recorded_as_of)? == ArchiveState::Unarchived,
-        };
+        let is_ordinary =
+            archive.state_at(target, query.recorded_as_of)? == ArchiveState::Unarchived;
         if context.perspective_scope() != query.perspective_scope
             || context.epistemic_mode() != query.epistemic_mode
             || !selected_layers.contains(&context.layer_id())
@@ -544,16 +670,54 @@ fn full_scan_assertion_candidates_with_security(
             history.catalog(),
             layers,
         )?;
+        candidates
+            .try_reserve(1)
+            .map_err(|_| CandidateScanError::AllocationFailed)?;
         candidates.push(AssertionCandidate {
             assertion: assertion.clone(),
             source_history_space_id,
             query_history_space_id: query.history_space_id,
-            selected_layer_ids: selected_layers.clone(),
+            selected_layer_ids: Arc::clone(&selected_layers),
             precedence,
+            _memory_reservation: candidate_reservations.remove(&assertion.id()),
         });
     }
     candidates.sort_by_key(|candidate| candidate.assertion.id());
     Ok(candidates)
+}
+
+fn reserve_candidate_memory(
+    budget: Option<&ProcessMemoryBudget>,
+    assertion: &Assertion,
+) -> Result<Option<MemoryReservation>, CandidateScanError> {
+    let Some(budget) = budget else {
+        return Ok(None);
+    };
+    let dynamic_value_bytes = match assertion.value() {
+        crate::values::Value::String(value) => value.len(),
+        crate::values::Value::Symbol(value) => value.as_str().len(),
+        crate::values::Value::Bytes(value) => value.as_slice().len(),
+        crate::values::Value::Bool(_)
+        | crate::values::Value::Int(_)
+        | crate::values::Value::UInt(_)
+        | crate::values::Value::Decimal(_)
+        | crate::values::Value::Entity(_)
+        | crate::values::Value::Time(_)
+        | crate::values::Value::Duration(_) => 0,
+    };
+    // Point projection keeps a candidate and a lifecycle copy alive together.
+    // Include both owned values plus map/vector node overhead in the admission estimate.
+    let bytes = u64::try_from(
+        size_of::<AssertionCandidate>()
+            .saturating_add(size_of::<Assertion>().saturating_mul(2))
+            .saturating_add(dynamic_value_bytes.saturating_mul(2))
+            .saturating_add(128),
+    )
+    .map_err(|_| CandidateScanError::ResourceBudgetExceeded)?;
+    budget
+        .reserve(ResourceClass::Query, bytes)
+        .map(Some)
+        .map_err(|_| CandidateScanError::ResourceBudgetExceeded)
 }
 
 fn validate_stored_record_revision(
@@ -628,6 +792,12 @@ pub enum CandidateScanError {
     EmptyLayerSelection,
     /// Query arguments disagree with one or more validated QueryContext pins.
     QueryContextMismatch,
+    /// An authorized candidate or allocation exceeded the query's finite budget.
+    BudgetExceeded(BudgetDimension),
+    /// A candidate buffer could not reserve its next bounded element.
+    AllocationFailed,
+    /// The shared process query-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
     /// The typed point index reported an invalid or inconsistent result.
     Index(AssertionPointIndexError),
     /// The HistorySpace record owner and assertion context disagree.
@@ -707,6 +877,18 @@ impl fmt::Display for CandidateScanError {
             Self::EmptyLayerSelection => formatter.write_str("candidate query selected no layers"),
             Self::QueryContextMismatch => {
                 formatter.write_str("candidate request differs from its query context")
+            }
+            Self::BudgetExceeded(dimension) => {
+                write!(
+                    formatter,
+                    "candidate scan exceeded the {dimension:?} budget"
+                )
+            }
+            Self::AllocationFailed => {
+                formatter.write_str("candidate scan could not reserve bounded memory")
+            }
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("candidate scan exceeded the process query-memory budget")
             }
             Self::Index(error) => write!(formatter, "candidate point index failed: {error}"),
             Self::ContextHistorySpaceMismatch {

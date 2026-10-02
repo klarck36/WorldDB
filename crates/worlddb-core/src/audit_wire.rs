@@ -119,7 +119,7 @@ fn decode_fields<'a>(
     payload: &'a [u8],
     allowed: &[u32],
 ) -> Result<Vec<(u32, &'a [u8])>, AuditCodecError> {
-    decode_fields_with_limits(kind, payload, allowed, &DecoderLimits::DEFAULT)
+    decode_fields_with_limits(kind, payload, allowed, &DecoderLimits::process_default())
 }
 
 fn decode_fields_with_limits<'a>(
@@ -341,7 +341,7 @@ pub fn encode_audit_record(value: &AuditRecord) -> Result<Vec<u8>, AuditCodecErr
 
 /// Decodes exactly one canonical safe audit record frame.
 pub fn decode_audit_record(bytes: &[u8]) -> Result<AuditRecord, AuditCodecError> {
-    decode_audit_record_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_audit_record_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 /// Decodes one canonical safe audit record under an explicit resource policy.
@@ -431,7 +431,7 @@ pub fn encode_raw_read_attempt(value: &RawReadAttempt) -> Result<Vec<u8>, AuditC
 
 /// Decodes exactly one canonical raw-read-attempt frame.
 pub fn decode_raw_read_attempt(bytes: &[u8]) -> Result<RawReadAttempt, AuditCodecError> {
-    decode_raw_read_attempt_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_raw_read_attempt_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 /// Decodes one canonical raw-read attempt under an explicit resource policy.

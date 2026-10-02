@@ -11,6 +11,7 @@ use crate::reference_query::{
     ExplainStage, HistoricalQueryBinding, RawHistoryError, RawHistoryRow, ReferenceExplain,
     ResolvedView, full_scan_authorized_raw_history,
 };
+use crate::resource_profile::MemoryReservation;
 use crate::security::{SecurityPolicyHistory, SecurityPolicyHistoryError};
 
 /// Query value whose contents are owned and tied to one immutable data/schema/security view.
@@ -31,6 +32,7 @@ pub struct OwnedQueryResult<T: 'static> {
     current_security_epoch: SecurityEpoch,
     evaluated_security_epoch: SecurityEpoch,
     value: T,
+    _memory_reservations: Vec<MemoryReservation>,
 }
 
 impl<T: 'static> OwnedQueryResult<T> {
@@ -39,6 +41,15 @@ impl<T: 'static> OwnedQueryResult<T> {
         policies: &SecurityPolicyHistory,
         value: T,
     ) -> Result<Self, SecurityPolicyHistoryError> {
+        Self::bind_with_memory_reservations(context, policies, value, Vec::new())
+    }
+
+    pub(crate) fn bind_with_memory_reservations(
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+        value: T,
+        memory_reservations: Vec<MemoryReservation>,
+    ) -> Result<Self, SecurityPolicyHistoryError> {
         let security = policies.resolve(context)?;
         Ok(Self {
             query_context_binding: context.binding(),
@@ -46,6 +57,7 @@ impl<T: 'static> OwnedQueryResult<T> {
             current_security_epoch: security.current_epoch(),
             evaluated_security_epoch: security.evaluated_epoch(),
             value,
+            _memory_reservations: memory_reservations,
         })
     }
 

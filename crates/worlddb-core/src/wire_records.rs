@@ -350,7 +350,7 @@ pub fn encode_record_with_flags(
 
 /// Verifies and decodes one known, closed WorldDB record frame.
 pub fn decode_record(bytes: &[u8]) -> Result<DecodedRecord, RecordCodecError> {
-    decode_record_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_record_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 /// Decodes one known record under an explicit resource policy.
@@ -811,7 +811,7 @@ pub(super) fn decode_fields<'a>(
     payload: &'a [u8],
     allowed: &[u32],
 ) -> Result<Vec<(u32, &'a [u8])>, RecordCodecError> {
-    decode_fields_with_limits(kind, payload, allowed, &DecoderLimits::DEFAULT)
+    decode_fields_with_limits(kind, payload, allowed, &DecoderLimits::process_default())
 }
 
 pub(super) fn decode_fields_with_limits<'a>(
@@ -871,7 +871,7 @@ pub(super) fn encode_array(items: &[Vec<u8>]) -> Vec<u8> {
 
 #[cfg(test)]
 pub(super) fn decode_array(bytes: &[u8]) -> Result<Vec<&[u8]>, WireError> {
-    decode_array_with_limits(bytes, &DecoderLimits::DEFAULT)
+    decode_array_with_limits(bytes, &DecoderLimits::process_default())
 }
 
 pub(super) fn decode_array_with_limits<'a>(

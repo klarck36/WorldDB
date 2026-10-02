@@ -456,6 +456,7 @@ fn build_bench_data(corpus_dir: &Path) -> Result<BenchData, Box<dyn Error>> {
             }
         }
     }
+    drop(assertion_bytes);
     if page_rows.is_empty() {
         return Err(io::Error::other("selected history ancestry is empty").into());
     }
@@ -488,6 +489,7 @@ fn build_bench_data(corpus_dir: &Path) -> Result<BenchData, Box<dyn Error>> {
             return Err(io::Error::other("mask records do not match assertion flags").into());
         }
     }
+    drop(expected_mask_pairs);
 
     for numeric_id in 1..=HISTORY_SPACE_COUNT {
         if numeric_id > 1 {
@@ -509,6 +511,7 @@ fn build_bench_data(corpus_dir: &Path) -> Result<BenchData, Box<dyn Error>> {
             return Err(io::Error::other("normalized history revision mismatch").into());
         }
     }
+    drop(records_by_space);
     if page_rows.len() < 64_000 {
         return Err(io::Error::other(
             "selected HistorySpace does not reach the 1,000-page workload",

@@ -2,12 +2,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use crate::assertions::{Assertion, AssertionRetraction, AssertionValidityClosure, Subject};
 use crate::candidate_scan::AssertionHistoryRecord;
 use crate::context::{ContextKey, EpistemicMode, PerspectiveScope};
 use crate::history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
 use crate::ids::{AssertionId, HistorySpaceId, LayerId, PredicateId, Revision};
+use crate::resource_profile::{
+    MemoryReservation, ProcessMemoryBudget, ResourceClass, process_memory_budget,
+};
+
+const INDEXED_ASSERTION_ACCOUNTING_BYTES: u64 = 384;
+const INDEXED_LIFECYCLE_ACCOUNTING_BYTES: u64 = 192;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum IndexPerspective {
@@ -73,7 +80,7 @@ struct PredicateHistoryKey {
 
 #[derive(Clone, Debug)]
 struct AssertionPosting {
-    assertion: Assertion,
+    assertion: Arc<Assertion>,
     owner_history_space_id: HistorySpaceId,
     recorded_revision: Revision,
 }
@@ -93,8 +100,8 @@ pub struct AssertionIndexHit<'a> {
 impl<'a> AssertionIndexHit<'a> {
     /// Returns the immutable Assertion payload.
     #[must_use]
-    pub const fn assertion(self) -> &'a Assertion {
-        &self.posting.assertion
+    pub fn assertion(self) -> &'a Assertion {
+        self.posting.assertion.as_ref()
     }
 
     /// Returns the HistorySpace that committed the Assertion.
@@ -192,12 +199,21 @@ pub struct AssertionPointHistoryIndex {
     predicate_history: BTreeMap<PredicateHistoryKey, Vec<usize>>,
     lifecycle:
         BTreeMap<(HistorySpaceId, AssertionId), Vec<(Revision, IndexedAssertionLifecycleRecord)>>,
+    _memory_reservations: Vec<MemoryReservation>,
 }
 
 impl AssertionPointHistoryIndex {
     /// Builds local-delta postings from the index-free HistorySpace oracle.
     pub fn build(
         history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
+    ) -> Result<Self, AssertionPointIndexError> {
+        Self::build_with_memory_budget(history, process_memory_budget().clone())
+    }
+
+    /// Builds a complete generation while charging the supplied shared process ledger.
+    pub fn build_with_memory_budget(
+        history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
+        memory_budget: ProcessMemoryBudget,
     ) -> Result<Self, AssertionPointIndexError> {
         let indexed_through = history.latest_published();
         let catalog = history.catalog().clone();
@@ -209,13 +225,15 @@ impl AssertionPointHistoryIndex {
             entity_history: BTreeMap::new(),
             predicate_history: BTreeMap::new(),
             lifecycle: BTreeMap::new(),
+            _memory_reservations: Vec::new(),
         };
         let mut assertion_ids = BTreeSet::new();
+        let definitions = index.catalog.definitions().to_vec();
 
-        for definition in index.catalog.definitions() {
+        for definition in &definitions {
             let owner_history_space_id = definition.history_space_id();
             for (stored_revision, visible_owner, record) in
-                history.read_at(owner_history_space_id, indexed_through)?
+                history.iter_at(owner_history_space_id, indexed_through)?
             {
                 // Each space's read exposes its local entries and pinned ancestry.
                 // Keep only this space's local delta; each ancestor is indexed once
@@ -225,7 +243,11 @@ impl AssertionPointHistoryIndex {
                 }
                 match record {
                     AssertionHistoryRecord::Assertion(assertion) => {
-                        let assertion = (**assertion).clone();
+                        index.reserve_index_memory(
+                            &memory_budget,
+                            INDEXED_ASSERTION_ACCOUNTING_BYTES,
+                        )?;
+                        let assertion = Arc::clone(assertion);
                         let record_revision = assertion.created_revision();
                         if stored_revision != record_revision {
                             return Err(AssertionPointIndexError::StoredRevisionMismatch {
@@ -294,6 +316,10 @@ impl AssertionPointHistoryIndex {
                             .push(position);
                     }
                     AssertionHistoryRecord::ValidityClosure(closure) => {
+                        index.reserve_index_memory(
+                            &memory_budget,
+                            INDEXED_LIFECYCLE_ACCOUNTING_BYTES,
+                        )?;
                         if stored_revision != closure.created_revision() {
                             return Err(AssertionPointIndexError::StoredRevisionMismatch {
                                 owner_history_space_id,
@@ -311,6 +337,10 @@ impl AssertionPointHistoryIndex {
                             ));
                     }
                     AssertionHistoryRecord::Retraction(retraction) => {
+                        index.reserve_index_memory(
+                            &memory_budget,
+                            INDEXED_LIFECYCLE_ACCOUNTING_BYTES,
+                        )?;
                         if stored_revision != retraction.created_revision() {
                             return Err(AssertionPointIndexError::StoredRevisionMismatch {
                                 owner_history_space_id,
@@ -333,6 +363,21 @@ impl AssertionPointHistoryIndex {
         Ok(index)
     }
 
+    fn reserve_index_memory(
+        &mut self,
+        memory_budget: &ProcessMemoryBudget,
+        bytes: u64,
+    ) -> Result<(), AssertionPointIndexError> {
+        self._memory_reservations
+            .try_reserve(1)
+            .map_err(|_| AssertionPointIndexError::AllocationFailed)?;
+        let reservation = memory_budget
+            .reserve(ResourceClass::Index, bytes)
+            .map_err(|_| AssertionPointIndexError::ResourceBudgetExceeded)?;
+        self._memory_reservations.push(reservation);
+        Ok(())
+    }
+
     /// Returns the inclusive revision through which this generation is complete.
     #[must_use]
     pub const fn indexed_through(&self) -> Revision {
@@ -350,23 +395,59 @@ impl AssertionPointHistoryIndex {
         &self,
         query: AssertionPointQuery,
     ) -> Result<Vec<AssertionIndexHit<'_>>, AssertionPointIndexError> {
+        let mut hits = Vec::new();
+        let visited = self.try_for_each_point_hit(query, |hit| {
+            hits.push(hit);
+            Ok::<(), std::convert::Infallible>(())
+        })?;
+        if let Err(never) = visited {
+            match never {}
+        }
+        hits.sort_unstable_by_key(|hit| {
+            (hit.posting.recorded_revision, hit.posting.assertion.id())
+        });
+        Ok(hits)
+    }
+
+    /// Visits point hits without allocating an intermediate hit vector.
+    ///
+    /// The inner result is the visitor's error; the outer result reports an
+    /// invalid index query. Returning from the visitor with an error stops the
+    /// scan immediately.
+    pub(crate) fn try_for_each_point_hit<'a, E>(
+        &'a self,
+        query: AssertionPointQuery,
+        mut visitor: impl FnMut(AssertionIndexHit<'a>) -> Result<(), E>,
+    ) -> Result<Result<(), E>, AssertionPointIndexError> {
         let visible_spaces = self.visible_spaces(query.context.history_space_id(), query.as_of)?;
         let perspective = IndexPerspective::from(query.context.perspective_scope());
         let epistemic_mode = IndexEpistemicMode::from(query.context.epistemic_mode());
-        let hits = collect_hits(
-            &self.postings,
-            &self.point,
-            visible_spaces,
-            |owner_history_space_id| PointKey {
+
+        for (owner_history_space_id, cutoff) in visible_spaces {
+            let key = PointKey {
                 owner_history_space_id,
                 layer_id: query.context.layer_id(),
                 perspective,
                 epistemic_mode,
                 subject: query.subject,
                 predicate_id: query.predicate_id,
-            },
-        );
-        Ok(hits)
+            };
+            let Some(positions) = self.point.get(&key) else {
+                continue;
+            };
+            for position in positions {
+                let Some(posting) = self.postings.get(*position) else {
+                    // A malformed internal position fails closed as a miss.
+                    continue;
+                };
+                if posting.recorded_revision <= cutoff {
+                    if let Err(error) = visitor(AssertionIndexHit { posting }) {
+                        return Ok(Err(error));
+                    }
+                }
+            }
+        }
+        Ok(Ok(()))
     }
 
     /// Finds all Assertions for one subject through `as_of` in ancestry order.
@@ -420,11 +501,13 @@ impl AssertionPointHistoryIndex {
         history_space_id: HistorySpaceId,
         as_of: Revision,
         assertion_ids: &BTreeSet<AssertionId>,
+        max_records: u64,
     ) -> Result<(Vec<AssertionValidityClosure>, Vec<AssertionRetraction>), AssertionPointIndexError>
     {
         let visible_spaces = self.visible_spaces(history_space_id, as_of)?;
         let mut closures = Vec::new();
         let mut retractions = Vec::new();
+        let mut records_seen = 0_u64;
         for (owner_history_space_id, cutoff) in visible_spaces {
             for assertion_id in assertion_ids {
                 let Some(records) = self.lifecycle.get(&(owner_history_space_id, *assertion_id))
@@ -437,10 +520,24 @@ impl AssertionPointHistoryIndex {
                     }
                     match record {
                         IndexedAssertionLifecycleRecord::ValidityClosure(closure) => {
+                            if records_seen >= max_records {
+                                return Err(AssertionPointIndexError::LifecycleBudgetExceeded);
+                            }
+                            closures
+                                .try_reserve(1)
+                                .map_err(|_| AssertionPointIndexError::AllocationFailed)?;
                             closures.push(*closure);
+                            records_seen = records_seen.saturating_add(1);
                         }
                         IndexedAssertionLifecycleRecord::Retraction(retraction) => {
+                            if records_seen >= max_records {
+                                return Err(AssertionPointIndexError::LifecycleBudgetExceeded);
+                            }
+                            retractions
+                                .try_reserve(1)
+                                .map_err(|_| AssertionPointIndexError::AllocationFailed)?;
                             retractions.push(retraction.clone());
+                            records_seen = records_seen.saturating_add(1);
                         }
                     }
                 }
@@ -550,6 +647,12 @@ pub enum AssertionPointIndexError {
         requested: Revision,
         indexed_through: Revision,
     },
+    /// Authorized lifecycle rows exceeded the query work-unit allowance.
+    LifecycleBudgetExceeded,
+    /// A bounded lifecycle result could not reserve its next element.
+    AllocationFailed,
+    /// The shared process index-memory admission budget was exhausted.
+    ResourceBudgetExceeded,
     /// The reference model rejected a source read.
     History(HistorySpaceModelError),
 }
@@ -598,6 +701,15 @@ impl fmt::Display for AssertionPointIndexError {
                 formatter,
                 "read revision {requested} is newer than index coverage {indexed_through}"
             ),
+            Self::LifecycleBudgetExceeded => {
+                formatter.write_str("Assertion lifecycle work-unit budget exceeded")
+            }
+            Self::AllocationFailed => {
+                formatter.write_str("Assertion lifecycle result could not reserve memory")
+            }
+            Self::ResourceBudgetExceeded => {
+                formatter.write_str("Assertion index exceeded the process index-memory budget")
+            }
             Self::History(error) => write!(formatter, "invalid index source history: {error}"),
         }
     }
@@ -634,6 +746,7 @@ mod tests {
         Context(crate::context::ContextError),
         History(crate::history_model::HistorySpaceModelError),
         Temporal(TemporalError),
+        ResourceBudget(crate::ResourceBudgetError),
         Index(AssertionPointIndexError),
     }
 
@@ -646,6 +759,7 @@ mod tests {
                 Self::Context(error) => write!(formatter, "invalid test context: {error}"),
                 Self::History(error) => write!(formatter, "invalid test history: {error}"),
                 Self::Temporal(error) => write!(formatter, "invalid test time: {error}"),
+                Self::ResourceBudget(error) => write!(formatter, "invalid test budget: {error}"),
                 Self::Index(error) => write!(formatter, "invalid test index: {error}"),
             }
         }
@@ -669,6 +783,7 @@ mod tests {
     test_error_from!(crate::context::ContextError, Context);
     test_error_from!(crate::history_model::HistorySpaceModelError, History);
     test_error_from!(TemporalError, Temporal);
+    test_error_from!(crate::ResourceBudgetError, ResourceBudget);
     test_error_from!(AssertionPointIndexError, Index);
 
     fn id<T: DomainId>(tail: u8) -> Result<T, crate::ids::IdValidationError> {
@@ -894,8 +1009,53 @@ mod tests {
             ],
         )?;
 
+        let tiny_profile = crate::ProcessResourceProfile::new(
+            1,
+            1,
+            1,
+            crate::ResourceClassLimits::new(1, 1, 1, 1, 1),
+        )?;
+        let tiny_memory = tiny_profile.memory_budget();
+        assert_eq!(
+            AssertionPointHistoryIndex::build_with_memory_budget(&history, tiny_memory.clone())
+                .err(),
+            Some(AssertionPointIndexError::ResourceBudgetExceeded)
+        );
+        assert_eq!(tiny_memory.reserved_bytes(), Ok(0));
+
         let index = AssertionPointHistoryIndex::build(&history)?;
         assert_eq!(index.indexed_through(), revision(6)?);
+
+        let source_assertion = history
+            .read_at(root, revision(6)?)?
+            .into_iter()
+            .find_map(|(_, owner, record)| match record {
+                AssertionHistoryRecord::Assertion(assertion)
+                    if owner == root && assertion.id() == root_one_assertion.id() =>
+                {
+                    Some(assertion.as_ref())
+                }
+                _ => None,
+            })
+            .ok_or(AssertionPointIndexError::UnknownHistorySpace)?;
+        let root_context = ContextKey::new(
+            root,
+            layer,
+            PerspectiveScope::World,
+            EpistemicMode::WorldState,
+        )?;
+        let indexed_assertion = index
+            .point(AssertionPointQuery::new(
+                root_context,
+                Subject::new(subject),
+                predicate,
+                revision(6)?,
+            ))?
+            .into_iter()
+            .find(|hit| hit.assertion().id() == root_one_assertion.id())
+            .ok_or(AssertionPointIndexError::IndexHitMismatch)?
+            .assertion();
+        assert!(std::ptr::eq(source_assertion, indexed_assertion));
 
         for (space, as_of) in [
             (root, revision(6)?),
