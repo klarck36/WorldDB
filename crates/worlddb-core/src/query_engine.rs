@@ -32,6 +32,10 @@ use crate::multi_value_resolution::{
     ReplacementBoundaryHistory, resolve_multi_value_overlay,
     resolve_multi_value_replace_with_trace,
 };
+use crate::query_aggregate::{
+    AggregateError, AggregateResult, AggregateSpec, ResolvedAggregateRow,
+    aggregate_visible_resolved,
+};
 use crate::query_context::{BudgetDimension, QueryContext, WorldTimeSelector};
 use crate::query_graph::{
     GraphCandidateSet, GraphError, GraphResult, GraphSpec, full_scan_authorized_graph_traversal,
@@ -176,7 +180,7 @@ impl<'a> AssertionPointRequest<'a> {
 /// How an owned result was produced. The path never changes semantic ordering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryExecutionPath {
-    /// Raw HistorySpace enumeration or a caller-approved full-scan fallback.
+    /// Full input enumeration, aggregate reduction, or a caller-approved scan fallback.
     FullScan,
     /// Compatible, complete point-index generation supplied the assertion identities.
     Indexed { generation_id: u64 },
@@ -266,6 +270,24 @@ impl ProductiveQueryEngine {
             ));
         }
         let query = full_scan_authorized_graph_traversal(candidates, spec, context, policies)?;
+        ensure_active(context)?;
+        Ok(QueryEngineOutput {
+            query,
+            path: QueryExecutionPath::FullScan,
+        })
+    }
+
+    /// Aggregates complete, already-resolved result rows bound to the current query.
+    /// Record and group-field permissions are rechecked by the M3 aggregate port;
+    /// cancellation and budget failures remain terminal and never return partial data.
+    pub fn aggregate(
+        resolved: &OwnedQueryResult<Vec<ResolvedAggregateRow>>,
+        spec: &AggregateSpec,
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+    ) -> Result<QueryEngineOutput<AggregateResult>, QueryEngineError> {
+        ensure_active(context)?;
+        let query = aggregate_visible_resolved(resolved, spec, context, policies)?;
         ensure_active(context)?;
         Ok(QueryEngineOutput {
             query,
@@ -830,6 +852,7 @@ pub enum QueryEngineError {
     QueryBinding,
     Search(QuerySearchError),
     Graph(GraphError),
+    Aggregate(AggregateError),
     Explain,
 }
 
@@ -864,6 +887,7 @@ impl fmt::Display for QueryEngineError {
             Self::QueryBinding => "query result does not match its pinned context",
             Self::Search(_) => "query search could not be completed",
             Self::Graph(_) => "query graph traversal could not be completed",
+            Self::Aggregate(_) => "query aggregation could not be completed",
             Self::Explain => "query Explain trace could not be constructed",
         })
     }
@@ -903,6 +927,12 @@ impl From<QuerySearchError> for QueryEngineError {
 impl From<GraphError> for QueryEngineError {
     fn from(error: GraphError) -> Self {
         Self::Graph(error)
+    }
+}
+
+impl From<AggregateError> for QueryEngineError {
+    fn from(error: AggregateError) -> Self {
+        Self::Aggregate(error)
     }
 }
 

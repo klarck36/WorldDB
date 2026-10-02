@@ -147,6 +147,9 @@ pub fn aggregate_visible_resolved(
     context: &QueryContext,
     policies: &SecurityPolicyHistory,
 ) -> Result<OwnedQueryResult<AggregateResult>, AggregateError> {
+    if context.cancellation().is_cancelled() {
+        return Err(AggregateError::Cancelled);
+    }
     if resolved.binding() != context.schema_binding()
         || !resolved.query_context_binding().matches(context)
     {
@@ -263,7 +266,15 @@ pub fn aggregate_visible_resolved(
             )
         }
     };
-    OwnedQueryResult::bind(context, policies, result).map_err(AggregateError::Security)
+    if context.cancellation().is_cancelled() {
+        return Err(AggregateError::Cancelled);
+    }
+    let owned =
+        OwnedQueryResult::bind(context, policies, result).map_err(AggregateError::Security)?;
+    if context.cancellation().is_cancelled() {
+        return Err(AggregateError::Cancelled);
+    }
+    Ok(owned)
 }
 
 fn record_is_visible(
@@ -380,6 +391,7 @@ mod tests {
     use crate::non_interference::{
         CursorObservation, PairedWorld, PublicFailure, PublicObservation,
     };
+    use crate::query_engine::{ProductiveQueryEngine, QueryEngineError, QueryExecutionPath};
     use crate::query_ports::OwnedQueryResult;
     use crate::query_search::tests::{fixture_with_candidate_limit, id};
     use crate::record_refs::RecordRef;
@@ -536,6 +548,101 @@ mod tests {
                 &fixture.policies,
             ),
             Err(AggregateError::BudgetExceeded)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn productive_engine_exposes_count_exists_and_grouped_count() -> Result<(), QueryEngineError> {
+        let hidden = RecordRef::Assertion(id::<crate::ids::AssertionId>(71));
+        let fixture = fixture_with_candidate_limit(Some(hidden), 10, 10);
+        let resolved = bind_rows(&fixture, true).map_err(QueryEngineError::Aggregate)?;
+
+        let count = ProductiveQueryEngine::aggregate(
+            &resolved,
+            &AggregateSpec::Count,
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        assert_eq!(count.path(), QueryExecutionPath::FullScan);
+        assert_eq!(count.query().value(), &AggregateResult::Count(2));
+
+        let exists = ProductiveQueryEngine::aggregate(
+            &resolved,
+            &AggregateSpec::Exists,
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        assert_eq!(exists.query().value(), &AggregateResult::Exists(true));
+
+        let grouped = ProductiveQueryEngine::aggregate(
+            &resolved,
+            &AggregateSpec::grouped_count(vec![fixture.selector])
+                .map_err(QueryEngineError::Aggregate)?,
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        let AggregateResult::GroupedCount(groups) = grouped.query().value() else {
+            return Err(QueryEngineError::Aggregate(
+                AggregateError::QueryBindingMismatch,
+            ));
+        };
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|group| group.count() == 1));
+
+        let empty = OwnedQueryResult::bind(&fixture.context, &fixture.policies, Vec::new())
+            .map_err(AggregateError::Security)
+            .map_err(QueryEngineError::Aggregate)?;
+        let empty_exists = ProductiveQueryEngine::aggregate(
+            &empty,
+            &AggregateSpec::Exists,
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        assert_eq!(
+            empty_exists.query().value(),
+            &AggregateResult::Exists(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn productive_aggregate_keeps_budget_and_empty_cancellation_terminal()
+    -> Result<(), QueryEngineError> {
+        let limited = fixture_with_candidate_limit(None, 10, 1);
+        let resolved = bind_rows(&limited, false).map_err(QueryEngineError::Aggregate)?;
+        assert!(matches!(
+            ProductiveQueryEngine::aggregate(
+                &resolved,
+                &AggregateSpec::Count,
+                &limited.context,
+                &limited.policies,
+            ),
+            Err(QueryEngineError::Aggregate(AggregateError::BudgetExceeded))
+        ));
+
+        let cancelled = fixture_with_candidate_limit(None, 10, 10);
+        let empty = OwnedQueryResult::bind(&cancelled.context, &cancelled.policies, Vec::new())
+            .map_err(AggregateError::Security)
+            .map_err(QueryEngineError::Aggregate)?;
+        cancelled.context.cancellation().cancel();
+        assert!(matches!(
+            ProductiveQueryEngine::aggregate(
+                &empty,
+                &AggregateSpec::Count,
+                &cancelled.context,
+                &cancelled.policies,
+            ),
+            Err(QueryEngineError::Cancelled)
+        ));
+        assert!(matches!(
+            aggregate_visible_resolved(
+                &empty,
+                &AggregateSpec::Count,
+                &cancelled.context,
+                &cancelled.policies,
+            ),
+            Err(AggregateError::Cancelled)
         ));
         Ok(())
     }
