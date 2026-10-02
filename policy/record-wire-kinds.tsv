@@ -11,7 +11,7 @@ kind_hex	record	extensibility	fields
 100a	EventKindDefinition	closed	1:event_kind_id;2:symbol;3:roles_array;4:attributes_array;5:event_time_constraint;6:lifecycle;7:created_revision
 100b	MigrationPlan	closed	1:migration_id;2:category;3:ordered_step_ids_array;4:source_schema_revision;5:source_schema_fingerprint_32;6:target_schema_revision;7:target_schema_fingerprint_32;8:transformer_version;9:max_work_units;10:max_memory_bytes;11:plan_fingerprint_32;12:schema_identity_changes_array;13:optional_calendar_shift(timeline_id,proleptic_gregorian_utc_profile,epoch_unix_nanoseconds_i128_be,years,months,days,direction)
 100c	MigrationRun	closed	1:migration_run_id;2:migration_id;3:state
-100d	MigrationStepCommitIdentity	closed	1:migration_id;2:migration_run_id;3:migration_step_id;4:operation_id
+100d	MigrationStepCommitIdentity	closed	1:migration_id;2:migration_run_id;3:migration_step_id;4:operation_id;5:optional_input_fingerprint;6:optional_guarded_plan_fingerprint;7:optional_admin_decision_fingerprint
 1101	Assertion	closed	1:assertion_id;2:context;3:subject_entity_id;4:predicate_id;5:value;6:polarity;7:assertion_validity;8:created_revision
 1102	AssertionValidityClosure	closed	1:closure_id;2:assertion_id;3:close_at_world_time;4:created_revision
 1103	AssertionRetraction	closed	1:retraction_id;2:assertion_id;3:reason;4:created_revision

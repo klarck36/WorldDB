@@ -32,8 +32,8 @@ pub use audit_wal::{
 };
 pub use backup::{
     BackupAuthenticity, BackupError, BackupMacKey, BackupProfile, BackupProgressEvent,
-    BackupVerification, ExactBackupManager, RestoreError, RestoreManager, RestoreReport,
-    verify_audit_complete_backup, verify_exact_backup,
+    BackupVerification, ExactBackupManager, MigrationRestorePointError, RestoreError,
+    RestoreManager, RestoreReport, verify_audit_complete_backup, verify_exact_backup,
 };
 pub use compaction::{
     CompactionError, CompactionManager, CompactionOutcome, ReclamationOutcome, SegmentPin,

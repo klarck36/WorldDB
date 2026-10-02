@@ -24,6 +24,8 @@ use crate::{
 
 mod restore;
 pub use restore::{RestoreError, RestoreManager, RestoreReport};
+mod migration_restore_point;
+pub use migration_restore_point::MigrationRestorePointError;
 
 const BACKUP_MANIFEST_FILE: &str = "EXACT_BACKUP";
 const BACKUP_INCOMPLETE_FILE: &str = "EXACT_BACKUP.INCOMPLETE";

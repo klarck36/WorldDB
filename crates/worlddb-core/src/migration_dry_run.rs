@@ -272,6 +272,26 @@ impl MigrationDryRunInputFingerprint {
     pub fn for_records(records: &[Vec<u8>]) -> Option<Self> {
         fingerprint_input(records)
     }
+
+    /// Fingerprints ordered batches as if their records had been concatenated.
+    #[must_use]
+    pub fn for_record_batches<'a>(
+        batches: impl Iterator<Item = &'a [Vec<u8>]> + Clone,
+    ) -> Option<Self> {
+        let record_count = batches.clone().try_fold(0_u64, |count, batch| {
+            count.checked_add(u64::try_from(batch.len()).ok()?)
+        })?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"WorldDB.MigrationDryRunInput.v1\0");
+        hasher.update(&record_count.to_be_bytes());
+        for batch in batches {
+            for record in batch {
+                hasher.update(&u64::try_from(record.len()).ok()?.to_be_bytes());
+                hasher.update(record);
+            }
+        }
+        Some(Self(*hasher.finalize().as_bytes()))
+    }
 }
 
 impl MigrationDryRunOutput {
@@ -347,6 +367,17 @@ impl MigrationDryRunUnresolvedItem {
     #[must_use]
     pub const fn source_record_fingerprint(&self) -> &[u8; 32] {
         &self.source_record_fingerprint
+    }
+
+    pub(crate) const fn offset(self, offset: u64) -> Option<Self> {
+        let Some(record_index) = self.record_index.checked_add(offset) else {
+            return None;
+        };
+        Some(Self {
+            record_index,
+            reason: self.reason,
+            source_record_fingerprint: self.source_record_fingerprint,
+        })
     }
 
     #[cfg(test)]
@@ -425,6 +456,10 @@ impl MigrationAdminDecision {
     #[must_use]
     pub fn resolution(&self) -> &MigrationItemResolution {
         &self.resolution
+    }
+
+    pub(crate) fn into_parts(self) -> (MigrationDryRunUnresolvedItem, MigrationItemResolution) {
+        (self.item, self.resolution)
     }
 }
 
@@ -656,6 +691,49 @@ impl ValidatedMigrationDecisions {
     #[must_use]
     pub fn decisions(&self) -> &[MigrationAdminDecision] {
         &self.decisions
+    }
+
+    /// Stable digest of the exact unresolved-item choices reviewed for this plan input.
+    #[must_use]
+    pub fn decision_fingerprint(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"WorldDB.MigrationAdminDecisionSet.v1\0");
+        hasher.update(self.plan_fingerprint.as_bytes());
+        hasher.update(&self.transformer_version.value().to_be_bytes());
+        hasher.update(&self.source_revision.revision().value().to_be_bytes());
+        hasher.update(&self.source_schema_fingerprint);
+        hasher.update(self.input_fingerprint.as_bytes());
+        hasher.update(
+            &u64::try_from(self.decisions.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        for decision in &self.decisions {
+            hasher.update(&decision.item.record_index.to_be_bytes());
+            hasher.update(&[match decision.item.reason {
+                MigrationDryRunUnresolvedReason::AmbiguousTargetMapping => 1,
+            }]);
+            hasher.update(&decision.item.source_record_fingerprint);
+            match &decision.resolution {
+                MigrationItemResolution::ReplaceRecord(record) => {
+                    hasher.update(&[1]);
+                    hasher.update(
+                        &u64::try_from(record.len())
+                            .unwrap_or(u64::MAX)
+                            .to_be_bytes(),
+                    );
+                    hasher.update(record);
+                }
+                MigrationItemResolution::OmitRecord => {
+                    hasher.update(&[2]);
+                }
+            }
+        }
+        *hasher.finalize().as_bytes()
+    }
+
+    pub(crate) fn into_decisions(self) -> Vec<MigrationAdminDecision> {
+        self.decisions
     }
 }
 

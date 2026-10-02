@@ -1,10 +1,12 @@
-//! Per-step execution of compatible schema migrations through ordinary OCC commits.
+//! Per-step execution of schema migrations through ordinary OCC commits.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 const OPERATION_INDEX_MEMORY_RESERVATION_BYTES: u64 = 64;
 
+use crate::audit::AuditRecord;
+use crate::commit_cancellation::CommitCancellation;
 use crate::ids::{MigrationRunId, MigrationStepId, OperationId, Revision, SchemaRevision};
 use crate::migration_transform::{MigrationTransformFingerprint, MigrationTransformer};
 use crate::revision_backend::{CancellablePublishError, RevisionBackend};
@@ -12,11 +14,14 @@ use crate::revision_history::RevisionLogError;
 use crate::transaction_flow::{OpenTransaction, TransactionBeginError};
 use crate::wire_records::{Record, RecordCodecError, decode_record_with_limits};
 use crate::{
-    DecoderLimits, MigrationCategory, MigrationDryRunInputFingerprint, MigrationPlan,
-    MigrationPlanError, MigrationRunJournalError, MigrationRunJournalSnapshot,
-    MigrationRunJournalSpec, MigrationRunJournalStep, MigrationRunJournalStepSpec,
-    MigrationRunJournalStepState, MigrationRunJournalStore, MigrationStepCommitIdentity,
-    MigrationStepTargetSchema, MigrationTransformerError,
+    AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuthorizationDecision,
+    BreakingMigrationAdminAction, Capability, DecoderLimits, MigrationAuditCommit,
+    MigrationCategory, MigrationCommitBackend, MigrationDryRunInputFingerprint,
+    MigrationItemResolution, MigrationPlan, MigrationPlanError, MigrationRunJournalError,
+    MigrationRunJournalSnapshot, MigrationRunJournalSpec, MigrationRunJournalStep,
+    MigrationRunJournalStepSpec, MigrationRunJournalStepState, MigrationRunJournalStore,
+    MigrationSafeRestorePoint, MigrationStepCommitIdentity, MigrationStepTargetSchema,
+    MigrationTransformerError, PolicyTarget, PrincipalId, SecurityEpoch, SecurityPolicySnapshot,
 };
 
 /// Canonical records prepared for one stable migration-plan step.
@@ -25,6 +30,7 @@ pub struct MigrationStepInput {
     step_id: MigrationStepId,
     operation_id: OperationId,
     records: Vec<Vec<u8>>,
+    original_input_fingerprint: Option<[u8; 32]>,
 }
 
 /// Immutable plan, source precondition, run identity, and transformer for one execution attempt.
@@ -62,6 +68,7 @@ impl MigrationStepInput {
             step_id,
             operation_id,
             records,
+            original_input_fingerprint: None,
         }
     }
 
@@ -86,6 +93,7 @@ pub struct MigrationStepCommitReceipt {
     revision: Revision,
     target_schema: MigrationStepTargetSchema,
     transform_fingerprint: MigrationTransformFingerprint,
+    audit_record_id: Option<crate::AuditRecordId>,
 }
 
 impl MigrationStepCommitReceipt {
@@ -117,6 +125,12 @@ impl MigrationStepCommitReceipt {
     #[must_use]
     pub const fn transform_fingerprint(self) -> MigrationTransformFingerprint {
         self.transform_fingerprint
+    }
+
+    /// Required Audit identity committed atomically with this step, if policy requires audit.
+    #[must_use]
+    pub const fn audit_record_id(self) -> Option<crate::AuditRecordId> {
+        self.audit_record_id
     }
 }
 
@@ -298,6 +312,24 @@ pub enum MigrationExecutionError<E> {
     Plan(MigrationPlanError),
     /// Only MetadataOnly, Additive, and CompatibleConstraintChange plans execute here.
     IncompatibleCategory(MigrationCategory),
+    /// Current policy does not authorize this guarded migration request.
+    MigrationUnauthorized,
+    /// The validated decisions do not bind the plan, exact source, or exact prepared input.
+    DecisionContextMismatch,
+    /// A Breaking migration requires a plan-bound explicit administrator action.
+    MissingBreakingAdminAction,
+    /// The supplied administrator action is stale or bound to another plan or restore point.
+    BreakingAdminActionMismatch,
+    /// A Breaking migration requires a verified real-restore proof for its exact source.
+    MissingSafeRestorePoint,
+    /// The supplied safe restore point is bound to another database, schema, or plan.
+    SafeRestorePointMismatch,
+    /// Guarded migrations require one atomic Required Audit record for each step.
+    RequiredAuditCountMismatch,
+    /// A supplied audit record is not bound to its exact migration step and commit revision.
+    InvalidRequiredAuditRecord,
+    /// Required Audit sequences must strictly increase in plan-step order.
+    AuditSequenceNotIncreasing,
     /// One exact intermediate schema target is required for each step.
     MissingStepTargets,
     /// The backend head differs from the plan's source schema revision.
@@ -378,6 +410,424 @@ pub fn execute_compatible_migration<B, E>(
     actual_source_schema_fingerprint: [u8; 32],
     transformer: MigrationTransformer,
     step_inputs: Vec<MigrationStepInput>,
+    validate_step: impl FnMut(&B, Revision, &[Record], MigrationStepTargetSchema) -> Result<(), E>,
+) -> Result<MigrationExecutionResult, MigrationExecutionFailure<E>>
+where
+    B: RevisionBackend<Record>,
+{
+    execute_migration_internal(
+        backend,
+        plan,
+        run_id,
+        actual_source_schema_fingerprint,
+        transformer,
+        step_inputs,
+        MigrationExecutionMode::Compatible,
+        Vec::new(),
+        None,
+        |backend, _base, entries, cancellation, _audit_commit, _audit_record| {
+            backend.publish_cancellable(entries, cancellation)
+        },
+        validate_step,
+    )
+}
+
+/// Executes a Restrictive or Breaking plan after validating decisions, current rights, and audit.
+///
+/// Every step commits separately. The backend must atomically publish the migration step,
+/// plan/input/decision fingerprints, and Required Audit Record through
+/// [`MigrationCommitBackend`]. Breaking plans additionally require a restore proof created by
+/// the storage verifier and an explicit [`BreakingMigrationAdminAction::confirm`] call.
+#[allow(clippy::too_many_arguments, reason = "WDB-EXC-0003")]
+pub fn execute_guarded_migration<B, E>(
+    backend: &mut B,
+    plan: &MigrationPlan,
+    run_id: MigrationRunId,
+    source_database_id: crate::DatabaseId,
+    actual_source_schema_fingerprint: [u8; 32],
+    transformer: MigrationTransformer,
+    step_inputs: Vec<MigrationStepInput>,
+    decisions: crate::ValidatedMigrationDecisions,
+    actor: PrincipalId,
+    current_policy: &SecurityPolicySnapshot,
+    policy_target: PolicyTarget,
+    current_security_epoch: SecurityEpoch,
+    safe_restore_point: Option<&MigrationSafeRestorePoint>,
+    admin_action: Option<&BreakingMigrationAdminAction>,
+    required_audit_records: Vec<AuditRecord>,
+    mut validate_step: impl FnMut(&B, Revision, &[Record], MigrationStepTargetSchema) -> Result<(), E>,
+) -> Result<MigrationExecutionResult, MigrationExecutionFailure<E>>
+where
+    B: MigrationCommitBackend,
+{
+    let fail = |error| MigrationExecutionFailure {
+        error,
+        completed_steps: Vec::new(),
+    };
+    if !matches!(
+        plan.category(),
+        MigrationCategory::Restrictive | MigrationCategory::Breaking
+    ) {
+        return Err(fail(MigrationExecutionError::IncompatibleCategory(
+            plan.category(),
+        )));
+    }
+    if current_policy.authorize(actor, Capability::MigrationExecute, policy_target)
+        != AuthorizationDecision::Allow
+    {
+        return Err(fail(MigrationExecutionError::MigrationUnauthorized));
+    }
+    if backend.latest_published() != plan.source_schema_precondition().revision().revision() {
+        return Err(fail(
+            MigrationExecutionError::SourceRevisionDoesNotMatchHead {
+                planned: plan.source_schema_precondition().revision().revision(),
+                actual: backend.latest_published(),
+            },
+        ));
+    }
+    if let Err(error) = plan.validate_start(
+        plan.source_schema_precondition().revision(),
+        actual_source_schema_fingerprint,
+        transformer.version(),
+    ) {
+        return Err(fail(MigrationExecutionError::Plan(error)));
+    }
+
+    if decisions.plan_fingerprint() != plan.fingerprint()
+        || decisions.transformer_version() != plan.transformer_version()
+        || decisions.source_revision() != plan.source_schema_precondition().revision()
+        || decisions.source_schema_fingerprint() != plan.source_schema_precondition().fingerprint()
+        || decisions.target() != policy_target
+        || transformer.version() != plan.transformer_version()
+    {
+        return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+    }
+    let effective_policy_fingerprint =
+        current_policy.effective_capability_fingerprint(actor, policy_target);
+    if let Some(decision_actor) = decisions.actor() {
+        if decision_actor != actor
+            || decisions.policy_fingerprint() != Some(&effective_policy_fingerprint)
+        {
+            return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+        }
+    }
+
+    let Some(step_targets) = plan.step_targets() else {
+        return Err(fail(MigrationExecutionError::MissingStepTargets));
+    };
+    if required_audit_records.len() != plan.steps().len()
+        || step_inputs.len() != plan.steps().len()
+        || step_targets.len() != plan.steps().len()
+    {
+        return Err(fail(MigrationExecutionError::RequiredAuditCountMismatch));
+    }
+    if plan.category() == MigrationCategory::Breaking {
+        let Some(restore_point) = safe_restore_point else {
+            return Err(fail(MigrationExecutionError::MissingSafeRestorePoint));
+        };
+        if !restore_point.matches_source(
+            plan,
+            source_database_id,
+            &actual_source_schema_fingerprint,
+        ) {
+            return Err(fail(MigrationExecutionError::SafeRestorePointMismatch));
+        }
+        let Some(admin_action) = admin_action else {
+            return Err(fail(MigrationExecutionError::MissingBreakingAdminAction));
+        };
+        if !admin_action.matches_current(plan, actor, current_policy, policy_target, restore_point)
+        {
+            return Err(fail(MigrationExecutionError::BreakingAdminActionMismatch));
+        }
+    }
+
+    let Some(input_fingerprint) = MigrationDryRunInputFingerprint::for_record_batches(
+        step_inputs.iter().map(|input| input.records.as_slice()),
+    ) else {
+        return Err(fail(MigrationExecutionError::InputFingerprintFailed));
+    };
+    if decisions.input_fingerprint() != input_fingerprint {
+        return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+    }
+
+    let mut admitted_work_units = 0_u64;
+    let mut admitted_transform_memory = 0_u64;
+    for input in &step_inputs {
+        let estimate = match transformer.estimate_records(
+            plan,
+            plan.source_schema_precondition().revision(),
+            *plan.source_schema_precondition().fingerprint(),
+            &input.records,
+        ) {
+            Ok(estimate) => estimate,
+            Err(error) => return Err(fail(MigrationExecutionError::Transformer(error))),
+        };
+        let Some(next_work_units) = admitted_work_units.checked_add(estimate.record_count().max(1))
+        else {
+            return Err(fail(MigrationExecutionError::WorkBudgetExceeded {
+                requested: u64::MAX,
+                limit: plan.budget().max_work_units(),
+            }));
+        };
+        if next_work_units > plan.budget().max_work_units() {
+            return Err(fail(MigrationExecutionError::WorkBudgetExceeded {
+                requested: next_work_units,
+                limit: plan.budget().max_work_units(),
+            }));
+        }
+        admitted_work_units = next_work_units;
+        let Some(next_memory) =
+            admitted_transform_memory.checked_add(estimate.reserved_memory_bytes())
+        else {
+            return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+                requested: u64::MAX,
+                limit: plan.budget().max_memory_bytes(),
+            }));
+        };
+        if next_memory > plan.budget().max_memory_bytes() {
+            return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+                requested: next_memory,
+                limit: plan.budget().max_memory_bytes(),
+            }));
+        }
+        admitted_transform_memory = next_memory;
+    }
+
+    let mut unresolved = Vec::new();
+    let mut record_offset = 0_u64;
+    for input in &step_inputs {
+        let preview = match transformer.transform_records_for_preview(
+            plan,
+            plan.source_schema_precondition().revision(),
+            *plan.source_schema_precondition().fingerprint(),
+            &input.records,
+        ) {
+            Ok(preview) => preview,
+            Err(error) => {
+                return Err(fail(MigrationExecutionError::Transformer(error)));
+            }
+        };
+        if let Some(error) = preview.first_record_error() {
+            return Err(fail(MigrationExecutionError::Transformer(error.cause())));
+        }
+        if preview.error_count() != 0
+            || preview.omitted_error_count() != 0
+            || preview.omitted_unresolved_count() != 0
+        {
+            return Err(fail(MigrationExecutionError::InvalidTransformPreview));
+        }
+        for item in preview.unresolved_items() {
+            let Some(item) = item.offset(record_offset) else {
+                return Err(fail(MigrationExecutionError::InputFingerprintFailed));
+            };
+            if unresolved.len() >= 256 || unresolved.try_reserve(1).is_err() {
+                return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+                    requested: plan.budget().max_memory_bytes().saturating_add(1),
+                    limit: plan.budget().max_memory_bytes(),
+                }));
+            }
+            unresolved.push(item);
+        }
+        let Some(next_offset) =
+            record_offset.checked_add(u64::try_from(input.records.len()).unwrap_or(u64::MAX))
+        else {
+            return Err(fail(MigrationExecutionError::InputFingerprintFailed));
+        };
+        record_offset = next_offset;
+    }
+    if decisions.decisions().len() != unresolved.len()
+        || decisions
+            .decisions()
+            .iter()
+            .zip(&unresolved)
+            .any(|(decision, unresolved)| decision.item() != *unresolved)
+    {
+        return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+    }
+
+    let decision_fingerprint = decisions.decision_fingerprint();
+    let decision_count = decisions.decisions().len();
+    let decision_memory = u64::try_from(decision_count).ok().and_then(|count| {
+        let entry_bytes = u64::try_from(std::mem::size_of::<(u64, MigrationItemResolution)>())
+            .ok()?
+            .checked_add(64)?;
+        count.checked_mul(entry_bytes)
+    });
+    let Some(decision_memory) = decision_memory else {
+        return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+            requested: u64::MAX,
+            limit: plan.budget().max_memory_bytes(),
+        }));
+    };
+    let Some(guarded_preflight_memory) = admitted_transform_memory
+        .checked_add(decision_memory)
+        .and_then(|bytes| {
+            u64::try_from(unresolved.len())
+                .ok()?
+                .checked_mul(
+                    u64::try_from(std::mem::size_of::<crate::MigrationDryRunUnresolvedItem>())
+                        .ok()?,
+                )
+                .and_then(|item_bytes| bytes.checked_add(item_bytes))
+        })
+    else {
+        return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+            requested: u64::MAX,
+            limit: plan.budget().max_memory_bytes(),
+        }));
+    };
+    if guarded_preflight_memory > plan.budget().max_memory_bytes() {
+        return Err(fail(MigrationExecutionError::MemoryBudgetExceeded {
+            requested: guarded_preflight_memory,
+            limit: plan.budget().max_memory_bytes(),
+        }));
+    }
+
+    let mut resolutions = BTreeMap::new();
+    for decision in decisions.into_decisions() {
+        let (item, resolution) = decision.into_parts();
+        if resolutions
+            .insert(item.record_index(), resolution)
+            .is_some()
+        {
+            return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+        }
+    }
+    let mut prepared_inputs = Vec::new();
+    if prepared_inputs
+        .try_reserve_exact(step_inputs.len())
+        .is_err()
+    {
+        return Err(fail(MigrationExecutionError::AllocationFailed));
+    }
+    let mut record_index = 0_u64;
+    for input in step_inputs {
+        let Some(original_fingerprint) =
+            MigrationDryRunInputFingerprint::for_records(&input.records)
+        else {
+            return Err(fail(MigrationExecutionError::InputFingerprintFailed));
+        };
+        let mut prepared_records = Vec::new();
+        if prepared_records
+            .try_reserve_exact(input.records.len())
+            .is_err()
+        {
+            return Err(fail(MigrationExecutionError::AllocationFailed));
+        }
+        for record in input.records {
+            match resolutions.remove(&record_index) {
+                Some(MigrationItemResolution::ReplaceRecord(replacement)) => {
+                    prepared_records.push(replacement);
+                }
+                Some(MigrationItemResolution::OmitRecord) => {}
+                None => prepared_records.push(record),
+            }
+            let Some(next_index) = record_index.checked_add(1) else {
+                return Err(fail(MigrationExecutionError::InputFingerprintFailed));
+            };
+            record_index = next_index;
+        }
+        prepared_inputs.push(MigrationStepInput {
+            step_id: input.step_id,
+            operation_id: input.operation_id,
+            records: prepared_records,
+            original_input_fingerprint: Some(*original_fingerprint.as_bytes()),
+        });
+    }
+    if !resolutions.is_empty() {
+        return Err(fail(MigrationExecutionError::DecisionContextMismatch));
+    }
+
+    let mut previous_sequence = None;
+    for (index, (input, target_schema)) in prepared_inputs.iter().zip(step_targets).enumerate() {
+        let Some(record) = required_audit_records.get(index) else {
+            return Err(fail(MigrationExecutionError::RequiredAuditCountMismatch));
+        };
+        let expected_revision = target_schema.schema().revision().revision();
+        if input.step_id() != target_schema.step_id()
+            || record.actor() != actor
+            || record.action() != AuditAction::Migration
+            || record.object_class() != AuditObjectClass::Migration
+            || record.outcome() != AuditOutcome::Succeeded
+            || record.commit_context()
+                != (AuditCommitContext::Committed {
+                    revision: expected_revision,
+                    operation_id: input.operation_id(),
+                })
+            || record.security_epoch() != current_security_epoch
+            || record.policy_fingerprint().as_bytes() != effective_policy_fingerprint.as_slice()
+        {
+            return Err(fail(MigrationExecutionError::InvalidRequiredAuditRecord));
+        }
+        if previous_sequence.is_some_and(|sequence| sequence >= record.sequence().value()) {
+            return Err(fail(MigrationExecutionError::AuditSequenceNotIncreasing));
+        }
+        previous_sequence = Some(record.sequence().value());
+        for prior in required_audit_records.iter().take(index) {
+            if prior.record_id() == record.record_id()
+                || prior.audit_operation_id() == record.audit_operation_id()
+            {
+                return Err(fail(MigrationExecutionError::InvalidRequiredAuditRecord));
+            }
+        }
+    }
+
+    execute_migration_internal(
+        backend,
+        plan,
+        run_id,
+        actual_source_schema_fingerprint,
+        transformer,
+        prepared_inputs,
+        MigrationExecutionMode::Guarded,
+        required_audit_records,
+        Some(decision_fingerprint),
+        |backend, base, entries, cancellation, audit_commit, audit_record| match (
+            audit_commit,
+            audit_record,
+        ) {
+            (Some(audit_commit), Some(audit_record)) => backend
+                .publish_migration_step_with_required_audit(
+                    base,
+                    entries,
+                    audit_commit,
+                    audit_record,
+                    cancellation,
+                ),
+            _ => Err(CancellablePublishError::Publish(
+                RevisionLogError::BackendFailure,
+            )),
+        },
+        &mut validate_step,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationExecutionMode {
+    Compatible,
+    Guarded,
+}
+
+// The arguments are the independent inputs and two backend callbacks for one shared executor.
+#[allow(clippy::too_many_arguments, reason = "WDB-EXC-0003")]
+fn execute_migration_internal<B, E>(
+    backend: &mut B,
+    plan: &MigrationPlan,
+    run_id: MigrationRunId,
+    actual_source_schema_fingerprint: [u8; 32],
+    transformer: MigrationTransformer,
+    step_inputs: Vec<MigrationStepInput>,
+    mode: MigrationExecutionMode,
+    required_audit_records: Vec<AuditRecord>,
+    decision_fingerprint: Option<[u8; 32]>,
+    mut publish_step: impl FnMut(
+        &mut B,
+        Revision,
+        Vec<Record>,
+        &CommitCancellation,
+        Option<MigrationAuditCommit>,
+        Option<AuditRecord>,
+    ) -> Result<Revision, CancellablePublishError>,
     mut validate_step: impl FnMut(&B, Revision, &[Record], MigrationStepTargetSchema) -> Result<(), E>,
 ) -> Result<MigrationExecutionResult, MigrationExecutionFailure<E>>
 where
@@ -389,14 +839,32 @@ where
         completed_steps,
     };
 
-    if !matches!(
-        plan.category(),
-        MigrationCategory::MetadataOnly
-            | MigrationCategory::Additive
-            | MigrationCategory::CompatibleConstraintChange
-    ) {
+    let category_allowed = match mode {
+        MigrationExecutionMode::Compatible => matches!(
+            plan.category(),
+            MigrationCategory::MetadataOnly
+                | MigrationCategory::Additive
+                | MigrationCategory::CompatibleConstraintChange
+        ),
+        MigrationExecutionMode::Guarded => matches!(
+            plan.category(),
+            MigrationCategory::Restrictive | MigrationCategory::Breaking
+        ),
+    };
+    if !category_allowed {
         return Err(fail(
             MigrationExecutionError::IncompatibleCategory(plan.category()),
+            completed_steps,
+        ));
+    }
+    if (mode == MigrationExecutionMode::Guarded
+        && required_audit_records.len() != plan.steps().len())
+        || (mode == MigrationExecutionMode::Compatible && !required_audit_records.is_empty())
+        || (mode == MigrationExecutionMode::Guarded && decision_fingerprint.is_none())
+        || (mode == MigrationExecutionMode::Compatible && decision_fingerprint.is_some())
+    {
+        return Err(fail(
+            MigrationExecutionError::RequiredAuditCountMismatch,
             completed_steps,
         ));
     }
@@ -667,13 +1135,17 @@ where
         ));
     }
     for input in &step_inputs {
-        let Some(fingerprint) = MigrationDryRunInputFingerprint::for_records(&input.records) else {
+        let fingerprint = input.original_input_fingerprint.or_else(|| {
+            MigrationDryRunInputFingerprint::for_records(&input.records)
+                .map(|fingerprint| *fingerprint.as_bytes())
+        });
+        let Some(fingerprint) = fingerprint else {
             return Err(fail(
                 MigrationExecutionError::InputFingerprintFailed,
                 completed_steps,
             ));
         };
-        input_fingerprints.push(*fingerprint.as_bytes());
+        input_fingerprints.push(fingerprint);
     }
     if completed_steps
         .try_reserve_exact(step_inputs.len())
@@ -685,10 +1157,11 @@ where
         ));
     }
 
-    for ((input, step_target), input_fingerprint) in step_inputs
+    for (step_index, ((input, step_target), input_fingerprint)) in step_inputs
         .into_iter()
         .zip(step_targets.iter().copied())
         .zip(input_fingerprints)
+        .enumerate()
     {
         let step_id = input.step_id();
         let operation_id = input.operation_id();
@@ -730,16 +1203,6 @@ where
             staged_records.push(record);
         }
         drop(batch);
-        staged_records.push(Record::MigrationStepCommitIdentity(
-            MigrationStepCommitIdentity::with_input_fingerprint(
-                plan.migration_id(),
-                run_id,
-                step_id,
-                operation_id,
-                input_fingerprint,
-            ),
-        ));
-
         let base_revision = backend.latest_published();
         let expected_revision = match base_revision.next_commit() {
             Ok(revision) => revision,
@@ -764,6 +1227,64 @@ where
                 completed_steps,
             ));
         }
+
+        let audit_commit = if mode == MigrationExecutionMode::Guarded {
+            let Some(decision_fingerprint) = decision_fingerprint else {
+                return Err(fail(
+                    MigrationExecutionError::DecisionContextMismatch,
+                    completed_steps,
+                ));
+            };
+            Some(MigrationAuditCommit::new(
+                plan.fingerprint(),
+                plan.migration_id(),
+                run_id,
+                step_id,
+                operation_id,
+                base_revision,
+                expected_revision,
+                step_target,
+                input_fingerprint,
+                decision_fingerprint,
+            ))
+        } else {
+            None
+        };
+        let audit_record = if mode == MigrationExecutionMode::Guarded {
+            match required_audit_records.get(step_index) {
+                Some(record) => Some(record.clone()),
+                None => {
+                    return Err(fail(
+                        MigrationExecutionError::RequiredAuditCountMismatch,
+                        completed_steps,
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        let audit_record_id = audit_record.as_ref().map(AuditRecord::record_id);
+        let step_identity = match decision_fingerprint {
+            Some(decision_fingerprint) => {
+                MigrationStepCommitIdentity::with_plan_and_input_fingerprint(
+                    plan.migration_id(),
+                    run_id,
+                    step_id,
+                    operation_id,
+                    input_fingerprint,
+                    *plan.fingerprint().as_bytes(),
+                    decision_fingerprint,
+                )
+            }
+            None => MigrationStepCommitIdentity::with_input_fingerprint(
+                plan.migration_id(),
+                run_id,
+                step_id,
+                operation_id,
+                input_fingerprint,
+            ),
+        };
+        staged_records.push(Record::MigrationStepCommitIdentity(step_identity));
 
         let mut transaction = match OpenTransaction::begin(backend, base_revision) {
             Ok(transaction) => transaction,
@@ -806,7 +1327,16 @@ where
                 ));
             }
         };
-        let revision = match validated.commit() {
+        let revision = match validated.commit_via(|backend, base, entries, cancellation| {
+            publish_step(
+                backend,
+                base,
+                entries,
+                cancellation,
+                audit_commit,
+                audit_record,
+            )
+        }) {
             Ok(revision) => revision,
             Err(error) => {
                 return Err(fail(
@@ -821,6 +1351,7 @@ where
             revision,
             target_schema: step_target,
             transform_fingerprint,
+            audit_record_id,
         });
         if revision != expected_revision {
             return Err(fail(
@@ -1385,6 +1916,7 @@ where
                         revision: *revision,
                         target_schema,
                         transform_fingerprint: receipt_fingerprint,
+                        audit_record_id: None,
                     });
                     if let Err(error) = journal.save(&snapshot) {
                         return Err(fail(
@@ -1431,6 +1963,7 @@ where
                     revision,
                     target_schema,
                     transform_fingerprint: receipt_fingerprint,
+                    audit_record_id: None,
                 });
                 committed_count += 1;
             }
@@ -1636,6 +2169,7 @@ where
             revision,
             target_schema: step_target,
             transform_fingerprint,
+            audit_record_id: None,
         });
         if revision != expected_revision {
             return Err(fail_execution(
@@ -1691,23 +2225,32 @@ mod tests {
     use super::{
         MigrationExecutionContext, MigrationExecutionError, MigrationResumeError,
         MigrationStepCommitStatus, MigrationStepInput, MigrationStepStatusError,
-        MigrationStepValidationError, execute_compatible_migration,
+        MigrationStepValidationError, execute_compatible_migration, execute_guarded_migration,
         execute_or_resume_compatible_migration, query_migration_step_status,
     };
     use crate::ids::{
-        DomainId, IdValidationError, MigrationId, MigrationRunId, MigrationStepId, OperationId,
-        PredicateId, Revision, SchemaRevision,
+        AuditOperationId, AuditRecordId, DatabaseId, DomainId, IdValidationError, MigrationId,
+        MigrationRunId, MigrationStepId, OperationId, PolicyRuleId, PredicateId, PrincipalId,
+        Revision, SchemaRevision,
     };
-    use crate::revision_backend::{InMemoryRevisionBackend, RevisionBackend};
+    use crate::revision_backend::{
+        CancellablePublishError, InMemoryRevisionBackend, RevisionBackend,
+    };
     use crate::wire_records::{Record, encode_record};
     use crate::{
-        Cardinality, ConstraintSet, EntityTypeConstraint, JobBudget, Lifecycle, MigrationCategory,
+        AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
+        AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence,
+        BreakingMigrationAdminAction, Capability, CapabilityGrant, CapabilityRule, Cardinality,
+        ConstraintSet, EntityTypeConstraint, GrantEffect, JobBudget, Lifecycle,
+        MigrationAuditCommit, MigrationCategory, MigrationCommitBackend, MigrationDryRun,
         MigrationPlan, MigrationPlanSpec, MigrationRunJournalSnapshot, MigrationRunJournalState,
         MigrationRunJournalStepState, MigrationRunJournalStore, MigrationStepTargetSchema,
         MigrationTargetSchema, MigrationTransformer, MigrationTransformerVersion, NonEmptySet,
-        PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, SchemaDefinition,
-        SchemaDefinitionId, SchemaHistoryReferenceModel, SchemaIdentityTransition, SchemaMode,
-        SourceSchemaPrecondition, Symbol, ValueConstraint, ValueKind,
+        PolicyScope, PolicySubject, PolicyTarget, PredicateDefinition, PredicateDefinitionSpec,
+        Principal, ResolutionPolicy, SchemaDefinition, SchemaDefinitionId,
+        SchemaHistoryReferenceModel, SchemaIdentityTransition, SchemaMode, SecurityEpoch,
+        SecurityPolicySnapshot, SourceSchemaPrecondition, Symbol, ValidatedMigrationDecisions,
+        ValueConstraint, ValueKind,
     };
 
     fn uuid<T: DomainId>(tail: u8) -> Result<T, IdValidationError> {
@@ -1883,6 +2426,170 @@ mod tests {
     fn transformer() -> Result<MigrationTransformer, String> {
         let version = MigrationTransformerVersion::new(1).map_err(|error| error.to_string())?;
         MigrationTransformer::for_version(version).map_err(|error| error.to_string())
+    }
+
+    fn migration_test_policy(
+        actor: PrincipalId,
+        allow: bool,
+    ) -> Result<SecurityPolicySnapshot, String> {
+        let rules = if allow {
+            vec![CapabilityRule::new(
+                uuid::<PolicyRuleId>(40).map_err(|error| error.to_string())?,
+                PolicySubject::Principal(actor),
+                CapabilityGrant::new(Capability::MigrationExecute, GrantEffect::Allow),
+                PolicyScope::project(),
+            )]
+        } else {
+            Vec::new()
+        };
+        SecurityPolicySnapshot::new(vec![Principal::new(actor)], vec![], vec![], rules)
+            .map_err(|error| error.to_string())
+    }
+
+    fn validated_empty_decisions(
+        plan: &MigrationPlan,
+        inputs: &[MigrationStepInput],
+        actor: PrincipalId,
+        policy: &SecurityPolicySnapshot,
+    ) -> Result<ValidatedMigrationDecisions, String> {
+        let records = inputs
+            .iter()
+            .flat_map(|input| input.records.iter().cloned())
+            .collect::<Vec<_>>();
+        let source = plan.source_schema_precondition();
+        let report = MigrationDryRun::run(plan, source.revision(), *source.fingerprint(), &records);
+        ValidatedMigrationDecisions::validate(
+            plan,
+            &report,
+            Vec::new(),
+            policy,
+            actor,
+            PolicyTarget::default(),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn required_migration_audits(
+        plan: &MigrationPlan,
+        inputs: &[MigrationStepInput],
+        actor: PrincipalId,
+        policy: &SecurityPolicySnapshot,
+    ) -> Result<Vec<AuditRecord>, String> {
+        let policy_fingerprint =
+            policy.effective_capability_fingerprint(actor, PolicyTarget::default());
+        let audit_policy_fingerprint =
+            AuditPolicyFingerprint::new(crate::Bytes::new(policy_fingerprint.to_vec()))
+                .map_err(|error| error.to_string())?;
+        plan.step_targets()
+            .ok_or_else(|| String::from("plan lacks exact per-step schema targets"))?
+            .iter()
+            .zip(inputs)
+            .enumerate()
+            .map(|(index, (target, input))| {
+                let revision = target.schema().revision().revision();
+                Ok(AuditRecord::new(
+                    AuditRecordIdentity {
+                        record_id: uuid::<AuditRecordId>(50 + index as u8)
+                            .map_err(|error| error.to_string())?,
+                        sequence: AuditSequence::new(index as u64 + 1),
+                        audit_operation_id: uuid::<AuditOperationId>(60 + index as u8)
+                            .map_err(|error| error.to_string())?,
+                    },
+                    AuditRecordDetails {
+                        actor,
+                        action: AuditAction::Migration,
+                        object_class: AuditObjectClass::Migration,
+                        outcome: AuditOutcome::Succeeded,
+                        commit_context: AuditCommitContext::Committed {
+                            revision,
+                            operation_id: input.operation_id(),
+                        },
+                        security_epoch: SecurityEpoch::INITIAL,
+                        policy_fingerprint: audit_policy_fingerprint.clone(),
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    struct MemoryMigrationBackend {
+        history: InMemoryRevisionBackend<Record>,
+        audits: Vec<(MigrationAuditCommit, Vec<u8>, AuditRecord)>,
+    }
+
+    impl MemoryMigrationBackend {
+        fn new() -> Self {
+            Self {
+                history: InMemoryRevisionBackend::new(),
+                audits: Vec::new(),
+            }
+        }
+    }
+
+    impl RevisionBackend<Record> for MemoryMigrationBackend {
+        type Read<'a>
+            = <InMemoryRevisionBackend<Record> as RevisionBackend<Record>>::Read<'a>
+        where
+            Self: 'a;
+
+        fn latest_published(&self) -> Revision {
+            self.history.latest_published()
+        }
+
+        fn publish(&mut self, entries: Vec<Record>) -> Result<Revision, crate::RevisionLogError> {
+            self.history.publish(entries)
+        }
+
+        fn publish_cancellable(
+            &mut self,
+            entries: Vec<Record>,
+            cancellation: &crate::CommitCancellation,
+        ) -> Result<Revision, CancellablePublishError> {
+            self.history.publish_cancellable(entries, cancellation)
+        }
+
+        fn read_at(&self, revision: Revision) -> Result<Self::Read<'_>, crate::RevisionLogError> {
+            self.history.read_at(revision)
+        }
+    }
+
+    impl MigrationCommitBackend for MemoryMigrationBackend {
+        fn publish_migration_step_with_required_audit(
+            &mut self,
+            expected_base_revision: Revision,
+            entries: Vec<Record>,
+            audit_commit: MigrationAuditCommit,
+            audit_record: AuditRecord,
+            cancellation: &crate::CommitCancellation,
+        ) -> Result<Revision, CancellablePublishError> {
+            if self.latest_published() != expected_base_revision
+                || self
+                    .latest_published()
+                    .next_commit()
+                    .ok()
+                    != Some(audit_commit.commit_revision())
+                || !entries.iter().any(|entry| {
+                    matches!(entry, Record::MigrationStepCommitIdentity(identity) if *identity == audit_commit.identity())
+                })
+                || audit_record.commit_context()
+                    != (AuditCommitContext::Committed {
+                        revision: audit_commit.commit_revision(),
+                        operation_id: audit_commit.operation_id(),
+                    })
+            {
+                return Err(CancellablePublishError::Publish(
+                    crate::RevisionLogError::BackendFailure,
+                ));
+            }
+            self.audits.try_reserve(1).map_err(|_| {
+                CancellablePublishError::Publish(crate::RevisionLogError::BackendFailure)
+            })?;
+            let action_payload = audit_commit.canonical_action_payload();
+            let revision = self.history.publish_cancellable(entries, cancellation)?;
+            self.audits
+                .push((audit_commit, action_payload, audit_record));
+            Ok(revision)
+        }
     }
 
     struct MemoryJournalStore {
@@ -2728,6 +3435,274 @@ mod tests {
             Revision::new(2).map_err(|e| e.to_string())?
         );
         assert_eq!(second_marker.1.migration_id(), compensation.migration_id());
+        Ok(())
+    }
+
+    #[test]
+    fn restrictive_migration_binds_plan_decisions_and_each_required_audit_atomically()
+    -> Result<(), String> {
+        let (plan, step_ids) = two_step_plan(MigrationCategory::Restrictive, 20)?;
+        let inputs = prepared_steps(step_ids)?;
+        let actor = uuid::<PrincipalId>(70).map_err(|error| error.to_string())?;
+        let database_id = uuid::<DatabaseId>(71).map_err(|error| error.to_string())?;
+        let policy = migration_test_policy(actor, true)?;
+        let decisions = validated_empty_decisions(&plan, &inputs, actor, &policy)?;
+        let decision_fingerprint = decisions.decision_fingerprint();
+        let audits = required_migration_audits(&plan, &inputs, actor, &policy)?;
+        let mut backend = MemoryMigrationBackend::new();
+
+        let result = execute_guarded_migration(
+            &mut backend,
+            &plan,
+            run_id()?,
+            database_id,
+            [0x11; 32],
+            transformer()?,
+            inputs,
+            decisions,
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            SecurityEpoch::INITIAL,
+            None,
+            None,
+            audits,
+            |_, _, _, _| Ok::<(), String>(()),
+        )
+        .map_err(|failure| format!("restrictive migration failed: {:?}", failure.error()))?;
+
+        assert_eq!(
+            result.final_revision(),
+            Revision::new(2).map_err(|error| error.to_string())?
+        );
+        assert_eq!(result.completed_steps().len(), 2);
+        assert!(
+            result
+                .completed_steps()
+                .iter()
+                .all(|receipt| receipt.audit_record_id().is_some())
+        );
+        assert_eq!(backend.audits.len(), 2);
+        for (audit_commit, action_payload, _) in &backend.audits {
+            assert_eq!(audit_commit.plan_fingerprint(), plan.fingerprint());
+            assert!(
+                action_payload
+                    .windows(32)
+                    .any(|window| window == plan.fingerprint().as_bytes())
+            );
+            assert!(
+                action_payload
+                    .windows(32)
+                    .any(|window| window == decision_fingerprint)
+            );
+        }
+        let identities = backend
+            .read_at(result.final_revision())
+            .map_err(|error| error.to_string())?
+            .filter_map(|(_, record)| match record {
+                Record::MigrationStepCommitIdentity(identity) => Some(*identity),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(identities.len(), 2);
+        assert!(identities.iter().all(|identity| {
+            identity.plan_fingerprint() == Some(*plan.fingerprint().as_bytes())
+                && identity.decision_fingerprint() == Some(decision_fingerprint)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn guarded_later_step_rejection_keeps_the_audited_committed_prefix() -> Result<(), String> {
+        let (plan, step_ids) = two_step_plan(MigrationCategory::Restrictive, 20)?;
+        let inputs = prepared_steps(step_ids)?;
+        let actor = uuid::<PrincipalId>(75).map_err(|error| error.to_string())?;
+        let database_id = uuid::<DatabaseId>(76).map_err(|error| error.to_string())?;
+        let policy = migration_test_policy(actor, true)?;
+        let decisions = validated_empty_decisions(&plan, &inputs, actor, &policy)?;
+        let audits = required_migration_audits(&plan, &inputs, actor, &policy)?;
+        let mut backend = MemoryMigrationBackend::new();
+
+        let failure = match execute_guarded_migration(
+            &mut backend,
+            &plan,
+            run_id()?,
+            database_id,
+            [0x11; 32],
+            transformer()?,
+            inputs,
+            decisions,
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            SecurityEpoch::INITIAL,
+            None,
+            None,
+            audits,
+            |_, _, _, target| {
+                if target.step_id() == step_ids[1] {
+                    Err("reject second intermediate schema")
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
+            Ok(_) => return Err(String::from("second intermediate state must stop the run")),
+            Err(failure) => failure,
+        };
+
+        assert!(matches!(
+            failure.error(),
+            MigrationExecutionError::StepValidation { .. }
+        ));
+        assert_eq!(failure.completed_steps().len(), 1);
+        assert_eq!(backend.latest_published(), Revision::FIRST_COMMIT);
+        assert_eq!(backend.audits.len(), 1);
+        let first_audit = backend
+            .audits
+            .first()
+            .ok_or_else(|| String::from("first step audit is missing"))?;
+        let first_receipt = failure
+            .completed_steps()
+            .first()
+            .ok_or_else(|| String::from("first committed step receipt is missing"))?;
+        assert_eq!(first_audit.0.commit_revision(), Revision::FIRST_COMMIT);
+        assert_eq!(
+            first_audit.2.commit_context(),
+            AuditCommitContext::Committed {
+                revision: Revision::FIRST_COMMIT,
+                operation_id: first_receipt.operation_id(),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn breaking_migration_fails_closed_without_proof_or_explicit_admin_action() -> Result<(), String>
+    {
+        let (plan, step_ids) = two_step_plan(MigrationCategory::Breaking, 20)?;
+        let inputs = prepared_steps(step_ids)?;
+        let actor = uuid::<PrincipalId>(72).map_err(|error| error.to_string())?;
+        let database_id = uuid::<DatabaseId>(73).map_err(|error| error.to_string())?;
+        let restored_database_id = uuid::<DatabaseId>(74).map_err(|error| error.to_string())?;
+        let policy = migration_test_policy(actor, true)?;
+        let audits = required_migration_audits(&plan, &inputs, actor, &policy)?;
+        let source_revision = plan.source_schema_precondition().revision().revision();
+        let restore_point =
+            crate::storage_internal::migration_safe_restore_point_from_verified_restore(
+                &plan,
+                database_id,
+                source_revision,
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                database_id,
+                source_revision,
+                restored_database_id,
+                Revision::FIRST_COMMIT,
+                [4; 32],
+                [5; 32],
+            )
+            .map_err(|error| error.to_string())?;
+        let admin_action = BreakingMigrationAdminAction::confirm(
+            &plan,
+            database_id,
+            &[0x11; 32],
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            &restore_point,
+        )
+        .map_err(|error| error.to_string())?;
+
+        let mut no_proof_backend = MemoryMigrationBackend::new();
+        let no_proof = match execute_guarded_migration(
+            &mut no_proof_backend,
+            &plan,
+            run_id()?,
+            database_id,
+            [0x11; 32],
+            transformer()?,
+            inputs,
+            validated_empty_decisions(&plan, &prepared_steps(step_ids)?, actor, &policy)?,
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            SecurityEpoch::INITIAL,
+            None,
+            Some(&admin_action),
+            audits.clone(),
+            |_, _, _, _| Ok::<(), String>(()),
+        ) {
+            Ok(_) => {
+                return Err(String::from(
+                    "Breaking must require verified restore evidence",
+                ));
+            }
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            no_proof.error(),
+            MigrationExecutionError::MissingSafeRestorePoint
+        ));
+        assert_eq!(no_proof_backend.latest_published(), Revision::GENESIS);
+        assert!(no_proof_backend.audits.is_empty());
+
+        let mut no_action_backend = MemoryMigrationBackend::new();
+        let no_action = match execute_guarded_migration(
+            &mut no_action_backend,
+            &plan,
+            run_id()?,
+            database_id,
+            [0x11; 32],
+            transformer()?,
+            prepared_steps(step_ids)?,
+            validated_empty_decisions(&plan, &prepared_steps(step_ids)?, actor, &policy)?,
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            SecurityEpoch::INITIAL,
+            Some(&restore_point),
+            None,
+            audits.clone(),
+            |_, _, _, _| Ok::<(), String>(()),
+        ) {
+            Ok(_) => {
+                return Err(String::from(
+                    "Breaking must require explicit administrator confirmation",
+                ));
+            }
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            no_action.error(),
+            MigrationExecutionError::MissingBreakingAdminAction
+        ));
+        assert_eq!(no_action_backend.latest_published(), Revision::GENESIS);
+        assert!(no_action_backend.audits.is_empty());
+
+        let mut backend = MemoryMigrationBackend::new();
+        let result = execute_guarded_migration(
+            &mut backend,
+            &plan,
+            run_id()?,
+            database_id,
+            [0x11; 32],
+            transformer()?,
+            prepared_steps(step_ids)?,
+            validated_empty_decisions(&plan, &prepared_steps(step_ids)?, actor, &policy)?,
+            actor,
+            &policy,
+            PolicyTarget::default(),
+            SecurityEpoch::INITIAL,
+            Some(&restore_point),
+            Some(&admin_action),
+            audits,
+            |_, _, _, _| Ok::<(), String>(()),
+        )
+        .map_err(|failure| format!("breaking migration failed: {:?}", failure.error()))?;
+        assert_eq!(result.completed_steps().len(), 2);
+        assert_eq!(backend.audits.len(), 2);
         Ok(())
     }
 }

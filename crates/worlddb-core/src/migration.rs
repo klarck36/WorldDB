@@ -952,6 +952,8 @@ pub struct MigrationStepCommitIdentity {
     step_id: MigrationStepId,
     operation_id: OperationId,
     input_fingerprint: Option<[u8; 32]>,
+    plan_fingerprint: Option<[u8; 32]>,
+    decision_fingerprint: Option<[u8; 32]>,
 }
 
 impl MigrationStepCommitIdentity {
@@ -969,6 +971,8 @@ impl MigrationStepCommitIdentity {
             step_id,
             operation_id,
             input_fingerprint: None,
+            plan_fingerprint: None,
+            decision_fingerprint: None,
         }
     }
 
@@ -987,6 +991,30 @@ impl MigrationStepCommitIdentity {
             step_id,
             operation_id,
             input_fingerprint: Some(input_fingerprint),
+            plan_fingerprint: None,
+            decision_fingerprint: None,
+        }
+    }
+
+    /// Identifies a guarded step commit and binds its plan and exact ordered input.
+    #[must_use]
+    pub const fn with_plan_and_input_fingerprint(
+        migration_id: MigrationId,
+        run_id: MigrationRunId,
+        step_id: MigrationStepId,
+        operation_id: OperationId,
+        input_fingerprint: [u8; 32],
+        plan_fingerprint: [u8; 32],
+        decision_fingerprint: [u8; 32],
+    ) -> Self {
+        Self {
+            migration_id,
+            run_id,
+            step_id,
+            operation_id,
+            input_fingerprint: Some(input_fingerprint),
+            plan_fingerprint: Some(plan_fingerprint),
+            decision_fingerprint: Some(decision_fingerprint),
         }
     }
 
@@ -1018,6 +1046,18 @@ impl MigrationStepCommitIdentity {
     #[must_use]
     pub const fn input_fingerprint(self) -> Option<[u8; 32]> {
         self.input_fingerprint
+    }
+
+    /// Canonical immutable plan fingerprint when the guarded executor supplied it.
+    #[must_use]
+    pub const fn plan_fingerprint(self) -> Option<[u8; 32]> {
+        self.plan_fingerprint
+    }
+
+    /// Fingerprint of the exact validated unresolved-item decisions, when guarded.
+    #[must_use]
+    pub const fn decision_fingerprint(self) -> Option<[u8; 32]> {
+        self.decision_fingerprint
     }
 }
 

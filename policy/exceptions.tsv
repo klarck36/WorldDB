@@ -1,2 +1,4 @@
 exception_id	owner	reason	expires_on
 WDB-EXC-0002	Luna	Confine the Windows MoveFileExW call for same-volume atomic manifest/CURRENT publication with MOVEFILE_WRITE_THROUGH to one documented adapter function; keep safe path encoding outside the FFI boundary and remove this exception if an equivalent safe standard API gains the required semantics.	2026-10-31
+WDB-EXC-0003	Luna	Keep the guarded migration entry point and shared executor's independently validated plan, decisions, authorization, restore evidence, audit records, and backend hooks explicit until a typed execution-context refactor preserves the same bindings.	2026-10-31
+WDB-EXC-0004	Luna	Keep every real-restore proof field and every atomic migration-audit commit field explicit across the core/storage boundary until typed evidence and commit-context values replace the argument lists.	2026-10-31

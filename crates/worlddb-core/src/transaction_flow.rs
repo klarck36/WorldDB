@@ -226,6 +226,24 @@ where
         self.backend
             .publish_cancellable(self.entries, &self.cancellation)
     }
+
+    /// Commits through a backend-owned atomic publication hook after validation.
+    pub(crate) fn commit_via(
+        self,
+        publish: impl FnOnce(
+            &mut B,
+            Revision,
+            Vec<T>,
+            &CommitCancellation,
+        ) -> Result<Revision, CancellableCommitError>,
+    ) -> Result<Revision, CancellableCommitError> {
+        publish(
+            self.backend,
+            self.base_revision,
+            self.entries,
+            &self.cancellation,
+        )
+    }
 }
 
 impl<B, T, Phase> WriteTransaction<'_, B, T, Phase> {

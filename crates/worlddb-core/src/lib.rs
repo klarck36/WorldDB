@@ -594,6 +594,7 @@ mod masks;
 mod migration;
 mod migration_dry_run;
 mod migration_execution;
+mod migration_guard;
 mod migration_run_journal;
 mod migration_transform;
 mod multi_value_resolution;
@@ -742,6 +743,39 @@ pub mod storage_internal {
     -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
         crate::ids::generate_id()
     }
+
+    /// Records a restore-point token after the file adapter verified a real clone restore.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments, reason = "WDB-EXC-0004")]
+    pub fn migration_safe_restore_point_from_verified_restore(
+        plan: &crate::MigrationPlan,
+        source_database_id: crate::ids::DatabaseId,
+        source_revision: crate::ids::Revision,
+        source_commit_hash: [u8; 32],
+        backup_inventory_digest: [u8; 32],
+        backup_manifest_digest: [u8; 32],
+        restored_source_database_id: crate::ids::DatabaseId,
+        restored_source_revision: crate::ids::Revision,
+        restored_database_id: crate::ids::DatabaseId,
+        restored_revision: crate::ids::Revision,
+        restore_destination_fingerprint: [u8; 32],
+        verification_fingerprint: [u8; 32],
+    ) -> Result<crate::MigrationSafeRestorePoint, crate::MigrationSafeRestorePointError> {
+        crate::MigrationSafeRestorePoint::from_verified_storage(
+            plan,
+            source_database_id,
+            source_revision,
+            source_commit_hash,
+            backup_inventory_digest,
+            backup_manifest_digest,
+            restored_source_database_id,
+            restored_source_revision,
+            restored_database_id,
+            restored_revision,
+            restore_destination_fingerprint,
+            verification_fingerprint,
+        )
+    }
 }
 
 pub use security::{
@@ -885,7 +919,11 @@ pub use migration_execution::{
     MigrationExecutionResult, MigrationResumeError, MigrationResumeFailure,
     MigrationStepCommitReceipt, MigrationStepCommitStatus, MigrationStepInput,
     MigrationStepStatusError, MigrationStepValidationError, execute_compatible_migration,
-    execute_or_resume_compatible_migration, query_migration_step_status,
+    execute_guarded_migration, execute_or_resume_compatible_migration, query_migration_step_status,
+};
+pub use migration_guard::{
+    BreakingMigrationAdminAction, BreakingMigrationAdminActionError, MigrationAuditCommit,
+    MigrationCommitBackend, MigrationSafeRestorePoint, MigrationSafeRestorePointError,
 };
 pub use migration_run_journal::{
     MAX_MIGRATION_RUN_JOURNAL_BYTES, MAX_MIGRATION_RUN_JOURNAL_STEPS,

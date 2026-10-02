@@ -290,7 +290,7 @@ fn independent_frame_and_tlv_oracle_accepts_every_schema_project_golden() {
         }
         vector_count += 1;
     }
-    assert_eq!(vector_count, 51);
+    assert_eq!(vector_count, 52);
 }
 
 #[test]
