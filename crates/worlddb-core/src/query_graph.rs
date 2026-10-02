@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::ids::{HistorySpaceId, LayerId};
-use crate::query_context::QueryContext;
+use crate::query_context::{QueryContext, QueryContextBinding};
 use crate::query_ports::OwnedQueryResult;
 use crate::record_refs::RecordRef;
 use crate::security::{
@@ -164,13 +164,38 @@ impl GraphEdge {
 pub struct GraphCandidateSet {
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
+    query_context_binding: Option<QueryContextBinding>,
 }
 
 impl GraphCandidateSet {
     /// Creates a candidate collection from retained node and relationship records.
     #[must_use]
     pub const fn new(nodes: Vec<GraphNode>, edges: Vec<GraphEdge>) -> Self {
-        Self { nodes, edges }
+        Self {
+            nodes,
+            edges,
+            query_context_binding: None,
+        }
+    }
+
+    /// Binds indexed or scanned graph candidates to every semantic axis of one query.
+    #[must_use]
+    pub fn new_for_context(
+        context: &QueryContext,
+        nodes: Vec<GraphNode>,
+        edges: Vec<GraphEdge>,
+    ) -> Self {
+        Self {
+            nodes,
+            edges,
+            query_context_binding: Some(context.binding()),
+        }
+    }
+
+    pub(crate) fn is_bound_to(&self, context: &QueryContext) -> bool {
+        self.query_context_binding
+            .as_ref()
+            .is_some_and(|binding| binding.matches(context))
     }
 }
 
@@ -533,6 +558,8 @@ pub enum GraphError {
     DuplicateVisibleNode,
     /// Candidate source repeats a visible edge identity.
     DuplicateVisibleEdge,
+    /// Candidate rows were not bound to the complete query context.
+    CandidateContextMismatch,
     /// An internally selected edge index is invalid.
     InvalidCandidates,
     /// Node, edge, work, or output budget was exhausted; no partial graph is returned.
@@ -550,6 +577,9 @@ impl fmt::Display for GraphError {
             Self::Unauthorized => "graph traversal is not authorized",
             Self::DuplicateVisibleNode => "graph has duplicate visible node identities",
             Self::DuplicateVisibleEdge => "graph has duplicate visible edge identities",
+            Self::CandidateContextMismatch => {
+                "graph candidates do not match the pinned query context"
+            }
             Self::InvalidCandidates => "graph candidate source is invalid",
             Self::BudgetExceeded => "graph traversal budget exceeded",
             Self::Cancelled => "graph traversal was cancelled",
@@ -575,8 +605,100 @@ mod tests {
     use crate::non_interference::{
         CursorObservation, PairedWorld, PublicFailure, PublicObservation,
     };
+    use crate::query_context::{QueryContext, QueryContextInput, WorldTimeSelector};
+    use crate::query_engine::{ProductiveQueryEngine, QueryEngineError, QueryExecutionPath};
     use crate::query_search::tests::{fixture_with_candidate_limit, fixture_with_denials, id};
     use crate::record_refs::RecordRef;
+    use crate::temporal::{Timeline, WorldTime};
+
+    #[test]
+    fn productive_graph_entrypoint_requires_context_bound_candidates()
+    -> Result<(), QueryEngineError> {
+        let fixture = fixture_with_candidate_limit(None, 10, 10);
+        let root = RecordRef::Assertion(id::<crate::ids::AssertionId>(16));
+        let target = RecordRef::Assertion(id::<crate::ids::AssertionId>(17));
+        let node_rows = vec![
+            GraphNode::new(root, fixture.history_space, fixture.layer),
+            GraphNode::new(target, fixture.history_space, fixture.layer),
+        ];
+        let edge_rows = vec![GraphEdge::new(
+            RecordRef::Provenance(id::<crate::ids::ProvenanceId>(50)),
+            root,
+            target,
+            fixture.history_space,
+            fixture.layer,
+            GraphRelationshipKind::ProvenanceDerivedFrom,
+        )];
+        let spec = GraphSpec::new(
+            vec![root],
+            vec![GraphRelationshipKind::ProvenanceDerivedFrom],
+            GraphDirection::Outgoing,
+            1,
+            2,
+            1,
+            GraphCyclePolicy::StopAtRepeatedNode,
+        )
+        .map_err(QueryEngineError::Graph)?;
+        let unbound = GraphCandidateSet::new(node_rows.clone(), edge_rows.clone());
+        assert!(matches!(
+            ProductiveQueryEngine::graph_traversal(
+                &unbound,
+                &spec,
+                &fixture.context,
+                &fixture.policies,
+            ),
+            Err(QueryEngineError::Graph(
+                GraphError::CandidateContextMismatch
+            ))
+        ));
+
+        let candidates = GraphCandidateSet::new_for_context(&fixture.context, node_rows, edge_rows);
+        let mismatched_time_context = QueryContext::new(QueryContextInput {
+            snapshot: fixture.context.snapshot(),
+            snapshot_revision: fixture.context.snapshot_revision(),
+            recorded_as_of: fixture.context.recorded_as_of(),
+            history_space: fixture.context.history_space(),
+            layers: fixture.context.layers().clone(),
+            world_time: WorldTimeSelector::At(WorldTime::from_nanoseconds(
+                Timeline::new(id::<crate::ids::TimelineId>(88)),
+                123,
+            )),
+            perspective: fixture.context.perspective(),
+            epistemic_mode: fixture.context.epistemic_mode(),
+            schema_binding: fixture.context.schema_binding(),
+            security: fixture.context.security(),
+            budget: fixture.context.budget(),
+            cancellation: fixture.context.cancellation().clone(),
+        })
+        .unwrap_or_else(|_| unreachable!("only the world-time selector changes"));
+        assert!(matches!(
+            ProductiveQueryEngine::graph_traversal(
+                &candidates,
+                &spec,
+                &mismatched_time_context,
+                &fixture.policies,
+            ),
+            Err(QueryEngineError::Graph(
+                GraphError::CandidateContextMismatch
+            ))
+        ));
+        let output = ProductiveQueryEngine::graph_traversal(
+            &candidates,
+            &spec,
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        assert_eq!(output.path(), QueryExecutionPath::FullScan);
+        assert_eq!(output.query().value().nodes(), &[root, target]);
+        assert_eq!(output.query().value().edges().len(), 1);
+        assert!(
+            output
+                .query()
+                .query_context_binding()
+                .matches(&fixture.context)
+        );
+        Ok(())
+    }
 
     #[test]
     fn hidden_nodes_and_edges_are_filtered_before_budgets_and_traversal() -> Result<(), GraphError>

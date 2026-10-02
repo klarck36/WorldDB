@@ -33,6 +33,9 @@ use crate::multi_value_resolution::{
     resolve_multi_value_replace_with_trace,
 };
 use crate::query_context::{BudgetDimension, QueryContext, WorldTimeSelector};
+use crate::query_graph::{
+    GraphCandidateSet, GraphError, GraphResult, GraphSpec, full_scan_authorized_graph_traversal,
+};
 use crate::query_ports::{
     OwnedQueryResult, QueryPortError, bind_authorized_explain, bind_authorized_resolved_view,
     full_scan_owned_authorized_raw_history,
@@ -239,6 +242,30 @@ impl ProductiveQueryEngine {
     ) -> Result<QueryEngineOutput<Vec<SearchHit>>, QueryEngineError> {
         ensure_active(context)?;
         let query = full_scan_token_search(documents, spec, schema_text_fields, context, policies)?;
+        ensure_active(context)?;
+        Ok(QueryEngineOutput {
+            query,
+            path: QueryExecutionPath::FullScan,
+        })
+    }
+
+    /// Traverses a context-bound graph candidate snapshot through the authorized
+    /// M3 BFS port. EventTime indexes or other graph candidate sources must be
+    /// bound to this same QueryContext before traversal; the reference graph walk
+    /// remains the complete fallback and validates record/relationship rights.
+    pub fn graph_traversal(
+        candidates: &GraphCandidateSet,
+        spec: &GraphSpec,
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+    ) -> Result<QueryEngineOutput<GraphResult>, QueryEngineError> {
+        ensure_active(context)?;
+        if !candidates.is_bound_to(context) {
+            return Err(QueryEngineError::Graph(
+                GraphError::CandidateContextMismatch,
+            ));
+        }
+        let query = full_scan_authorized_graph_traversal(candidates, spec, context, policies)?;
         ensure_active(context)?;
         Ok(QueryEngineOutput {
             query,
@@ -802,6 +829,7 @@ pub enum QueryEngineError {
     MultiValueResolution,
     QueryBinding,
     Search(QuerySearchError),
+    Graph(GraphError),
     Explain,
 }
 
@@ -835,6 +863,7 @@ impl fmt::Display for QueryEngineError {
             Self::MultiValueResolution => "multi-value resolution could not be completed",
             Self::QueryBinding => "query result does not match its pinned context",
             Self::Search(_) => "query search could not be completed",
+            Self::Graph(_) => "query graph traversal could not be completed",
             Self::Explain => "query Explain trace could not be constructed",
         })
     }
@@ -868,6 +897,12 @@ error_from!(ResolvedViewError, Explain);
 impl From<QuerySearchError> for QueryEngineError {
     fn from(error: QuerySearchError) -> Self {
         Self::Search(error)
+    }
+}
+
+impl From<GraphError> for QueryEngineError {
+    fn from(error: GraphError) -> Self {
+        Self::Graph(error)
     }
 }
 
