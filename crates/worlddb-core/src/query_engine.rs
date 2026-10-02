@@ -37,6 +37,9 @@ use crate::query_ports::{
     OwnedQueryResult, QueryPortError, bind_authorized_explain, bind_authorized_resolved_view,
     full_scan_owned_authorized_raw_history,
 };
+use crate::query_search::{
+    QuerySearchError, SearchDocument, SearchHit, SearchSpec, full_scan_token_search,
+};
 use crate::record_refs::RecordRef;
 use crate::reference_query::{
     ExplainStage, ExplainStageError, ExplainStageKind, RawHistoryError, RawHistoryRow,
@@ -216,6 +219,26 @@ impl ProductiveQueryEngine {
         require_full_scan_budget(scan_budget)?;
         let query = full_scan_owned_authorized_raw_history(history, context, policies, record_ref)?;
         enforce_result_limit(context, query.value().len())?;
+        ensure_active(context)?;
+        Ok(QueryEngineOutput {
+            query,
+            path: QueryExecutionPath::FullScan,
+        })
+    }
+
+    /// Executes deterministic TokenSearch through the M3 owned-result port.
+    /// The current index families do not contain text postings, so token search
+    /// uses the authorized full-scan implementation. FullTextSearch remains an
+    /// optional, unsupported operation and is never substituted by this method.
+    pub fn token_search(
+        documents: &[SearchDocument],
+        spec: &SearchSpec,
+        schema_text_fields: &[FieldSelector],
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+    ) -> Result<QueryEngineOutput<Vec<SearchHit>>, QueryEngineError> {
+        ensure_active(context)?;
+        let query = full_scan_token_search(documents, spec, schema_text_fields, context, policies)?;
         ensure_active(context)?;
         Ok(QueryEngineOutput {
             query,
@@ -778,6 +801,7 @@ pub enum QueryEngineError {
     SingleValueResolution,
     MultiValueResolution,
     QueryBinding,
+    Search(QuerySearchError),
     Explain,
 }
 
@@ -810,6 +834,7 @@ impl fmt::Display for QueryEngineError {
             Self::SingleValueResolution => "single-value resolution could not be completed",
             Self::MultiValueResolution => "multi-value resolution could not be completed",
             Self::QueryBinding => "query result does not match its pinned context",
+            Self::Search(_) => "query search could not be completed",
             Self::Explain => "query Explain trace could not be constructed",
         })
     }
@@ -839,6 +864,12 @@ error_from!(QueryPortError, QueryBinding);
 error_from!(ExplainStageError, Explain);
 error_from!(ReferenceExplainError, Explain);
 error_from!(ResolvedViewError, Explain);
+
+impl From<QuerySearchError> for QueryEngineError {
+    fn from(error: QuerySearchError) -> Self {
+        Self::Search(error)
+    }
+}
 
 #[cfg(test)]
 mod tests {

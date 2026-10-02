@@ -446,6 +446,7 @@ pub(crate) mod tests {
         AuthorizationMode, CancellationToken, QueryBudget, QueryBudgetLimits, QueryContext,
         QueryContextInput, SecurityContext, ValidatedLayerSelection, WorldTimeSelector,
     };
+    use crate::query_engine::{ProductiveQueryEngine, QueryEngineError, QueryExecutionPath};
     use crate::record_refs::RecordRef;
     use crate::reference_query::HistoricalQueryBinding;
     use crate::schema::Lifecycle;
@@ -668,6 +669,121 @@ pub(crate) mod tests {
         )
     }
 
+    fn full_text_only_policy_history(fixture: &Fixture) -> SecurityPolicyHistory {
+        let principal = fixture.context.security().principal_id();
+        let revision = fixture.context.recorded_as_of().revision();
+        let policy = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal)],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rule(
+                    50,
+                    principal,
+                    Capability::QueryFullText,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+                rule(
+                    51,
+                    principal,
+                    Capability::AssertionRead,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+                rule(
+                    52,
+                    principal,
+                    Capability::FieldRead,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+            ],
+        )
+        .unwrap_or_else(|_| unreachable!("test policy is valid"));
+        SecurityPolicyHistory::new(
+            revision,
+            vec![
+                SecurityPolicyVersion::new(
+                    Revision::GENESIS,
+                    SecurityEpoch::INITIAL,
+                    policy.clone(),
+                ),
+                SecurityPolicyVersion::new(
+                    Revision::new(1).unwrap_or(Revision::GENESIS),
+                    SecurityEpoch::INITIAL,
+                    policy.clone(),
+                ),
+                SecurityPolicyVersion::new(revision, SecurityEpoch::INITIAL, policy),
+            ],
+        )
+        .unwrap_or_else(|_| unreachable!("complete policy history"))
+    }
+
+    fn field_denied_policy_history(fixture: &Fixture, record: RecordRef) -> SecurityPolicyHistory {
+        let principal = fixture.context.security().principal_id();
+        let revision = fixture.context.recorded_as_of().revision();
+        let policy = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal)],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rule(
+                    53,
+                    principal,
+                    Capability::QuerySearch,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+                rule(
+                    54,
+                    principal,
+                    Capability::AssertionRead,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+                rule(
+                    55,
+                    principal,
+                    Capability::FieldRead,
+                    GrantEffect::Allow,
+                    PolicyScope::project(),
+                ),
+                rule(
+                    56,
+                    principal,
+                    Capability::FieldRead,
+                    GrantEffect::Deny,
+                    PolicyScope::new(
+                        Some(fixture.history_space),
+                        Some(fixture.layer),
+                        Some(record),
+                        Some(fixture.selector),
+                        None,
+                    ),
+                ),
+            ],
+        )
+        .unwrap_or_else(|_| unreachable!("test policy is valid"));
+        SecurityPolicyHistory::new(
+            revision,
+            vec![
+                SecurityPolicyVersion::new(
+                    Revision::GENESIS,
+                    SecurityEpoch::INITIAL,
+                    policy.clone(),
+                ),
+                SecurityPolicyVersion::new(
+                    Revision::new(1).unwrap_or(Revision::GENESIS),
+                    SecurityEpoch::INITIAL,
+                    policy.clone(),
+                ),
+                SecurityPolicyVersion::new(revision, SecurityEpoch::INITIAL, policy),
+            ],
+        )
+        .unwrap_or_else(|_| unreachable!("complete policy history"))
+    }
+
     fn document(
         fixture: &Fixture,
         tail: u8,
@@ -687,6 +803,89 @@ pub(crate) mod tests {
             vec![SearchToken::new("WorldDB")?, SearchToken::new("worlddb")?],
             SearchMatch::AllTerms,
         )
+    }
+
+    #[test]
+    fn productive_token_search_returns_only_typed_visible_hits() -> Result<(), QueryEngineError> {
+        let fixture = fixture(None, 10);
+        let documents = vec![
+            document(&fixture, 6, "needle private phrase")
+                .unwrap_or_else(|_| unreachable!("test search document is valid")),
+        ];
+        let request = SearchSpec::new(
+            vec![fixture.selector],
+            vec![
+                SearchToken::new("needle").unwrap_or_else(|_| unreachable!("test token is valid")),
+            ],
+            SearchMatch::AnyTerm,
+        )
+        .unwrap_or_else(|_| unreachable!("test search request is valid"));
+        let result = ProductiveQueryEngine::token_search(
+            &documents,
+            &request,
+            &[fixture.selector],
+            &fixture.context,
+            &fixture.policies,
+        )?;
+        assert_eq!(result.path(), QueryExecutionPath::FullScan);
+        let hit = result
+            .query()
+            .value()
+            .first()
+            .ok_or(QueryEngineError::Search(
+                QuerySearchError::DuplicateResultKey,
+            ))?;
+        assert_eq!(hit.result_key(), RecordRef::Assertion(id::<AssertionId>(6)));
+        assert_eq!(hit.matched_fields(), &[fixture.selector]);
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_search_fields_are_removed_before_candidate_budgets() -> Result<(), QuerySearchError> {
+        let fixture = fixture_with_candidate_limit(None, 10, 1);
+        let hidden_field_record = RecordRef::Assertion(id::<AssertionId>(7));
+        let policies = field_denied_policy_history(&fixture, hidden_field_record);
+        let documents = [
+            document(&fixture, 6, "visible unrelated text")?,
+            document(&fixture, 7, "hiddensecret")?,
+        ];
+        let request = SearchSpec::new(
+            vec![fixture.selector],
+            vec![SearchToken::new("hiddensecret")?],
+            SearchMatch::AnyTerm,
+        )?;
+        let result = full_scan_token_search(
+            &documents,
+            &request,
+            &[fixture.selector],
+            &fixture.context,
+            &policies,
+        )?;
+        assert!(result.value().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn full_text_capability_does_not_authorize_token_search() -> Result<(), QuerySearchError> {
+        let fixture = fixture(None, 10);
+        let policies = full_text_only_policy_history(&fixture);
+        let documents = [document(&fixture, 6, "needle")?];
+        let request = SearchSpec::new(
+            vec![fixture.selector],
+            vec![SearchToken::new("needle")?],
+            SearchMatch::AnyTerm,
+        )?;
+        assert!(matches!(
+            full_scan_token_search(
+                &documents,
+                &request,
+                &[fixture.selector],
+                &fixture.context,
+                &policies,
+            ),
+            Err(QuerySearchError::Unauthorized)
+        ));
+        Ok(())
     }
 
     #[test]
