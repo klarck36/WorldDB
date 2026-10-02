@@ -10,6 +10,7 @@ use std::fmt;
 const NANOS_PER_DAY: i128 = 86_400_000_000_000;
 const UNIX_EPOCH_DAY_OFFSET: i128 = 719_468;
 const RECORD_VECTOR_SLOT_RESERVATION_BYTES: u64 = 32;
+const MAX_RETAINED_PREVIEW_ERRORS: usize = 256;
 
 /// The implemented deterministic migration interpreter.
 ///
@@ -41,21 +42,19 @@ impl MigrationTransformer {
         self.version
     }
 
-    /// Canonically validates and copies a batch of encoded records.
+    /// Estimates version-1 record counts and reserves the transform's copy-memory ceiling.
     ///
-    /// Output preserves source order, since record order can carry history
-    /// semantics. Work is counted per record and memory admission counts the
-    /// input and canonical output frame bytes plus a fixed 32-byte slot for
-    /// each output vector. The record parser uses the format's fixed limits,
-    /// not process configuration.
-    /// No partial output is returned after a validation or budget error.
-    pub fn transform_records(
+    /// Version 1 preserves each canonical frame byte-for-byte, so output bytes
+    /// equal input bytes. The estimate uses the same work and memory formula as
+    /// [`Self::transform_records`]. The preview sink retains no output frames but
+    /// uses this same conservative ceiling to keep admission consistent.
+    pub fn estimate_records(
         &self,
         plan: &MigrationPlan,
         source_revision: SchemaRevision,
         source_fingerprint: [u8; 32],
         records: &[Vec<u8>],
-    ) -> Result<MigrationTransformBatch, MigrationTransformerError> {
+    ) -> Result<MigrationTransformEstimate, MigrationTransformerError> {
         plan.validate_start(source_revision, source_fingerprint, self.version)
             .map_err(MigrationTransformerError::Plan)?;
 
@@ -89,20 +88,176 @@ impl MigrationTransformer {
             });
         }
 
-        let mut output = Vec::new();
-        output
-            .try_reserve_exact(records.len())
-            .map_err(|_| MigrationTransformerError::AllocationFailed)?;
-        for record in records {
-            // The bounded decoder verifies the exact canonical re-encoding.
-            decode_record_with_limits(record, &DecoderLimits::DEFAULT)
-                .map_err(MigrationTransformerError::RecordCodec)?;
-            output.push(record.clone());
+        Ok(MigrationTransformEstimate {
+            record_count: work_units,
+            input_bytes,
+            output_bytes: input_bytes,
+            reserved_memory_bytes: memory_required,
+        })
+    }
+
+    /// Validates one exact canonical input frame under the version's fixed codec limits.
+    pub fn validate_record(&self, record: &[u8]) -> Result<(), MigrationTransformerError> {
+        decode_record_with_limits(record, &DecoderLimits::DEFAULT)
+            .map(|_| ())
+            .map_err(MigrationTransformerError::RecordCodec)
+    }
+
+    /// Canonically validates and copies a batch of encoded records.
+    ///
+    /// Output preserves source order, since record order can carry history
+    /// semantics. Work is counted per record and memory admission counts the
+    /// input and canonical output frame bytes plus a fixed 32-byte slot for
+    /// each output vector. The record parser uses the format's fixed limits,
+    /// not process configuration.
+    /// No partial output is returned after a validation or budget error.
+    pub fn transform_records(
+        &self,
+        plan: &MigrationPlan,
+        source_revision: SchemaRevision,
+        source_fingerprint: [u8; 32],
+        records: &[Vec<u8>],
+    ) -> Result<MigrationTransformBatch, MigrationTransformerError> {
+        let preview = self.transform_records_inner(
+            plan,
+            source_revision,
+            source_fingerprint,
+            records,
+            true,
+            false,
+        )?;
+        if let Some(error) = preview.first_record_error() {
+            return Err(error.cause());
         }
-        let fingerprint = fingerprint_records(plan, self.version, &output)?;
-        Ok(MigrationTransformBatch {
-            records: output,
+        preview
+            .batch
+            .ok_or(MigrationTransformerError::AllocationFailed)
+    }
+
+    /// Runs the shared transform while retaining a bounded set of per-record failures.
+    ///
+    /// The record decoder and transform loop are identical to [`Self::transform_records`].
+    /// The only difference is that this preview variant retains up to 256 error details within
+    /// the plan's memory allowance and reports the count of any omitted details.
+    pub fn transform_records_for_preview(
+        &self,
+        plan: &MigrationPlan,
+        source_revision: SchemaRevision,
+        source_fingerprint: [u8; 32],
+        records: &[Vec<u8>],
+    ) -> Result<MigrationTransformPreview, MigrationTransformerError> {
+        self.transform_records_inner(
+            plan,
+            source_revision,
+            source_fingerprint,
+            records,
+            false,
+            true,
+        )
+    }
+
+    fn transform_records_inner(
+        &self,
+        plan: &MigrationPlan,
+        source_revision: SchemaRevision,
+        source_fingerprint: [u8; 32],
+        records: &[Vec<u8>],
+        retain_output: bool,
+        collect_diagnostics: bool,
+    ) -> Result<MigrationTransformPreview, MigrationTransformerError> {
+        let estimate = self.estimate_records(plan, source_revision, source_fingerprint, records)?;
+        let mut output = Vec::new();
+        if retain_output {
+            output
+                .try_reserve_exact(records.len())
+                .map_err(|_| MigrationTransformerError::AllocationFailed)?;
+        }
+
+        let remaining_memory = plan
+            .budget()
+            .max_memory_bytes()
+            .saturating_sub(estimate.reserved_memory_bytes());
+        let error_size =
+            u64::try_from(std::mem::size_of::<MigrationTransformRecordError>()).unwrap_or(u64::MAX);
+        let budgeted_error_count = if error_size == 0 {
+            0
+        } else {
+            usize::try_from(remaining_memory / error_size).unwrap_or(usize::MAX)
+        };
+        let max_error_details = if collect_diagnostics {
+            records
+                .len()
+                .min(MAX_RETAINED_PREVIEW_ERRORS)
+                .min(budgeted_error_count)
+        } else {
+            0
+        };
+        let diagnostic_memory_bytes = u64::try_from(max_error_details)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(error_size);
+        let mut record_errors = Vec::new();
+        record_errors
+            .try_reserve_exact(max_error_details)
+            .map_err(|_| MigrationTransformerError::AllocationFailed)?;
+
+        let mut first_record_error = None;
+        let mut error_count = 0_u64;
+        let mut omitted_error_count = 0_u64;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"WorldDB.MigrationTransformResult.v2\0");
+        hasher.update(plan.fingerprint().as_bytes());
+        hasher.update(&self.version.value().to_be_bytes());
+        hasher.update(&estimate.record_count().to_be_bytes());
+        for (index, record) in records.iter().enumerate() {
+            match self.validate_record(record) {
+                Ok(()) => {
+                    let record_len = u64::try_from(record.len())
+                        .map_err(|_| MigrationTransformerError::SizeOverflow)?;
+                    hasher.update(&record_len.to_be_bytes());
+                    hasher.update(record);
+                    if retain_output {
+                        output.push(record.clone());
+                    }
+                }
+                Err(cause) => {
+                    let record_index = u64::try_from(index)
+                        .map_err(|_| MigrationTransformerError::SizeOverflow)?;
+                    let error = MigrationTransformRecordError {
+                        record_index,
+                        cause,
+                    };
+                    first_record_error.get_or_insert(error);
+                    error_count = error_count.saturating_add(1);
+                    if record_errors.len() < max_error_details {
+                        record_errors.push(error);
+                    } else {
+                        omitted_error_count = omitted_error_count.saturating_add(1);
+                    }
+                }
+            }
+        }
+
+        let (batch, fingerprint) = if error_count == 0 {
+            let fingerprint = MigrationTransformFingerprint(*hasher.finalize().as_bytes());
+            let batch = retain_output.then_some(MigrationTransformBatch {
+                records: output,
+                fingerprint,
+                estimate,
+            });
+            (batch, Some(fingerprint))
+        } else {
+            (None, None)
+        };
+
+        Ok(MigrationTransformPreview {
+            batch,
             fingerprint,
+            estimate,
+            first_record_error,
+            record_errors,
+            error_count,
+            omitted_error_count,
+            diagnostic_memory_bytes,
         })
     }
 
@@ -145,6 +300,7 @@ impl MigrationTransformer {
 pub struct MigrationTransformBatch {
     records: Vec<Vec<u8>>,
     fingerprint: MigrationTransformFingerprint,
+    estimate: MigrationTransformEstimate,
 }
 
 impl MigrationTransformBatch {
@@ -159,6 +315,128 @@ impl MigrationTransformBatch {
     pub const fn fingerprint(&self) -> MigrationTransformFingerprint {
         self.fingerprint
     }
+
+    /// Resource and record estimate used to admit this exact batch.
+    #[must_use]
+    pub const fn estimate(&self) -> MigrationTransformEstimate {
+        self.estimate
+    }
+}
+
+/// All-or-nothing transform fingerprint plus bounded validation details for a dry run.
+///
+/// The preview retains no output record frames; only its exact count, byte estimate, and digest
+/// remain available after the shared transform loop completes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MigrationTransformPreview {
+    batch: Option<MigrationTransformBatch>,
+    fingerprint: Option<MigrationTransformFingerprint>,
+    estimate: MigrationTransformEstimate,
+    first_record_error: Option<MigrationTransformRecordError>,
+    record_errors: Vec<MigrationTransformRecordError>,
+    error_count: u64,
+    omitted_error_count: u64,
+    diagnostic_memory_bytes: u64,
+}
+
+impl MigrationTransformPreview {
+    /// Exact resource admission estimate used for this preview.
+    #[must_use]
+    pub const fn estimate(&self) -> MigrationTransformEstimate {
+        self.estimate
+    }
+
+    /// Fingerprint of the exact result, absent when any source frame failed validation.
+    #[must_use]
+    pub const fn fingerprint(&self) -> Option<MigrationTransformFingerprint> {
+        self.fingerprint
+    }
+
+    /// First record error even when the diagnostic memory budget retains no details.
+    #[must_use]
+    pub const fn first_record_error(&self) -> Option<MigrationTransformRecordError> {
+        self.first_record_error
+    }
+
+    /// Retained deterministic per-record validation failures.
+    #[must_use]
+    pub fn record_errors(&self) -> &[MigrationTransformRecordError] {
+        &self.record_errors
+    }
+
+    /// Total number of invalid input records.
+    #[must_use]
+    pub const fn error_count(&self) -> u64 {
+        self.error_count
+    }
+
+    /// Invalid record details omitted to stay within the plan memory allowance.
+    #[must_use]
+    pub const fn omitted_error_count(&self) -> u64 {
+        self.omitted_error_count
+    }
+
+    /// Memory reserved for the retained diagnostic details.
+    #[must_use]
+    pub const fn diagnostic_memory_bytes(&self) -> u64 {
+        self.diagnostic_memory_bytes
+    }
+}
+
+/// Stable source position and validation cause for one invalid migration frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MigrationTransformRecordError {
+    record_index: u64,
+    cause: MigrationTransformerError,
+}
+
+impl MigrationTransformRecordError {
+    /// Zero-based position in the source batch.
+    #[must_use]
+    pub const fn record_index(self) -> u64 {
+        self.record_index
+    }
+
+    /// Deterministic validation failure for this source frame.
+    #[must_use]
+    pub const fn cause(self) -> MigrationTransformerError {
+        self.cause
+    }
+}
+
+/// Version-1 record counts and budgeted copy-memory ceiling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MigrationTransformEstimate {
+    record_count: u64,
+    input_bytes: u64,
+    output_bytes: u64,
+    reserved_memory_bytes: u64,
+}
+
+impl MigrationTransformEstimate {
+    /// Number of source and output frames in this exact-copy transform.
+    #[must_use]
+    pub const fn record_count(self) -> u64 {
+        self.record_count
+    }
+
+    /// Total source frame bytes.
+    #[must_use]
+    pub const fn input_bytes(self) -> u64 {
+        self.input_bytes
+    }
+
+    /// Exact output frame bytes for transformer version 1.
+    #[must_use]
+    pub const fn output_bytes(self) -> u64 {
+        self.output_bytes
+    }
+
+    /// Input, output, and output-vector-slot bytes budgeted by version 1.
+    #[must_use]
+    pub const fn reserved_memory_bytes(self) -> u64 {
+        self.reserved_memory_bytes
+    }
 }
 
 /// Stable BLAKE3 digest of one canonical logical transform result.
@@ -171,31 +449,6 @@ impl MigrationTransformFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
-}
-
-fn fingerprint_records(
-    plan: &MigrationPlan,
-    version: MigrationTransformerVersion,
-    records: &[Vec<u8>],
-) -> Result<MigrationTransformFingerprint, MigrationTransformerError> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"WorldDB.MigrationTransformResult.v2\0");
-    hasher.update(plan.fingerprint().as_bytes());
-    hasher.update(&version.value().to_be_bytes());
-    hasher.update(
-        &u64::try_from(records.len())
-            .map_err(|_| MigrationTransformerError::SizeOverflow)?
-            .to_be_bytes(),
-    );
-    for record in records {
-        hasher.update(
-            &u64::try_from(record.len())
-                .map_err(|_| MigrationTransformerError::SizeOverflow)?
-                .to_be_bytes(),
-        );
-        hasher.update(record);
-    }
-    Ok(MigrationTransformFingerprint(*hasher.finalize().as_bytes()))
 }
 
 fn shift_calendar_utc(

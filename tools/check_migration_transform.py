@@ -1,4 +1,4 @@
-"""Enforce the migration transformer's closed, deterministic dependency boundary."""
+"""Enforce the migration core's closed, deterministic dependency boundary."""
 
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "crates" / "worlddb-core" / "src" / "migration_transform.rs"
+SOURCES = (
+    ROOT / "crates" / "worlddb-core" / "src" / "migration_transform.rs",
+    ROOT / "crates" / "worlddb-core" / "src" / "migration_dry_run.rs",
+)
 ALLOWED_PATH_ROOTS = {
     "blake3",
     "crate",
@@ -17,6 +20,8 @@ ALLOWED_PATH_ROOTS = {
     "i64",
     "std",
     "super",
+    "sum",
+    "usize",
     "u8",
     "u64",
     "uuid",
@@ -53,13 +58,16 @@ def violations(source: str) -> list[str]:
 
 
 def main() -> int:
-    source = SOURCE.read_text(encoding="utf-8")
-    errors = violations(source)
+    errors = [
+        f"{path.name}: {error}"
+        for path in SOURCES
+        for error in violations(path.read_text(encoding="utf-8"))
+    ]
     if errors:
         for error in errors:
             print(f"MIGRATION TRANSFORM POLICY ERROR: {error}", file=sys.stderr)
         return 1
-    print("MIGRATION TRANSFORM POLICY OK: closed deterministic dependency boundary")
+    print("MIGRATION CORE POLICY OK: transformer and dry-run have closed deterministic dependencies")
     return 0
 
 

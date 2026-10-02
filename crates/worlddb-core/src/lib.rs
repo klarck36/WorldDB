@@ -592,6 +592,7 @@ mod mask_projection;
 mod mask_time_indexes;
 mod masks;
 mod migration;
+mod migration_dry_run;
 mod migration_transform;
 mod multi_value_resolution;
 #[cfg(test)]
@@ -836,8 +837,14 @@ pub use migration::{
     MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId, SchemaIdentityTransition,
     SchemaIdentityTransitionError, SourceSchemaPrecondition,
 };
+pub use migration_dry_run::{
+    MigrationDryRun, MigrationDryRunError, MigrationDryRunErrorKind, MigrationDryRunOutput,
+    MigrationDryRunReport, MigrationDryRunUnresolvedItem, MigrationDryRunUnresolvedReason,
+    MigrationDryRunWarning, MigrationDryRunWarningCode,
+};
 pub use migration_transform::{
-    MigrationTransformBatch, MigrationTransformFingerprint, MigrationTransformer,
+    MigrationTransformBatch, MigrationTransformEstimate, MigrationTransformFingerprint,
+    MigrationTransformPreview, MigrationTransformRecordError, MigrationTransformer,
     MigrationTransformerError,
 };
 pub use multi_value_resolution::{

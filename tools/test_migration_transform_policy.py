@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import unittest
 
-from check_migration_transform import violations
+from check_migration_transform import SOURCES, violations
 
 
 class MigrationTransformPolicyTests(unittest.TestCase):
+    def test_implemented_migration_core_sources_are_within_the_closed_boundary(self) -> None:
+        for path in SOURCES:
+            with self.subTest(path=path.name):
+                self.assertEqual(violations(path.read_text(encoding="utf-8")), [])
+
     def test_closed_transform_imports_only_approved_path_roots(self) -> None:
         source = "use crate::ids::TimelineId; use std::fmt; blake3::Hasher::new();"
         self.assertEqual(violations(source), [])
