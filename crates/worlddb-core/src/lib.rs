@@ -594,6 +594,7 @@ mod masks;
 mod migration;
 mod migration_dry_run;
 mod migration_execution;
+mod migration_run_journal;
 mod migration_transform;
 mod multi_value_resolution;
 #[cfg(test)]
@@ -846,9 +847,17 @@ pub use migration_dry_run::{
     ValidatedMigrationDecisions,
 };
 pub use migration_execution::{
-    MigrationExecutionError, MigrationExecutionFailure, MigrationExecutionResult,
-    MigrationStepCommitReceipt, MigrationStepInput, MigrationStepValidationError,
-    execute_compatible_migration,
+    MigrationExecutionContext, MigrationExecutionError, MigrationExecutionFailure,
+    MigrationExecutionResult, MigrationResumeError, MigrationResumeFailure,
+    MigrationStepCommitReceipt, MigrationStepCommitStatus, MigrationStepInput,
+    MigrationStepStatusError, MigrationStepValidationError, execute_compatible_migration,
+    execute_or_resume_compatible_migration, query_migration_step_status,
+};
+pub use migration_run_journal::{
+    MAX_MIGRATION_RUN_JOURNAL_BYTES, MAX_MIGRATION_RUN_JOURNAL_STEPS,
+    MigrationRunJournalCodecError, MigrationRunJournalError, MigrationRunJournalSnapshot,
+    MigrationRunJournalSpec, MigrationRunJournalState, MigrationRunJournalStep,
+    MigrationRunJournalStepSpec, MigrationRunJournalStepState, MigrationRunJournalStore,
 };
 pub use migration_transform::{
     MigrationTransformBatch, MigrationTransformEstimate, MigrationTransformFingerprint,

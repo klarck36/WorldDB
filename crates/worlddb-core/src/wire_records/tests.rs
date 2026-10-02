@@ -285,6 +285,18 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
                 operation_id,
             )),
         ),
+        (
+            "migration_step_commit_fingerprinted",
+            Record::MigrationStepCommitIdentity(
+                MigrationStepCommitIdentity::with_input_fingerprint(
+                    migration_id,
+                    run_id,
+                    step_id,
+                    operation_id,
+                    [0x55; 32],
+                ),
+            ),
+        ),
     ];
     records.extend(lifecycle_fixtures()?);
     records.extend(event_fixtures()?);

@@ -423,6 +423,12 @@ impl MigrationPlanFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Wraps an exact persisted fingerprint value for validated comparison.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 /// Inputs consumed when constructing an immutable migration plan.
@@ -945,6 +951,7 @@ pub struct MigrationStepCommitIdentity {
     run_id: MigrationRunId,
     step_id: MigrationStepId,
     operation_id: OperationId,
+    input_fingerprint: Option<[u8; 32]>,
 }
 
 impl MigrationStepCommitIdentity {
@@ -961,6 +968,25 @@ impl MigrationStepCommitIdentity {
             run_id,
             step_id,
             operation_id,
+            input_fingerprint: None,
+        }
+    }
+
+    /// Identifies a step commit and binds its exact ordered canonical input frames.
+    #[must_use]
+    pub const fn with_input_fingerprint(
+        migration_id: MigrationId,
+        run_id: MigrationRunId,
+        step_id: MigrationStepId,
+        operation_id: OperationId,
+        input_fingerprint: [u8; 32],
+    ) -> Self {
+        Self {
+            migration_id,
+            run_id,
+            step_id,
+            operation_id,
+            input_fingerprint: Some(input_fingerprint),
         }
     }
 
@@ -986,6 +1012,12 @@ impl MigrationStepCommitIdentity {
     #[must_use]
     pub const fn operation_id(self) -> OperationId {
         self.operation_id
+    }
+
+    /// Exact ordered source-frame fingerprint, when recorded by a resumable executor.
+    #[must_use]
+    pub const fn input_fingerprint(self) -> Option<[u8; 32]> {
+        self.input_fingerprint
     }
 }
 

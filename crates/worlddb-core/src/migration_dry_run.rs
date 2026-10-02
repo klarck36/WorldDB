@@ -266,6 +266,12 @@ impl MigrationDryRunInputFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Fingerprints the exact ordered canonical input frames for resumable execution.
+    #[must_use]
+    pub fn for_records(records: &[Vec<u8>]) -> Option<Self> {
+        fingerprint_input(records)
+    }
 }
 
 impl MigrationDryRunOutput {

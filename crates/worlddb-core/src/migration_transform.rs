@@ -482,6 +482,12 @@ impl MigrationTransformFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Wraps an exact persisted fingerprint value for validated comparison.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 fn shift_calendar_utc(

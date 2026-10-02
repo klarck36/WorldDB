@@ -309,15 +309,16 @@ pub(super) fn decode_run(
 pub(super) fn encode_step_commit(
     value: &MigrationStepCommitIdentity,
 ) -> Result<Vec<u8>, RecordCodecError> {
-    encode_fields(
-        RecordKind::MigrationStepCommitIdentity,
-        vec![
-            (1, encode_id(value.migration_id()).to_vec()),
-            (2, encode_id(value.run_id()).to_vec()),
-            (3, encode_id(value.step_id()).to_vec()),
-            (4, encode_id(value.operation_id()).to_vec()),
-        ],
-    )
+    let mut fields = vec![
+        (1, encode_id(value.migration_id()).to_vec()),
+        (2, encode_id(value.run_id()).to_vec()),
+        (3, encode_id(value.step_id()).to_vec()),
+        (4, encode_id(value.operation_id()).to_vec()),
+    ];
+    if let Some(input_fingerprint) = value.input_fingerprint() {
+        fields.push((5, input_fingerprint.to_vec()));
+    }
+    encode_fields(RecordKind::MigrationStepCommitIdentity, fields)
 }
 
 pub(super) fn decode_step_commit(
@@ -325,19 +326,28 @@ pub(super) fn decode_step_commit(
     limits: &DecoderLimits,
 ) -> Result<MigrationStepCommitIdentity, RecordCodecError> {
     let kind = RecordKind::MigrationStepCommitIdentity;
-    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3, 4], limits)?;
+    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3, 4, 5], limits)?;
     let migration_id =
         decode_id(required_field(kind, &fields, 1)?).map_err(RecordCodecError::Wire)?;
     let run_id = decode_id(required_field(kind, &fields, 2)?).map_err(RecordCodecError::Wire)?;
     let step_id = decode_id(required_field(kind, &fields, 3)?).map_err(RecordCodecError::Wire)?;
     let operation_id =
         decode_id(required_field(kind, &fields, 4)?).map_err(RecordCodecError::Wire)?;
-    Ok(MigrationStepCommitIdentity::new(
-        migration_id,
-        run_id,
-        step_id,
-        operation_id,
-    ))
+    let input_fingerprint = fields
+        .iter()
+        .find(|(tag, _)| *tag == 5)
+        .map(|(_, value)| decode_fingerprint(kind, 5, value))
+        .transpose()?;
+    Ok(match input_fingerprint {
+        Some(fingerprint) => MigrationStepCommitIdentity::with_input_fingerprint(
+            migration_id,
+            run_id,
+            step_id,
+            operation_id,
+            fingerprint,
+        ),
+        None => MigrationStepCommitIdentity::new(migration_id, run_id, step_id, operation_id),
+    })
 }
 
 fn encode_schema_identity_transition(

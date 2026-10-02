@@ -9,6 +9,7 @@ mod index_generation;
 mod index_rebuild;
 mod layout;
 mod manifest;
+mod migration_run_journal;
 mod recovery;
 mod recovery_journal;
 mod recovery_manager;
@@ -48,6 +49,7 @@ pub use manifest::{
     Manifest, ManifestError, ManifestReceipt, ManifestSegmentKind, ManifestSegmentReference,
     ManifestSnapshot, ManifestStore,
 };
+pub use migration_run_journal::{MigrationRunJournalFileStore, MigrationRunJournalFileStoreError};
 pub use recovery::{
     CurrentManifestState, RecoveryCorruptionKind, RecoveryDisposition, RecoveryFinding,
     RecoveryReport, RecoveryScanError, RecoveryScanner,
