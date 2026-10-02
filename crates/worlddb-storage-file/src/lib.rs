@@ -6,6 +6,7 @@ mod audit_wal;
 mod compaction;
 mod format;
 mod index_generation;
+mod index_rebuild;
 mod layout;
 mod manifest;
 mod recovery;
@@ -37,6 +38,10 @@ pub use format::{
 pub use index_generation::{
     INDEX_GENERATION_FRAME_KIND, IndexFileDecision, IndexGeneration, IndexGenerationError,
     decode_index_generation, encode_index_generation, select_index_generation,
+};
+pub use index_rebuild::{
+    IndexGenerationStore, IndexRebuildError, IndexRebuildLimits, IndexRebuildManager,
+    IndexRebuildReceipt, IndexRebuildSource, PinnedIndexSnapshot, StoredIndexGeneration,
 };
 pub use layout::{DatabaseLayout, StorageFileError};
 pub use manifest::{

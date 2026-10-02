@@ -243,6 +243,12 @@ impl DatabaseLayout {
         self.root.join("manifests")
     }
 
+    /// Path of immutable derived-index generations and their family pointers.
+    #[must_use]
+    pub fn indexes_directory(&self) -> PathBuf {
+        self.root.join("indexes")
+    }
+
     /// Path of the independent audit namespace.
     #[must_use]
     pub fn audit_directory(&self) -> PathBuf {
