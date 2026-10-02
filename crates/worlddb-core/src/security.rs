@@ -142,11 +142,12 @@ pub enum Capability {
     AuditRead,
     AuditExport,
     AuditConfigure,
+    StorageFormatUpgrade,
 }
 
 impl Capability {
     /// Closed catalog in canonical order, used to fingerprint effective rights.
-    pub const ALL: [Self; 77] = [
+    pub const ALL: [Self; 78] = [
         Self::ProjectRead,
         Self::SchemaRead,
         Self::SchemaManage,
@@ -224,6 +225,7 @@ impl Capability {
         Self::AuditRead,
         Self::AuditExport,
         Self::AuditConfigure,
+        Self::StorageFormatUpgrade,
     ];
 }
 

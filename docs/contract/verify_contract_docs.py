@@ -26,6 +26,7 @@ QUERY_TRANSPORT_SPEC_NAME = "query_transport_contract.md"
 QUERY_TRANSPORT_ADR_NAME = "ADR-034-query-transport.md"
 CORRECTION_SPEC_NAME = "correction_contract.md"
 CORRECTION_ADR_NAME = "ADR-035-correction-actions.md"
+STORAGE_FORMAT_UPGRADE_ADR_NAME = "ADR-041-storage-format-upgrade-capability.md"
 GAP_BINDINGS_NAME = "source_gap_bindings.tsv"
 GAP_RESOLUTION_SPEC_NAME = "source_gap_resolution.md"
 GAP_RESOLUTION_ADR_NAME = "ADR-039-source-gap-resolution.md"
@@ -466,6 +467,7 @@ def verify(root: Path) -> int:
     query_transport_adr_path = root / "docs" / "contract" / QUERY_TRANSPORT_ADR_NAME
     correction_spec_path = root / "docs" / "contract" / CORRECTION_SPEC_NAME
     correction_adr_path = root / "docs" / "contract" / CORRECTION_ADR_NAME
+    storage_format_upgrade_adr_path = root / "docs" / "contract" / STORAGE_FORMAT_UPGRADE_ADR_NAME
     gap_resolution_spec_path = root / "docs" / "contract" / GAP_RESOLUTION_SPEC_NAME
     gap_resolution_adr_path = root / "docs" / "contract" / GAP_RESOLUTION_ADR_NAME
     errata_path = root / "docs" / "contract" / ERRATA_NAME
@@ -482,6 +484,7 @@ def verify(root: Path) -> int:
     query_transport_adr_text = query_transport_adr_path.read_text(encoding="utf-8")
     correction_spec_text = correction_spec_path.read_text(encoding="utf-8").strip()
     correction_adr_text = correction_adr_path.read_text(encoding="utf-8")
+    storage_format_upgrade_adr_text = storage_format_upgrade_adr_path.read_text(encoding="utf-8")
     gap_resolution_spec_text = gap_resolution_spec_path.read_text(encoding="utf-8").strip()
     gap_resolution_adr_text = gap_resolution_adr_path.read_text(encoding="utf-8")
     verify_m0_02a(root, gap_resolution_spec_text)
@@ -616,6 +619,18 @@ def verify(root: Path) -> int:
         raise ValueError("ADR-033 is not marked accepted")
     if "[Security policy supplement](security_policy_contract.md)" not in security_policy_adr_text:
         raise ValueError("ADR-033 does not link the normative supplement")
+    if "ADR-041" not in security_policy_spec_text:
+        raise ValueError("Security policy supplement does not register ADR-041")
+    for clause in (
+        "StorageFormatUpgrade",
+        "neue Tag ist `77`",
+        "BackupCreate",
+        "BackupRestore",
+        "Ein Record, der den neuen Tag `77` tatsächlich enthält",
+        "Ein älteres Binary darf solche Policy-Records nicht entfernen oder resaven",
+    ):
+        if clause not in storage_format_upgrade_adr_text:
+            raise ValueError(f"ADR-041 is missing a compatibility decision clause: {clause}")
     for heading in (
         "## 1. One semantic request across adapters",
         "## 2. Closed filters and field comparisons",

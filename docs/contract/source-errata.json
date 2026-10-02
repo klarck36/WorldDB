@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "f07659c1bf9d0b3f0dee60f5307756eeb8cf808285a7cbea3b2d5899ca2b9ce6",
+      "working_sha256": "1a029531503bac380bc228ab5ef078459bcfaa13ae6c8d13e480fc2598dde9ee",
       "byte_identical": false
     },
     {
@@ -81,7 +81,7 @@
     {
       "task": "M0-04c",
       "specification": "docs/contract/security_policy_contract.md",
-      "specification_sha256": "3fc613fca7e94656f7f394abb5d7daf541fd1ac434fa572395be715f532f6d84",
+      "specification_sha256": "7e5a3416113127d8d9fb1ea4052fc6b951981d7e4508f3fa182afacca55e0af2",
       "decision_record": "docs/contract/ADR-033-security-policy.md",
       "decision_record_sha256": "733dec3b571a5a68887216eb69374309e8d9e4dc4122439e3415459463ad77f7",
       "status": "accepted working contract"

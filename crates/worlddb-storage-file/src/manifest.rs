@@ -13,10 +13,14 @@ use crate::segment::ContentDigest;
 use crate::{DatabaseLayout, SegmentId, WalCommitHash, WalError, WalPrepareLog, WriterLock};
 
 const MANIFEST_MAGIC: [u8; 8] = *b"WDBMAN\0\x01";
-const CURRENT_MAGIC: [u8; 8] = *b"WDBCUR\0\x01";
+const CURRENT_V1_MAGIC: [u8; 8] = *b"WDBCUR\0\x01";
+const CURRENT_V2_MAGIC: [u8; 8] = *b"WDBCUR\0\x02";
 const MANIFEST_MAJOR: u16 = 1;
 const MANIFEST_MINOR: u16 = 0;
-const CURRENT_BYTES: usize = 8 + 8 + 32 + 32;
+const CURRENT_V1_BYTES: usize = 8 + 8 + 32 + 32;
+const CURRENT_V2_BYTES: usize = 8 + 8 + 32 + 32 + 32;
+const MAX_CURRENT_BYTES: usize = CURRENT_V2_BYTES;
+const CURRENT_BYTES: usize = CURRENT_V1_BYTES;
 const MANIFEST_HEADER_BYTES: usize = 8 + 2 + 2 + 8 + 8 + 32 + 4;
 const SEGMENT_REFERENCE_BYTES: usize = 1 + 8 + 16 + 32;
 const DIGEST_BYTES: usize = 32;
@@ -405,6 +409,14 @@ impl ManifestStore {
         let Some(pointer) = self.read_current_pointer()? else {
             return Ok(None);
         };
+        if pointer.generation == 0 {
+            if pointer.version == CurrentPointerVersion::V2
+                && pointer.manifest_digest == ContentDigest::from_bytes([0; 32])
+            {
+                return Ok(None);
+            }
+            return Err(ManifestError::InvalidManifest);
+        }
         let manifest_path = manifest_path(&self.layout.manifests_directory(), pointer.generation);
         validate_regular_file_inside_root(&self.layout, &manifest_path)?;
         let bytes = read_bounded_file(&manifest_path, MAX_MANIFEST_BYTES)?;
@@ -495,10 +507,25 @@ impl ManifestStore {
                 source,
             })?;
 
-        let pointer_bytes = encode_current(CurrentPointer {
-            generation,
-            manifest_digest,
-        })?;
+        let pointer_bytes = match self.read_current_pointer()?.map(|pointer| pointer.version) {
+            Some(CurrentPointerVersion::V2) => encode_current_v2(CurrentPointer {
+                generation,
+                manifest_digest,
+                version: CurrentPointerVersion::V2,
+                profile_fingerprint: crate::storage_upgrade::profile_fingerprint(
+                    CurrentPointerVersion::V2,
+                    self.layout.format_capabilities(),
+                ),
+            })?
+            .to_vec(),
+            Some(CurrentPointerVersion::V1) | None => encode_current_v1(CurrentPointer {
+                generation,
+                manifest_digest,
+                version: CurrentPointerVersion::V1,
+                profile_fingerprint: [0; 32],
+            })?
+            .to_vec(),
+        };
         let current_path = self.layout.current_file();
         if fs::symlink_metadata(&current_path).is_ok() {
             validate_regular_file_inside_root(&self.layout, &current_path)?;
@@ -540,10 +567,78 @@ impl ManifestStore {
                     return Err(ManifestError::PathOutsideDatabase);
                 }
                 validate_regular_file_inside_root(&self.layout, &path)?;
-                let bytes = read_bounded_file(&path, CURRENT_BYTES)?;
-                decode_current(&bytes).map(Some)
+                let bytes = read_bounded_file(&path, MAX_CURRENT_BYTES)?;
+                let pointer = decode_current(&bytes)?;
+                if pointer.version == CurrentPointerVersion::V2
+                    && pointer.profile_fingerprint
+                        != crate::storage_upgrade::profile_fingerprint(
+                            CurrentPointerVersion::V2,
+                            self.layout.format_capabilities(),
+                        )
+                {
+                    return Err(ManifestError::InvalidManifest);
+                }
+                Ok(Some(pointer))
             }
         }
+    }
+
+    pub(crate) fn read_current_pointer_for_upgrade(
+        &self,
+    ) -> Result<Option<CurrentPointer>, ManifestError> {
+        self.read_current_pointer()
+    }
+
+    pub(crate) fn replace_staged_current_v2(
+        &self,
+        writer_lock: &WriterLock,
+        staged_pointer: &Path,
+    ) -> Result<(), ManifestError> {
+        if !writer_lock.belongs_to_database_root(self.layout.root()) {
+            return Err(ManifestError::ForeignWriterLock);
+        }
+        if !writer_lock.require_write_access() {
+            return Err(ManifestError::RecoveryRequired);
+        }
+        self.validate_directories()?;
+        validate_regular_file_inside_root(&self.layout, staged_pointer)?;
+        let bytes = read_bounded_file(staged_pointer, CURRENT_V2_BYTES)?;
+        let pointer = decode_current(&bytes)?;
+        if pointer.version != CurrentPointerVersion::V2
+            || pointer.profile_fingerprint
+                != crate::storage_upgrade::profile_fingerprint(
+                    CurrentPointerVersion::V2,
+                    self.layout.format_capabilities(),
+                )
+        {
+            return Err(ManifestError::InvalidManifest);
+        }
+
+        let current_path = self.layout.current_file();
+        if fs::symlink_metadata(&current_path).is_ok() {
+            validate_regular_file_inside_root(&self.layout, &current_path)?;
+        }
+        self.publish_replacing_file("current", &current_path, &bytes, &NativeManifestPublication)?;
+        let published = self
+            .read_current_pointer()?
+            .ok_or(ManifestError::InvalidManifest)?;
+        if published.version != CurrentPointerVersion::V2
+            || published.generation != pointer.generation
+            || published.manifest_digest != pointer.manifest_digest
+            || published.profile_fingerprint != pointer.profile_fingerprint
+        {
+            return Err(ManifestError::InvalidManifest);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn sync_current_root(&self) -> Result<(), ManifestError> {
+        NativeManifestPublication
+            .sync_directory(self.layout.root(), DirectorySyncTarget::DatabaseRoot)
+            .map_err(|source| ManifestError::Io {
+                operation: "sync database root after storage-format upgrade",
+                source,
+            })
     }
 
     fn next_generation(&self, current: Option<u64>) -> Result<u64, ManifestError> {
@@ -669,7 +764,7 @@ impl ManifestStore {
         Err(ManifestError::StageNameExhausted)
     }
 
-    fn validate_directories(&self) -> Result<(), ManifestError> {
+    pub(crate) fn validate_directories(&self) -> Result<(), ManifestError> {
         validate_directory_inside_root(&self.layout, &self.layout.manifests_directory())?;
         validate_directory_inside_root(&self.layout, &self.layout.staging_directory())
     }
@@ -734,10 +829,18 @@ impl ManifestPublication for NativeManifestPublication {
     }
 }
 
-#[derive(Clone, Copy)]
-struct CurrentPointer {
-    generation: u64,
-    manifest_digest: ContentDigest,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CurrentPointerVersion {
+    V1,
+    V2,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct CurrentPointer {
+    pub(crate) generation: u64,
+    pub(crate) manifest_digest: ContentDigest,
+    pub(crate) version: CurrentPointerVersion,
+    pub(crate) profile_fingerprint: [u8; 32],
 }
 
 struct StagePathGuard {
@@ -894,9 +997,9 @@ fn decode_manifest(bytes: &[u8]) -> Result<Manifest, ManifestError> {
     })
 }
 
-fn encode_current(pointer: CurrentPointer) -> Result<[u8; CURRENT_BYTES], ManifestError> {
+fn encode_current_v1(pointer: CurrentPointer) -> Result<[u8; CURRENT_V1_BYTES], ManifestError> {
     let mut bytes = Vec::with_capacity(CURRENT_BYTES);
-    bytes.extend_from_slice(&CURRENT_MAGIC);
+    bytes.extend_from_slice(&CURRENT_V1_MAGIC);
     bytes.extend_from_slice(&pointer.generation.to_le_bytes());
     bytes.extend_from_slice(pointer.manifest_digest.as_bytes());
     let checksum = *blake3::hash(&bytes).as_bytes();
@@ -904,11 +1007,32 @@ fn encode_current(pointer: CurrentPointer) -> Result<[u8; CURRENT_BYTES], Manife
     bytes.try_into().map_err(|_| ManifestError::InvalidManifest)
 }
 
-fn decode_current(bytes: &[u8]) -> Result<CurrentPointer, ManifestError> {
-    if bytes.len() != CURRENT_BYTES {
+pub(crate) fn encode_current_v2(
+    pointer: CurrentPointer,
+) -> Result<[u8; CURRENT_V2_BYTES], ManifestError> {
+    let mut bytes = Vec::with_capacity(CURRENT_V2_BYTES);
+    bytes.extend_from_slice(&CURRENT_V2_MAGIC);
+    bytes.extend_from_slice(&pointer.generation.to_le_bytes());
+    bytes.extend_from_slice(pointer.manifest_digest.as_bytes());
+    bytes.extend_from_slice(&pointer.profile_fingerprint);
+    let checksum = *blake3::hash(&bytes).as_bytes();
+    bytes.extend_from_slice(&checksum);
+    bytes.try_into().map_err(|_| ManifestError::InvalidManifest)
+}
+
+#[cfg(test)]
+fn encode_current(pointer: CurrentPointer) -> Result<[u8; CURRENT_BYTES], ManifestError> {
+    encode_current_v1(pointer)
+}
+
+pub(crate) fn decode_current(bytes: &[u8]) -> Result<CurrentPointer, ManifestError> {
+    if bytes.len() != CURRENT_V1_BYTES && bytes.len() != CURRENT_V2_BYTES {
         return Err(ManifestError::InvalidManifest);
     }
-    let checksum_offset = CURRENT_BYTES - DIGEST_BYTES;
+    let checksum_offset = bytes
+        .len()
+        .checked_sub(DIGEST_BYTES)
+        .ok_or(ManifestError::InvalidManifest)?;
     let content = bytes
         .get(..checksum_offset)
         .ok_or(ManifestError::InvalidManifest)?;
@@ -919,18 +1043,31 @@ fn decode_current(bytes: &[u8]) -> Result<CurrentPointer, ManifestError> {
         return Err(ManifestError::InvalidManifest);
     }
     let mut reader = ByteReader::new(content);
-    if reader.array::<8>()? != CURRENT_MAGIC {
-        return Err(ManifestError::InvalidManifest);
-    }
+    let magic = reader.array::<8>()?;
+    let version = match magic {
+        CURRENT_V1_MAGIC if bytes.len() == CURRENT_V1_BYTES => CurrentPointerVersion::V1,
+        CURRENT_V2_MAGIC if bytes.len() == CURRENT_V2_BYTES => CurrentPointerVersion::V2,
+        _ => return Err(ManifestError::InvalidManifest),
+    };
     let generation = reader.u64()?;
-    if generation == 0 {
+    if generation == 0 && version == CurrentPointerVersion::V1 {
         return Err(ManifestError::InvalidManifest);
     }
     let manifest_digest = ContentDigest::from_bytes(reader.array::<32>()?);
+    let profile_fingerprint = if version == CurrentPointerVersion::V2 {
+        reader.array::<32>()?
+    } else {
+        [0; 32]
+    };
+    if generation == 0 && manifest_digest != ContentDigest::from_bytes([0; 32]) {
+        return Err(ManifestError::InvalidManifest);
+    }
     reader.finish()?;
     Ok(CurrentPointer {
         generation,
         manifest_digest,
+        version,
+        profile_fingerprint,
     })
 }
 
@@ -1137,10 +1274,11 @@ impl<'a> ByteReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CURRENT_BYTES, CurrentPointer, DirectorySyncTarget, ManifestError, ManifestPublication,
-        ManifestSegmentKind, ManifestSegmentReference, ManifestSnapshot, ManifestStore,
-        NativeManifestPublication, StagedFileKind, compare_segment_references, decode_current,
-        decode_manifest, encode_current, encode_manifest,
+        CURRENT_BYTES, CURRENT_V2_BYTES, CurrentPointer, CurrentPointerVersion, DIGEST_BYTES,
+        DirectorySyncTarget, ManifestError, ManifestPublication, ManifestSegmentKind,
+        ManifestSegmentReference, ManifestSnapshot, ManifestStore, NativeManifestPublication,
+        StagedFileKind, compare_segment_references, decode_current, decode_manifest,
+        encode_current, encode_current_v2, encode_manifest,
     };
     use crate::{ContentDigest, DatabaseLayout, SegmentId, WalCommitHash, WalPrepareLog};
     use std::env;
@@ -1575,6 +1713,8 @@ mod tests {
         let encoded = encode_current(CurrentPointer {
             generation: 7,
             manifest_digest: digest,
+            version: CurrentPointerVersion::V1,
+            profile_fingerprint: [0; 32],
         })?;
         assert_eq!(encoded.len(), CURRENT_BYTES);
         let decoded = decode_current(&encoded)?;
@@ -1587,6 +1727,36 @@ mod tests {
         }
         assert!(matches!(
             decode_current(&corrupted),
+            Err(ManifestError::InvalidManifest)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn current_v2_pointer_binds_profile_and_supports_genesis() -> Result<(), ManifestError> {
+        let pointer = CurrentPointer {
+            generation: 0,
+            manifest_digest: ContentDigest::from_bytes([0; 32]),
+            version: CurrentPointerVersion::V2,
+            profile_fingerprint: [0x31; 32],
+        };
+        let encoded = encode_current_v2(pointer)?;
+        assert_eq!(encoded.len(), CURRENT_V2_BYTES);
+        assert_eq!(decode_current(&encoded)?, pointer);
+
+        let mut invalid = encoded;
+        *invalid.get_mut(16).ok_or(ManifestError::InvalidManifest)? = 1;
+        let checksum_offset = CURRENT_V2_BYTES - DIGEST_BYTES;
+        let checksum_input = invalid
+            .get(..checksum_offset)
+            .ok_or(ManifestError::InvalidManifest)?;
+        let checksum = *blake3::hash(checksum_input).as_bytes();
+        invalid
+            .get_mut(checksum_offset..)
+            .ok_or(ManifestError::InvalidManifest)?
+            .copy_from_slice(&checksum);
+        assert!(matches!(
+            decode_current(&invalid),
             Err(ManifestError::InvalidManifest)
         ));
         Ok(())

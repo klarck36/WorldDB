@@ -703,6 +703,22 @@ define_domain_ids!(
         true,
         persistent
     ),
+    (
+        UpgradePlanId,
+        Backend,
+        BackendFile,
+        FileFormatUuid,
+        true,
+        persistent
+    ),
+    (
+        UpgradeRunId,
+        Backend,
+        BackendFile,
+        FileFormatUuid,
+        true,
+        persistent
+    ),
 );
 
 /// Creates one UUIDv7 identity using the system clock and OS cryptographic entropy.
@@ -1107,6 +1123,8 @@ mod tests {
             "RoleId",
             "RoleAssignmentId",
             "PolicyRuleId",
+            "UpgradePlanId",
+            "UpgradeRunId",
         ];
         assert_eq!(DOMAIN_ID_SCOPES.len(), expected_names.len());
         assert_eq!(

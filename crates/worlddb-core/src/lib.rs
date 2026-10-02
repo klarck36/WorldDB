@@ -673,7 +673,7 @@ pub use ids::{
     ProvenanceRetractionId, ReplacementBoundaryId, ReplacementBoundaryRetractionId,
     ReplacementBoundaryValidityClosureId, Revision, RevisionError, RoleAssignmentId, RoleId,
     SchemaRevision, SecurityEpoch, SecurityEpochError, SecurityPolicyRecordId, SnapshotId,
-    SourceId, TimelineId, TransactionId, TransferLineageId, WireId,
+    SourceId, TimelineId, TransactionId, TransferLineageId, UpgradePlanId, UpgradeRunId, WireId,
 };
 
 #[doc(hidden)]
@@ -699,6 +699,20 @@ pub mod storage_internal {
     #[doc(hidden)]
     pub fn generate_storage_maintenance_operation_id()
     -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates a storage-format upgrade plan identity.
+    #[doc(hidden)]
+    pub fn generate_storage_upgrade_plan_id()
+    -> Result<crate::ids::UpgradePlanId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates a storage-format upgrade run identity.
+    #[doc(hidden)]
+    pub fn generate_storage_upgrade_run_id()
+    -> Result<crate::ids::UpgradeRunId, crate::ids::IdGenerationError> {
         crate::ids::generate_id()
     }
 

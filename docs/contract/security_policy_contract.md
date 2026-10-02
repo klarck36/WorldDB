@@ -4,7 +4,7 @@
 
 **Decision record:** [ADR-033](ADR-033-security-policy.md)
 
-**Scope:** completes Master §§6–8, 14, 17–18 and 31.5–31.6 for policy records, principals, roles, capabilities, scope matching, historical security evaluation, and `SecurityEpoch`. It adds no WDB invariant IDs and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
+**Scope:** completes Master §§6–8, 14, 17–18 and 31.5–31.6 for policy records, principals, roles, capabilities, scope matching, historical security evaluation, and `SecurityEpoch`. The additive storage-format permission is reviewed in ADR-041. The contract adds no WDB invariant IDs and predates the M0-02a closure of all 52 HARD source gaps recorded in ADR-039; the two GUARDED gaps remain open.
 
 ## 1. Security history records
 
@@ -72,7 +72,7 @@ Capability =
   | DataImport | DataExport | BackupCreate | BackupRestore | Purge
   | JobRead | JobCancel | JobManage
   | SecurityPolicyRead | SecurityPolicyManage | SecurityPermissionHistoryRead
-  | AuditRead | AuditExport | AuditConfigure
+  | AuditRead | AuditExport | AuditConfigure | StorageFormatUpgrade
 
 EntityAction = Create | Read | Reference | Retire
 PerspectiveAction = Create | Read | Update | Use | Retire
@@ -96,6 +96,7 @@ The typed operation/resource map is closed as follows:
 | `Query*` | exact query operation | corresponding class/field read rights are still required |
 | `RawHistoryRead` | raw record stream | corresponding class Read rights are required |
 | `AdminRawRead` | raw administrative projection | both RawHistoryRead and AdminRawRead are required; neither implies the other |
+| `StorageFormatUpgrade` | one exact database/project | requires the explicit current grant plus `BackupCreate` and `BackupRestore` and a verified Safe Restore Point; implies no schema migration or backup permission |
 | `JobRead/Cancel/Manage` | exact Job operation | the owner needs the exact operation Capability; cross-owner read/cancel additionally requires JobManage |
 | `Migration*`, import/export, backup/restore, `Purge` | exact administrative operation | target-scope and all underlying read/write rights are required |
 | `SecurityPolicy*`, `SecurityPermissionHistoryRead`, `Audit*` | security or audit namespace | each operation is independent; no one variant implies another |

@@ -19,6 +19,7 @@ mod required_audit;
 mod salvage;
 mod security_segment;
 mod segment;
+mod storage_upgrade;
 mod verify;
 mod wal;
 #[cfg(windows)]
@@ -74,6 +75,11 @@ pub use security_segment::{
 };
 pub use segment::{
     ContentDigest, HistorySegment, HistorySegmentReceipt, HistorySegmentStore, SegmentError,
+};
+pub use storage_upgrade::{
+    StorageFormatProfile, StorageUpgradeAdminAction, StorageUpgradeBudget, StorageUpgradeError,
+    StorageUpgradeManager, StorageUpgradePlan, StorageUpgradeReceipt, StorageUpgradeRestoreTargets,
+    StorageUpgradeSafeRestorePoint, StorageUpgradeTransform,
 };
 pub use verify::{
     StorageDamageClass, StorageVerifier, StorageVerifyAction, StorageVerifyError,

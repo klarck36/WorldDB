@@ -61,6 +61,7 @@ QUERY_TRANSPORT_ADR = "ADR-034-query-transport.md"
 CORRECTION_SPEC = "correction_contract.md"
 CORRECTION_ADR = "ADR-035-correction-actions.md"
 PERFORMANCE_RESOURCE_ADR = "ADR-040-performance-resource-budgets.md"
+STORAGE_FORMAT_UPGRADE_ADR = "ADR-041-storage-format-upgrade-capability.md"
 INVARIANT_ID_RE = re.compile(r"WDB-[A-Z]+-\d{3}")
 REFERENCE_RE = re.compile(
     r"WDB-([A-Z]+)-(\d{3})((?:\s*(?:[–-]\s*\d{3}|/\s*\d{3}))*)"
@@ -1043,6 +1044,7 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             CORRECTION_SPEC,
             CORRECTION_ADR,
             PERFORMANCE_RESOURCE_ADR,
+            STORAGE_FORMAT_UPGRADE_ADR,
             GAP_BINDINGS_NAME,
             GAP_RESOLUTION_SPEC,
             GAP_RESOLUTION_ADR,
