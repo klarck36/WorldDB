@@ -13,6 +13,7 @@ use crate::candidate_scan::{
     full_scan_authorized_point_assertion_candidates, indexed_authorized_assertion_candidates,
 };
 use crate::context::{ContextError, ContextKey};
+use crate::cursor::{CursorInsertRequest, CursorSecurityContext, CursorStateError};
 use crate::history_model::HistorySpaceReferenceModel;
 use crate::ids::{AssertionId, MaskId, ReplacementBoundaryId};
 use crate::index_generation::{
@@ -40,6 +41,7 @@ use crate::query_context::{BudgetDimension, QueryContext, WorldTimeSelector};
 use crate::query_graph::{
     GraphCandidateSet, GraphError, GraphResult, GraphSpec, full_scan_authorized_graph_traversal,
 };
+use crate::query_page::{PageCursorState, PageExecution, PageRequest, QueryPage};
 use crate::query_ports::{
     OwnedQueryResult, QueryPortError, bind_authorized_explain, bind_authorized_resolved_view,
     full_scan_owned_authorized_raw_history,
@@ -47,6 +49,7 @@ use crate::query_ports::{
 use crate::query_search::{
     QuerySearchError, SearchDocument, SearchHit, SearchSpec, full_scan_token_search,
 };
+use crate::query_stream::{CandidateStream, QueryItemError};
 use crate::record_refs::RecordRef;
 use crate::reference_query::{
     ExplainStage, ExplainStageError, ExplainStageKind, RawHistoryError, RawHistoryRow,
@@ -293,6 +296,279 @@ impl ProductiveQueryEngine {
             query,
             path: QueryExecutionPath::FullScan,
         })
+    }
+
+    /// Pulls one bounded page from a deterministic source. The source factory must bind its
+    /// ordering and filtering to the supplied snapshot and start strictly after the opaque
+    /// internal sort key. The trusted adapter supplies the stable sort key and row-rights
+    /// check; the engine evaluates that check against both the current and query-selected
+    /// policy before a row can affect output, counters, or the continuation boundary.
+    pub fn stream_page<T: 'static, I>(
+        request: PageRequest,
+        execution: PageExecution<'_>,
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+        source_factory: impl FnOnce(Option<&[u8]>) -> Result<I, QueryEngineError>,
+        mut sort_key: impl FnMut(&T) -> Vec<u8>,
+        mut row_is_authorized: impl FnMut(&T, &SecurityPolicySnapshot, &QueryContext) -> bool,
+    ) -> Result<QueryPage<T>, QueryEngineError>
+    where
+        I: Iterator<Item = Result<T, QueryEngineError>>,
+    {
+        let original_cursor = request.cursor().map(<[u8]>::to_vec);
+        let mut created_cursor = None;
+        let result = (|| {
+            if request.limit().get() > execution.max_page_size.get() {
+                return Err(QueryEngineError::InvalidPageRequest);
+            }
+            ensure_active(context)?;
+            context
+                .ensure_snapshot_live(execution.now_ms)
+                .map_err(|_| QueryEngineError::SnapshotExpired)?;
+            execution.cursors.reap_expired(execution.now_ms);
+
+            let policy_view = policies.resolve(context)?;
+            let principal = context.security().principal_id();
+            let operation_capability = execution.operation.capability();
+            let operation_target = PolicyTarget::default();
+            if policy_view.current_snapshot().authorize(
+                principal,
+                operation_capability,
+                operation_target,
+            ) != AuthorizationDecision::Allow
+                || policy_view.snapshot().authorize(
+                    principal,
+                    operation_capability,
+                    operation_target,
+                ) != AuthorizationDecision::Allow
+                || (execution.operation.requires_admin_raw()
+                    && (policy_view.current_snapshot().authorize(
+                        principal,
+                        Capability::AdminRawRead,
+                        operation_target,
+                    ) != AuthorizationDecision::Allow
+                        || policy_view.snapshot().authorize(
+                            principal,
+                            Capability::AdminRawRead,
+                            operation_target,
+                        ) != AuthorizationDecision::Allow))
+            {
+                return Err(QueryEngineError::Unauthorized);
+            }
+
+            let security = CursorSecurityContext::new(
+                principal,
+                policy_view.current_epoch(),
+                policy_view.evaluated_epoch(),
+                operation_target,
+            );
+            let (cursor_state, after_sort_key) = if let Some(wire) = request.cursor() {
+                let state_bytes = execution
+                    .cursors
+                    .resolve_authorized(
+                        wire,
+                        execution.now_ms,
+                        context.snapshot(),
+                        execution.query_hash,
+                        security,
+                        policy_view,
+                    )
+                    .map_err(map_cursor_error)?
+                    .to_vec();
+                let Some(state) = PageCursorState::decode(&state_bytes) else {
+                    execution.cursors.discard_authenticated(wire);
+                    return Err(QueryEngineError::CursorInvalidated);
+                };
+                if state.limit != request.limit().get()
+                    || state.expires_at_ms <= execution.now_ms
+                    || state.after_sort_key.is_empty()
+                {
+                    execution.cursors.discard_authenticated(wire);
+                    return Err(QueryEngineError::CursorInvalidated);
+                }
+                (state.clone(), Some(state.after_sort_key.clone()))
+            } else {
+                (
+                    PageCursorState {
+                        limit: request.limit().get(),
+                        expires_at_ms: execution.first_expires_at_ms,
+                        candidates_seen: 0,
+                        work_units_seen: 0,
+                        results_sent: 0,
+                        after_sort_key: Vec::new(),
+                    },
+                    None,
+                )
+            };
+
+            let source = source_factory(after_sort_key.as_deref())?;
+            let mut stream =
+                CandidateStream::from_items(source.map(|item| item.map_err(QueryItemError::Item)));
+            let page_limit = usize::try_from(request.limit().get())
+                .map_err(|_| QueryEngineError::InvalidPageRequest)?;
+            let mut results = Vec::with_capacity(page_limit);
+            let mut last_visible_key = (!cursor_state.after_sort_key.is_empty())
+                .then(|| cursor_state.after_sort_key.clone());
+            let mut candidates_seen = cursor_state.candidates_seen;
+            let mut work_units_seen = cursor_state.work_units_seen;
+            let mut has_more = false;
+
+            loop {
+                ensure_active(context)?;
+                let Some(item) = stream.next() else {
+                    break;
+                };
+                let item = match item {
+                    Ok(item) => item,
+                    Err(QueryItemError::Item(error)) => return Err(error),
+                    Err(QueryItemError::Cancelled) => return Err(QueryEngineError::Cancelled),
+                    Err(QueryItemError::BudgetExceeded) => {
+                        return Err(QueryEngineError::BudgetExceeded(BudgetDimension::WorkUnits));
+                    }
+                    Err(QueryItemError::SkippableDiagnostic) => continue,
+                };
+
+                let visible_now = row_is_authorized(&item, policy_view.current_snapshot(), context);
+                let visible_evaluated = row_is_authorized(&item, policy_view.snapshot(), context);
+                if !visible_now || !visible_evaluated {
+                    continue;
+                }
+
+                let key = sort_key(&item);
+                if key.is_empty()
+                    || last_visible_key
+                        .as_ref()
+                        .is_some_and(|previous| previous.as_slice() >= key.as_slice())
+                {
+                    return Err(QueryEngineError::InvalidPageOrder);
+                }
+                last_visible_key = Some(key.clone());
+
+                candidates_seen =
+                    candidates_seen
+                        .checked_add(1)
+                        .ok_or(QueryEngineError::BudgetExceeded(
+                            BudgetDimension::Candidates,
+                        ))?;
+                work_units_seen = work_units_seen
+                    .checked_add(1)
+                    .ok_or(QueryEngineError::BudgetExceeded(BudgetDimension::WorkUnits))?;
+                if candidates_seen > context.budget().max_candidates().get() {
+                    return Err(QueryEngineError::BudgetExceeded(
+                        BudgetDimension::Candidates,
+                    ));
+                }
+                if work_units_seen > context.budget().max_work_units().get() {
+                    return Err(QueryEngineError::BudgetExceeded(BudgetDimension::WorkUnits));
+                }
+
+                let pending_visible = u64::try_from(results.len())
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1);
+                if cursor_state.results_sent.saturating_add(pending_visible)
+                    > context.budget().max_results().get()
+                {
+                    return Err(QueryEngineError::BudgetExceeded(BudgetDimension::Results));
+                }
+                if results.len() == page_limit {
+                    has_more = true;
+                    break;
+                }
+                results.push((item, key));
+            }
+            ensure_active(context)?;
+
+            let results_sent = cursor_state
+                .results_sent
+                .checked_add(u64::try_from(results.len()).unwrap_or(u64::MAX))
+                .ok_or(QueryEngineError::BudgetExceeded(BudgetDimension::Results))?;
+            let next_after_key = results.last().map(|(_, key)| key.clone());
+            let page_rows = results.into_iter().map(|(row, _)| row).collect::<Vec<_>>();
+            let query = OwnedQueryResult::bind(context, policies, page_rows)?;
+
+            let next_cursor = if has_more {
+                let Some(last_key) = next_after_key else {
+                    return Err(QueryEngineError::InvalidPageOrder);
+                };
+                let next_state = PageCursorState {
+                    limit: request.limit().get(),
+                    expires_at_ms: cursor_state.expires_at_ms,
+                    candidates_seen,
+                    work_units_seen,
+                    results_sent,
+                    after_sort_key: last_key,
+                };
+                let state_bytes = next_state
+                    .encode()
+                    .ok_or(QueryEngineError::CursorUnavailable)?;
+                let mut insert = CursorInsertRequest::new(
+                    context.snapshot(),
+                    execution.query_hash,
+                    state_bytes,
+                    execution.now_ms,
+                    next_state.expires_at_ms,
+                );
+                if let Some(lease) = context
+                    .fork_snapshot_lease(execution.now_ms)
+                    .map_err(|_| QueryEngineError::SnapshotExpired)?
+                {
+                    insert = insert.with_snapshot_lease(lease);
+                } else {
+                    return Err(QueryEngineError::SnapshotPinRequired);
+                }
+                let next_token = execution
+                    .cursors
+                    .insert_authorized(insert, security, policy_view)
+                    .map_err(map_cursor_error)?
+                    .encode();
+                created_cursor = Some(next_token.clone());
+                if let Some(wire) = request.cursor() {
+                    if let Err(error) = execution.cursors.remove_authorized(
+                        wire,
+                        execution.now_ms,
+                        context.snapshot(),
+                        execution.query_hash,
+                        security,
+                        policy_view,
+                    ) {
+                        execution.cursors.discard_authenticated(&next_token);
+                        return Err(map_cursor_error(error));
+                    }
+                }
+                Some(next_token)
+            } else {
+                if let Some(wire) = request.cursor() {
+                    execution
+                        .cursors
+                        .remove_authorized(
+                            wire,
+                            execution.now_ms,
+                            context.snapshot(),
+                            execution.query_hash,
+                            security,
+                            policy_view,
+                        )
+                        .map_err(map_cursor_error)?;
+                }
+                None
+            };
+
+            ensure_active(context)?;
+            context
+                .ensure_snapshot_live(execution.now_ms)
+                .map_err(|_| QueryEngineError::SnapshotExpired)?;
+            Ok(QueryPage::new(query, next_cursor, execution.path))
+        })();
+
+        if result.is_err() {
+            if let Some(wire) = created_cursor.as_deref() {
+                execution.cursors.discard_authenticated(wire);
+            }
+            if let Some(wire) = original_cursor.as_deref() {
+                execution.cursors.discard_authenticated(wire);
+            }
+        }
+        result
     }
 
     /// Resolves one Assertion subject/Predicate point using a compatible index or
@@ -829,10 +1105,32 @@ fn ensure_active(context: &QueryContext) -> Result<(), QueryEngineError> {
     }
 }
 
+fn map_cursor_error(error: CursorStateError) -> QueryEngineError {
+    match error {
+        CursorStateError::CursorInvalidated => QueryEngineError::CursorInvalidated,
+        CursorStateError::ZeroEntryLimit
+        | CursorStateError::ZeroByteLimit
+        | CursorStateError::ZeroTtlLimit
+        | CursorStateError::InvalidExpiry
+        | CursorStateError::TtlExceedsLimit
+        | CursorStateError::StateTooLarge
+        | CursorStateError::CapacityExceeded
+        | CursorStateError::EntropyUnavailable
+        | CursorStateError::RandomHandleCollision => QueryEngineError::CursorUnavailable,
+    }
+}
+
 /// Safe, ID-free errors from the productive query boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum QueryEngineError {
     Cancelled,
+    Unauthorized,
+    SnapshotExpired,
+    SnapshotPinRequired,
+    InvalidPageRequest,
+    InvalidPageOrder,
+    CursorInvalidated,
+    CursorUnavailable,
     ExplainDenied,
     AllTimesResolutionUnavailable,
     EmptyLayerSelection,
@@ -865,6 +1163,13 @@ impl fmt::Display for QueryEngineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Cancelled => "query was cancelled",
+            Self::Unauthorized => "query authorization is denied",
+            Self::SnapshotExpired => "query snapshot has expired",
+            Self::SnapshotPinRequired => "paged query requires a leased snapshot",
+            Self::InvalidPageRequest => "query page request is invalid",
+            Self::InvalidPageOrder => "query result ordering is invalid",
+            Self::CursorInvalidated => "query cursor is invalidated",
+            Self::CursorUnavailable => "query cursor state is unavailable",
             Self::ExplainDenied => "query Explain capability is denied",
             Self::AllTimesResolutionUnavailable => {
                 "point resolution requires a concrete WorldTime selector"
@@ -939,6 +1244,7 @@ impl From<AggregateError> for QueryEngineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PageOperation;
     use crate::archive::ArchiveTargetRef;
     use crate::archive_projection::ArchiveTargetRecord;
     use crate::assertions::{Assertion, AssertionDraft, Polarity, Subject};
@@ -969,6 +1275,10 @@ mod tests {
     };
     use crate::temporal::{AssertionValidity, RecordedAsOf, TimeInterval, Timeline, WorldTime};
     use crate::values::{Symbol, Value};
+    use crate::{
+        HistorySpaceView, SnapshotBinding, SnapshotBindingInput, SnapshotLifetimeLimits,
+        SnapshotPinPurpose, SnapshotRegistry, SnapshotSecurityBinding,
+    };
     use std::error::Error;
     use std::fmt;
 
@@ -989,6 +1299,7 @@ mod tests {
         RoleDefinition(crate::security::RoleDefinitionError),
         Security(crate::security::SecurityPolicyError),
         SecurityHistory(crate::security::SecurityPolicyHistoryError),
+        Snapshot(crate::SnapshotError),
         History(crate::history_model::HistorySpaceModelError),
         Assertion(crate::assertions::AssertionRecordError),
         Archive(crate::archive_projection::ArchiveProjectionError),
@@ -1030,6 +1341,7 @@ mod tests {
                 Self::RoleDefinition(error) => Some(error),
                 Self::Security(error) => Some(error),
                 Self::SecurityHistory(error) => Some(error),
+                Self::Snapshot(error) => Some(error),
                 Self::History(error) => Some(error),
                 Self::Assertion(error) => Some(error),
                 Self::Archive(error) => Some(error),
@@ -1071,6 +1383,7 @@ mod tests {
     test_error_from!(crate::security::RoleDefinitionError, RoleDefinition);
     test_error_from!(crate::security::SecurityPolicyError, Security);
     test_error_from!(crate::security::SecurityPolicyHistoryError, SecurityHistory);
+    test_error_from!(crate::SnapshotError, Snapshot);
     test_error_from!(crate::history_model::HistorySpaceModelError, History);
     test_error_from!(crate::assertions::AssertionRecordError, Assertion);
     test_error_from!(crate::archive_projection::ArchiveProjectionError, Archive);
@@ -1772,6 +2085,297 @@ mod tests {
             &[RecordRef::ReplacementBoundary(boundary.id())]
         );
         assert!(boundary_stage.output_assertions().is_empty());
+        Ok(())
+    }
+
+    fn page_request(limit: u32, cursor: Option<Vec<u8>>) -> TestResult<PageRequest> {
+        PageRequest::new(limit, cursor)
+            .map_err(|error| TestError::Io(std::io::Error::other(format!("{error:?}"))))
+    }
+
+    fn page_execution(
+        cursors: &mut crate::CursorStateStore,
+        query_hash: crate::QueryHash,
+        now_ms: u64,
+    ) -> TestResult<PageExecution<'_>> {
+        PageExecution::new(
+            cursors,
+            query_hash,
+            PageOperation::ResolvedView,
+            now_ms,
+            10_000,
+            16,
+            QueryExecutionPath::FullScan,
+        )
+        .map_err(|error| TestError::Io(std::io::Error::other(format!("{error:?}"))))
+    }
+
+    fn cursor_store() -> TestResult<crate::CursorStateStore> {
+        let limits = crate::CursorStoreLimits::new(8, 4_096, 10_000)
+            .map_err(|error| TestError::Io(std::io::Error::other(error)))?;
+        crate::CursorStateStore::new(limits)
+            .map_err(|error| TestError::Io(std::io::Error::other(error)))
+    }
+
+    fn leased_page_context(
+        context: &QueryContext,
+        layer_schema: &LayerSchemaSnapshot,
+    ) -> TestResult<QueryContext> {
+        let root = id::<HistorySpaceId>(1)?;
+        let child = context.history_space();
+        let history_space = HistorySpaceView::new(vec![
+            HistorySpaceDefinition::new(root, None, Revision::GENESIS)?,
+            HistorySpaceDefinition::new(child, Some(root), revision(1)?)?,
+        ])?;
+        let binding = SnapshotBinding::new(SnapshotBindingInput {
+            database_id: id::<crate::DatabaseId>(60)?,
+            snapshot_id: context.snapshot().id(),
+            data_revision: context.snapshot_revision(),
+            recorded_as_of: context.recorded_as_of(),
+            schema: context.schema_binding(),
+            history_space,
+            layer_schema: layer_schema.clone(),
+            layer_selection: context.layers().requested().clone(),
+            security: SnapshotSecurityBinding::new(
+                context.security().principal_id(),
+                context.security().authorization_mode(),
+                SecurityEpoch::INITIAL,
+            ),
+            backend_generation: 60,
+        })?;
+        let limits = SnapshotLifetimeLimits::new(1_000, 5_000, 10_000)?;
+        let registry = SnapshotRegistry::new(limits);
+        let lease = registry.pin(binding, SnapshotPinPurpose::Interactive, 0)?;
+        Ok(QueryContext::new_leased(
+            QueryContextInput {
+                snapshot: context.snapshot(),
+                snapshot_revision: context.snapshot_revision(),
+                recorded_as_of: context.recorded_as_of(),
+                history_space: context.history_space(),
+                layers: context.layers().clone(),
+                world_time: context.world_time(),
+                perspective: context.perspective(),
+                epistemic_mode: context.epistemic_mode(),
+                schema_binding: context.schema_binding(),
+                security: context.security(),
+                budget: context.budget(),
+                cancellation: context.cancellation().clone(),
+            },
+            lease,
+            0,
+        )?)
+    }
+
+    fn context_with_result_budget(
+        context: &QueryContext,
+        max_results: u64,
+    ) -> TestResult<QueryContext> {
+        let limits = QueryBudgetLimits::new(100, 1_000, max_results)?;
+        let budget = QueryBudget::new(100, 1_000, max_results, limits)?;
+        Ok(QueryContext::new(QueryContextInput {
+            snapshot: context.snapshot(),
+            snapshot_revision: context.snapshot_revision(),
+            recorded_as_of: context.recorded_as_of(),
+            history_space: context.history_space(),
+            layers: context.layers().clone(),
+            world_time: context.world_time(),
+            perspective: context.perspective(),
+            epistemic_mode: context.epistemic_mode(),
+            schema_binding: context.schema_binding(),
+            security: context.security(),
+            budget,
+            cancellation: CancellationToken::new(),
+        })?)
+    }
+
+    #[test]
+    fn productive_pages_pull_to_boundary_and_release_the_cursor_on_completion() -> TestResult {
+        use std::cell::Cell;
+
+        let fixture = fixture()?;
+        let context = leased_page_context(&fixture.context, &fixture.layers)?;
+        let query_hash = crate::QueryHash::new([51; 32]);
+        let mut cursors = cursor_store()?;
+        let pulled = Cell::new(0_usize);
+        let source_pulls = &pulled;
+        let first = ProductiveQueryEngine::stream_page(
+            page_request(2, None)?,
+            page_execution(&mut cursors, query_hash, 1_000)?,
+            &context,
+            &fixture.policies,
+            move |after| {
+                let after = after.map(<[u8]>::to_vec);
+                Ok([1_u8, 2, 3, 4, 5]
+                    .into_iter()
+                    .filter(move |value| match after.as_ref() {
+                        Some(key) => key.as_slice() < [*value].as_slice(),
+                        None => true,
+                    })
+                    .map(move |value| {
+                        source_pulls.set(source_pulls.get().saturating_add(1));
+                        Ok(value)
+                    }))
+            },
+            |value| vec![*value],
+            |value, _, _| *value != 2,
+        )?;
+
+        assert_eq!(first.results(), &[1, 3]);
+        assert!(first.next_cursor().is_some());
+        assert_eq!(
+            pulled.get(),
+            4,
+            "page pull includes only one visible lookahead"
+        );
+        assert_eq!(cursors.len(), 1);
+
+        let continuation = first.next_cursor().map(<[u8]>::to_vec);
+        let second = ProductiveQueryEngine::stream_page(
+            page_request(2, continuation)?,
+            page_execution(&mut cursors, query_hash, 2_000)?,
+            &context,
+            &fixture.policies,
+            |after| {
+                let after = after.map(<[u8]>::to_vec);
+                Ok([1_u8, 2, 3, 4, 5]
+                    .into_iter()
+                    .filter(move |value| match after.as_ref() {
+                        Some(key) => key.as_slice() < [*value].as_slice(),
+                        None => true,
+                    })
+                    .map(Ok))
+            },
+            |value| vec![*value],
+            |value, _, _| *value != 2,
+        )?;
+        assert_eq!(second.results(), &[4, 5]);
+        assert!(second.next_cursor().is_none());
+        assert_eq!(cursors.len(), 0, "the final page consumes its cursor state");
+        assert!(
+            first
+                .query()
+                .query_context_binding()
+                .matches(&fixture.context)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_page_error_releases_the_continuation() -> TestResult {
+        let fixture = fixture()?;
+        let context = leased_page_context(&fixture.context, &fixture.layers)?;
+        let query_hash = crate::QueryHash::new([52; 32]);
+        let mut cursors = cursor_store()?;
+        let first = ProductiveQueryEngine::stream_page(
+            page_request(1, None)?,
+            page_execution(&mut cursors, query_hash, 1_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Ok(1_u8), Ok(2)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        )?;
+        let continuation = first.next_cursor().map(<[u8]>::to_vec);
+        assert_eq!(cursors.len(), 1);
+
+        let failed = ProductiveQueryEngine::stream_page(
+            page_request(1, continuation)?,
+            page_execution(&mut cursors, query_hash, 2_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Err(QueryEngineError::CandidateHistory)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        );
+        assert!(matches!(failed, Err(QueryEngineError::CandidateHistory)));
+        assert_eq!(cursors.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_continuation_releases_the_snapshot_cursor() -> TestResult {
+        let fixture = fixture()?;
+        let context = leased_page_context(&fixture.context, &fixture.layers)?;
+        let query_hash = crate::QueryHash::new([54; 32]);
+        let mut cursors = cursor_store()?;
+        let first = ProductiveQueryEngine::stream_page(
+            page_request(1, None)?,
+            page_execution(&mut cursors, query_hash, 1_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Ok(1_u8), Ok(2)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        )?;
+        let continuation = first.next_cursor().map(<[u8]>::to_vec);
+        assert_eq!(cursors.len(), 1);
+        context.cancellation().cancel();
+
+        let cancelled = ProductiveQueryEngine::stream_page(
+            page_request(1, continuation)?,
+            page_execution(&mut cursors, query_hash, 2_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Ok(2_u8)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        );
+        assert!(matches!(cancelled, Err(QueryEngineError::Cancelled)));
+        assert_eq!(cursors.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn result_budget_exhaustion_returns_no_partial_page() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_result_budget(&fixture.context, 1)?;
+        let mut cursors = cursor_store()?;
+        let result = ProductiveQueryEngine::stream_page(
+            page_request(1, None)?,
+            page_execution(&mut cursors, crate::QueryHash::new([55; 32]), 1_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Ok(1_u8), Ok(2)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        );
+        assert!(matches!(
+            result,
+            Err(QueryEngineError::BudgetExceeded(BudgetDimension::Results))
+        ));
+        assert_eq!(cursors.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn changed_security_epoch_invalidates_and_releases_a_page_cursor() -> TestResult {
+        let fixture = fixture()?;
+        let context = leased_page_context(&fixture.context, &fixture.layers)?;
+        let query_hash = crate::QueryHash::new([53; 32]);
+        let mut cursors = cursor_store()?;
+        let first = ProductiveQueryEngine::stream_page(
+            page_request(1, None)?,
+            page_execution(&mut cursors, query_hash, 1_000)?,
+            &context,
+            &fixture.policies,
+            |_| Ok([Ok(1_u8), Ok(2)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        )?;
+        let continuation = first.next_cursor().map(<[u8]>::to_vec);
+        assert_eq!(cursors.len(), 1);
+
+        let failed = ProductiveQueryEngine::stream_page(
+            page_request(1, continuation)?,
+            page_execution(&mut cursors, query_hash, 2_000)?,
+            &context,
+            &fixture.hidden_policies,
+            |_| Ok([Ok(2_u8)].into_iter()),
+            |value| vec![*value],
+            |_, _, _| true,
+        );
+        assert!(matches!(failed, Err(QueryEngineError::CursorInvalidated)));
+        assert_eq!(cursors.len(), 0);
         Ok(())
     }
 }

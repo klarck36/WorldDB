@@ -7,6 +7,7 @@ use std::num::NonZeroUsize;
 use crate::ids::{PrincipalId, SecurityEpoch};
 use crate::record_refs::SnapshotRef;
 use crate::security::{PolicyTarget, SecurityPolicyView};
+use crate::snapshot_lease::SnapshotLease;
 
 const CURSOR_FORMAT_VERSION: u8 = 1;
 const RANDOM_HANDLE_BYTES: usize = 32;
@@ -100,6 +101,7 @@ pub struct CursorInsertRequest {
     state: Vec<u8>,
     now_ms: u64,
     expires_at_ms: u64,
+    snapshot_lease: Option<SnapshotLease>,
 }
 
 impl CursorInsertRequest {
@@ -118,7 +120,15 @@ impl CursorInsertRequest {
             state,
             now_ms,
             expires_at_ms,
+            snapshot_lease: None,
         }
+    }
+
+    /// Transfers an independent pin into this cursor's bounded server-side state.
+    #[must_use]
+    pub fn with_snapshot_lease(mut self, lease: SnapshotLease) -> Self {
+        self.snapshot_lease = Some(lease);
+        self
     }
 }
 
@@ -175,6 +185,7 @@ struct CursorEntry {
     query_hash: QueryHash,
     authorization: Option<CursorAuthorizationBinding>,
     state: Vec<u8>,
+    snapshot_lease: Option<SnapshotLease>,
 }
 
 #[derive(Clone, Copy)]
@@ -209,6 +220,7 @@ impl CursorStateStore {
     }
 
     /// Inserts bounded opaque session state and returns a random authenticated handle.
+    #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
         snapshot: SnapshotRef,
@@ -217,6 +229,27 @@ impl CursorStateStore {
         now_ms: u64,
         expires_at_ms: u64,
     ) -> Result<CursorToken, CursorStateError> {
+        self.insert_with_snapshot_lease(snapshot, query_hash, state, now_ms, expires_at_ms, None)
+    }
+
+    fn insert_with_snapshot_lease(
+        &mut self,
+        snapshot: SnapshotRef,
+        query_hash: QueryHash,
+        state: Vec<u8>,
+        now_ms: u64,
+        expires_at_ms: u64,
+        snapshot_lease: Option<SnapshotLease>,
+    ) -> Result<CursorToken, CursorStateError> {
+        if snapshot_lease
+            .as_ref()
+            .is_some_and(|lease| match lease.binding() {
+                Ok(binding) => binding.snapshot() != snapshot,
+                Err(_) => true,
+            })
+        {
+            return Err(CursorStateError::CursorInvalidated);
+        }
         self.discard_expired(now_ms);
         let ttl = expires_at_ms
             .checked_sub(now_ms)
@@ -248,6 +281,7 @@ impl CursorStateStore {
                 query_hash,
                 authorization: None,
                 state,
+                snapshot_lease,
             },
         );
         self.state_bytes = next_bytes;
@@ -273,12 +307,13 @@ impl CursorStateStore {
         {
             return Err(CursorStateError::CursorInvalidated);
         }
-        let token = self.insert(
+        let token = self.insert_with_snapshot_lease(
             request.snapshot,
             request.query_hash,
             request.state,
             request.now_ms,
             request.expires_at_ms,
+            request.snapshot_lease,
         )?;
         let entry = self
             .entries
@@ -309,31 +344,93 @@ impl CursorStateStore {
         security: CursorSecurityContext,
         policy_view: SecurityPolicyView<'_>,
     ) -> Result<&[u8], CursorStateError> {
+        self.discard_expired(now_ms);
         let token = CursorToken::decode(wire)?;
-        let binding = self
+        let Some(binding) = self
             .entries
             .get(&token.handle)
             .and_then(|entry| entry.authorization)
-            .ok_or(CursorStateError::CursorInvalidated)?;
-        if binding.principal_id != security.principal_id
-            || binding.current_security_epoch != security.current_security_epoch
-            || binding.evaluated_security_epoch != security.evaluated_security_epoch
-            || binding.current_security_epoch != policy_view.current_epoch()
-            || binding.evaluated_security_epoch != policy_view.evaluated_epoch()
-            || security.principal_id != policy_view.principal_id()
-            || binding.target != security.target
-            || binding.capability_fingerprint
-                != policy_view
+        else {
+            return Err(CursorStateError::CursorInvalidated);
+        };
+        let authorized = binding.principal_id == security.principal_id
+            && binding.current_security_epoch == security.current_security_epoch
+            && binding.evaluated_security_epoch == security.evaluated_security_epoch
+            && binding.current_security_epoch == policy_view.current_epoch()
+            && binding.evaluated_security_epoch == policy_view.evaluated_epoch()
+            && security.principal_id == policy_view.principal_id()
+            && binding.target == security.target
+            && binding.capability_fingerprint
+                == policy_view
                     .current_snapshot()
-                    .effective_capability_fingerprint(security.principal_id, security.target)
-        {
+                    .effective_capability_fingerprint(security.principal_id, security.target);
+        if !authorized {
+            self.discard_authenticated(wire);
             return Err(CursorStateError::CursorInvalidated);
         }
-        self.resolve_inner(wire, now_ms, snapshot, query_hash, true)
+
+        let token = CursorToken::decode(wire)?;
+        let expected_mac = cursor_mac(&self.mac_key, token.expires_at_ms, &token.handle);
+        let valid = constant_time_equal(&token.mac, &expected_mac)
+            && token.expires_at_ms > now_ms
+            && self.entries.get(&token.handle).is_some_and(|entry| {
+                entry.expires_at_ms == token.expires_at_ms
+                    && entry.snapshot == snapshot
+                    && entry.query_hash == query_hash
+                    && entry.authorization.is_some()
+            });
+        if !valid {
+            self.discard_authenticated(wire);
+            return Err(CursorStateError::CursorInvalidated);
+        }
+        self.entries
+            .get(&token.handle)
+            .map(|entry| entry.state.as_slice())
+            .ok_or(CursorStateError::CursorInvalidated)
+    }
+
+    /// Removes a successfully reauthorized continuation and releases its retained snapshot pin.
+    pub fn remove_authorized(
+        &mut self,
+        wire: &[u8],
+        now_ms: u64,
+        snapshot: SnapshotRef,
+        query_hash: QueryHash,
+        security: CursorSecurityContext,
+        policy_view: SecurityPolicyView<'_>,
+    ) -> Result<(), CursorStateError> {
+        let token = CursorToken::decode(wire)?;
+        self.resolve_authorized(wire, now_ms, snapshot, query_hash, security, policy_view)?;
+        self.remove_entry(&token.handle);
+        Ok(())
+    }
+
+    /// Drops expired cursor state and leases whose snapshot hard lifetime elapsed.
+    /// Returns the number of released entries.
+    pub fn reap_expired(&mut self, now_ms: u64) -> usize {
+        self.discard_expired(now_ms)
+    }
+
+    /// Removes an entry only when the supplied wire token has a valid session MAC.
+    /// Used to release a continuation after terminal query failure without exposing
+    /// whether arbitrary malformed tokens map to stored entries.
+    pub(crate) fn discard_authenticated(&mut self, wire: &[u8]) {
+        let Ok(token) = CursorToken::decode(wire) else {
+            return;
+        };
+        let expected_mac = cursor_mac(&self.mac_key, token.expires_at_ms, &token.handle);
+        let exact_entry = self
+            .entries
+            .get(&token.handle)
+            .is_some_and(|entry| entry.expires_at_ms == token.expires_at_ms);
+        if exact_entry && constant_time_equal(&token.mac, &expected_mac) {
+            self.remove_entry(&token.handle);
+        }
     }
 
     /// Resolves state or returns the same invalidation outcome for unknown, expired,
     /// malformed, manipulated, or old-session tokens.
+    #[cfg(test)]
     fn resolve_inner(
         &mut self,
         wire: &[u8],
@@ -406,15 +503,24 @@ impl CursorStateStore {
         Err(CursorStateError::RandomHandleCollision)
     }
 
-    fn discard_expired(&mut self, now_ms: u64) {
+    fn discard_expired(&mut self, now_ms: u64) -> usize {
         let expired = self
             .entries
             .iter()
-            .filter_map(|(handle, entry)| (entry.expires_at_ms <= now_ms).then_some(*handle))
+            .filter_map(|(handle, entry)| {
+                (entry.expires_at_ms <= now_ms
+                    || entry
+                        .snapshot_lease
+                        .as_ref()
+                        .is_some_and(|lease| lease.ensure_live(now_ms).is_err()))
+                .then_some(*handle)
+            })
             .collect::<Vec<_>>();
+        let released = expired.len();
         for handle in expired {
             self.remove_entry(&handle);
         }
+        released
     }
 
     fn remove_entry(&mut self, handle: &[u8; RANDOM_HANDLE_BYTES]) {

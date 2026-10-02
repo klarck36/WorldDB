@@ -475,6 +475,20 @@ impl QueryContext {
             None => Ok(()),
         }
     }
+
+    /// Registers an independent pin for a continuation cursor, if this context is leased.
+    /// The returned lease is owned by the cursor store and is released when its state is
+    /// consumed, invalidated, expired, or the store is dropped.
+    pub fn fork_snapshot_lease(
+        &self,
+        now_ms: u64,
+    ) -> Result<Option<SnapshotLease>, crate::snapshot_lease::SnapshotError> {
+        self.snapshot_lease
+            .as_ref()
+            .map(|lease| lease.fork_reader(now_ms))
+            .transpose()
+    }
+
     /// Published revision pinned by the snapshot.
     #[must_use]
     pub const fn snapshot_revision(&self) -> Revision {
@@ -872,10 +886,15 @@ mod tests {
 
         assert!(context.has_snapshot_lease());
         assert_eq!(context.ensure_snapshot_live(19), Ok(()));
+        let cursor_lease = context
+            .fork_snapshot_lease(1)
+            .map_err(|error| error.to_string())?;
+        assert!(cursor_lease.is_some());
         assert_eq!(
             context.ensure_snapshot_live(20),
             Err(crate::QueryError::SnapshotExpired)
         );
+        drop(cursor_lease);
         Ok(())
     }
 

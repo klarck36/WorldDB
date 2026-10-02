@@ -605,13 +605,14 @@ mod query_aggregate;
 mod query_context;
 mod query_engine;
 mod query_graph;
+mod query_page;
 mod query_ports;
 mod query_search;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "query ports consume the internal stream in the next milestone"
+        reason = "transport adapters may emit terminal cancellation, budget, and diagnostic items"
     )
 )]
 mod query_stream;
@@ -913,6 +914,7 @@ pub use query_graph::{
     GraphRelationshipKind, GraphResult, GraphSpec, TraversedGraphEdge,
     full_scan_authorized_graph_traversal,
 };
+pub use query_page::{PageExecution, PageOperation, PageRequest, PageRequestError, QueryPage};
 pub use query_ports::{
     OwnedQueryResult, QueryPortError, bind_authorized_explain, bind_authorized_resolved_view,
     full_scan_owned_authorized_raw_history,

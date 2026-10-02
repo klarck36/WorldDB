@@ -782,6 +782,120 @@ mod tests {
     }
 
     #[test]
+    fn cursor_state_owns_its_pin_until_consumed_or_reaped() -> Result<(), String> {
+        use crate::cursor::{
+            CursorInsertRequest, CursorSecurityContext, CursorStateStore, CursorStoreLimits,
+            QueryHash,
+        };
+        use crate::security::{
+            Principal, SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
+        };
+
+        let registry = SnapshotRegistry::new(limits().map_err(|error| error.to_string())?);
+        let lease = registry
+            .pin(binding(10, 1, 20)?, SnapshotPinPurpose::Interactive, 100)
+            .map_err(|error| error.to_string())?;
+        let snapshot = lease
+            .binding()
+            .map_err(|error| error.to_string())?
+            .snapshot();
+        let snapshot_id = snapshot.id();
+        let principal = id::<PrincipalId>(5).map_err(|error| error.to_string())?;
+        let policy = SecurityPolicySnapshot::new(
+            vec![Principal::new(principal)],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .map_err(|error| error.to_string())?;
+        let revision = Revision::new(1).map_err(|error| error.to_string())?;
+        let history = SecurityPolicyHistory::new(
+            revision,
+            vec![
+                SecurityPolicyVersion::new(
+                    Revision::GENESIS,
+                    SecurityEpoch::INITIAL,
+                    policy.clone(),
+                ),
+                SecurityPolicyVersion::new(revision, SecurityEpoch::INITIAL, policy),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        let view = history
+            .select(AuthorizationMode::Now, principal, revision)
+            .map_err(|error| error.to_string())?;
+        let target = crate::security::PolicyTarget::default();
+        let security = CursorSecurityContext::new(
+            principal,
+            SecurityEpoch::INITIAL,
+            SecurityEpoch::INITIAL,
+            target,
+        );
+        let query_hash = QueryHash::new([91; 32]);
+        let store_limits =
+            CursorStoreLimits::new(2, 64, 1_000).map_err(|error| error.to_string())?;
+        let mut cursors = CursorStateStore::new(store_limits).map_err(|error| error.to_string())?;
+
+        let token = cursors
+            .insert_authorized(
+                CursorInsertRequest::new(snapshot, query_hash, vec![1], 100, 200)
+                    .with_snapshot_lease(
+                        lease.fork_reader(100).map_err(|error| error.to_string())?,
+                    ),
+                security,
+                view,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            registry
+                .active_leases(snapshot_id)
+                .map_err(|e| e.to_string())?,
+            2
+        );
+        cursors
+            .remove_authorized(&token.encode(), 110, snapshot, query_hash, security, view)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            registry
+                .active_leases(snapshot_id)
+                .map_err(|e| e.to_string())?,
+            1
+        );
+
+        cursors
+            .insert_authorized(
+                CursorInsertRequest::new(snapshot, query_hash, vec![2], 100, 120)
+                    .with_snapshot_lease(
+                        lease.fork_reader(100).map_err(|error| error.to_string())?,
+                    ),
+                security,
+                view,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            registry
+                .active_leases(snapshot_id)
+                .map_err(|e| e.to_string())?,
+            2
+        );
+        assert_eq!(cursors.reap_expired(120), 1);
+        assert_eq!(
+            registry
+                .active_leases(snapshot_id)
+                .map_err(|e| e.to_string())?,
+            1
+        );
+        drop(lease);
+        assert_eq!(
+            registry
+                .active_leases(snapshot_id)
+                .map_err(|e| e.to_string())?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn exact_backup_can_explicitly_exceed_interactive_hard_limit() -> Result<(), String> {
         let registry = SnapshotRegistry::new(limits().map_err(|error| error.to_string())?);
         let backup = registry
