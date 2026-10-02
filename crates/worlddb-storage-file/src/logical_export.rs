@@ -1027,6 +1027,16 @@ fn record_ownerships(
     Ok(ownerships)
 }
 
+pub(crate) fn validate_import_references(export: &LogicalExport) -> Result<(), LogicalExportError> {
+    let records = export
+        .records
+        .iter()
+        .map(|entry| entry.record.clone())
+        .collect::<Vec<_>>();
+    record_ownerships(&records)?;
+    Ok(())
+}
+
 fn lifecycle_identity_and_target(record: &Record) -> Option<(RecordRef, RecordRef)> {
     Some(match record {
         Record::AssertionValidityClosure(value) => (
@@ -1178,7 +1188,7 @@ fn record_is_in_visible_scope(
     }
 }
 
-fn record_ref(record: &Record) -> Option<RecordRef> {
+pub(crate) fn record_ref(record: &Record) -> Option<RecordRef> {
     Some(match record {
         Record::Assertion(value) => RecordRef::Assertion(value.id()),
         Record::AssertionValidityClosure(value) => RecordRef::AssertionValidityClosure(value.id()),
@@ -1716,21 +1726,23 @@ mod tests {
         LogicalExportStorageClass,
     };
     use crate::{
-        CompactionManager, DatabaseLayout, HistorySegmentStore, ManifestSegmentKind,
-        ManifestSegmentReference, ManifestSnapshot, ManifestStore, RecoveryManager,
-        SecurityPolicyHistoryStore, WalPrepareLog,
+        CompactionManager, DatabaseLayout, HistorySegmentStore, LogicalImportDestinationInventory,
+        LogicalImportError, LogicalImportIdMapping, LogicalImportIdentity, LogicalImportManager,
+        LogicalImportPlan, ManifestSegmentKind, ManifestSegmentReference, ManifestSnapshot,
+        ManifestStore, RecoveryManager, SecurityPolicyHistoryStore, WalPrepareLog,
     };
     use std::env;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use worlddb_core::{
-        AuthorizationMode, Capability, CapabilityGrant, CapabilityRule, DomainId, Entity, EntityId,
-        EntityRetirement, EntityRetirementId, EntityTypeId, GrantEffect, HistorySpaceDefinition,
-        HistorySpaceId, LayerDefinition, LayerId, Lifecycle, OperationId,
+        AuthorizationMode, Capability, CapabilityGrant, CapabilityRule, DatabaseId, DomainId,
+        Entity, EntityId, EntityRetirement, EntityRetirementId, EntityTypeId, GrantEffect,
+        HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, Lifecycle, OperationId,
         PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId, PolicyScope, PolicySubject,
-        Principal, PrincipalId, Record, RecordKind, Revision, SchemaRevision, SecurityEpoch,
-        SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion, Symbol,
+        Principal, PrincipalId, Record, RecordKind, RecordRef, Revision, SchemaRevision,
+        SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
+        Symbol,
     };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -2326,6 +2338,191 @@ mod tests {
             .reclaim_retired(&compaction_lock, &history_references)
             .map_err(|error| error.to_string())?;
         assert_eq!(reclaimed.reclaimed(), history_references);
+        Ok(())
+    }
+
+    #[test]
+    fn logical_import_requires_and_replays_explicit_collision_remaps() -> Result<(), String> {
+        let area = TestArea::create()?;
+        let layout = area.layout()?;
+        let history_space = install_history(&layout)?;
+        let permissions = policy(None)?;
+        let import_scope = LogicalExportScope::new(
+            Revision::GENESIS,
+            Revision::FIRST_COMMIT,
+            vec![history_space],
+            vec![
+                RecordKind::Entity,
+                RecordKind::EntityRetirement,
+                RecordKind::HistorySpaceDefinition,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        let source_bytes = LogicalExportManager::new(layout)
+            .export(import_scope, policy_view(&permissions)?)
+            .and_then(|export| export.encode())
+            .map_err(|error| error.to_string())?;
+        let destination_id = id::<DatabaseId>(41)?;
+        let occupied = LogicalImportDestinationInventory::new(
+            destination_id,
+            [
+                LogicalImportIdentity::Entity(id::<EntityId>(4)?),
+                LogicalImportIdentity::EntityType(id::<EntityTypeId>(5)?),
+                LogicalImportIdentity::Record(RecordRef::EntityRetirement(
+                    id::<EntityRetirementId>(15)?,
+                )),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+        let unplanned = LogicalImportPlan::new(&source_bytes, destination_id, Vec::new())
+            .and_then(|plan| plan.encode())
+            .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            LogicalImportManager::prepare(&source_bytes, &unplanned, &occupied),
+            Err(LogicalImportError::IdentityCollision(
+                LogicalImportIdentity::Entity(_)
+            ))
+        ));
+
+        let mappings = vec![
+            LogicalImportIdMapping::new(
+                LogicalImportIdentity::Entity(id::<EntityId>(4)?),
+                LogicalImportIdentity::Entity(id::<EntityId>(42)?),
+            )
+            .map_err(|error| error.to_string())?,
+            LogicalImportIdMapping::new(
+                LogicalImportIdentity::Record(RecordRef::EntityRetirement(
+                    id::<EntityRetirementId>(15)?,
+                )),
+                LogicalImportIdentity::Record(RecordRef::EntityRetirement(
+                    id::<EntityRetirementId>(43)?,
+                )),
+            )
+            .map_err(|error| error.to_string())?,
+        ];
+        let plan = LogicalImportPlan::new(&source_bytes, destination_id, mappings)
+            .map_err(|error| error.to_string())?;
+        let plan_bytes = plan.encode().map_err(|error| error.to_string())?;
+        assert_eq!(
+            LogicalImportPlan::decode(&plan_bytes)
+                .and_then(|decoded| decoded.encode())
+                .map_err(|error| error.to_string())?,
+            plan_bytes
+        );
+
+        let first = LogicalImportManager::prepare(&source_bytes, &plan_bytes, &occupied)
+            .map_err(|error| error.to_string())?;
+        let second = LogicalImportManager::prepare(&source_bytes, &plan_bytes, &occupied)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(first.stream_fingerprint(), second.stream_fingerprint());
+        assert_eq!(
+            first.map_identity(LogicalImportIdentity::Entity(id::<EntityId>(4)?)),
+            LogicalImportIdentity::Entity(id::<EntityId>(42)?)
+        );
+        assert_eq!(
+            first.mapped_record_identity(&Record::EntityRetirement(EntityRetirement::new(
+                id::<EntityRetirementId>(15)?,
+                id::<EntityId>(4)?,
+                Revision::FIRST_COMMIT,
+            ))),
+            Some(RecordRef::EntityRetirement(id::<EntityRetirementId>(43)?))
+        );
+        assert_eq!(first.records().len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn logical_import_rejects_unlisted_or_occupied_remap_targets() -> Result<(), String> {
+        let area = TestArea::create()?;
+        let layout = area.layout()?;
+        let history_space = install_history(&layout)?;
+        let permissions = policy(None)?;
+        let source_bytes = LogicalExportManager::new(layout)
+            .export(
+                LogicalExportScope::new(
+                    Revision::GENESIS,
+                    Revision::FIRST_COMMIT,
+                    vec![history_space],
+                    vec![RecordKind::Entity, RecordKind::HistorySpaceDefinition],
+                )
+                .map_err(|error| error.to_string())?,
+                policy_view(&permissions)?,
+            )
+            .and_then(|export| export.encode())
+            .map_err(|error| error.to_string())?;
+        let destination_id = id::<DatabaseId>(51)?;
+        let occupied = LogicalImportDestinationInventory::new(
+            destination_id,
+            [
+                LogicalImportIdentity::Entity(id::<EntityId>(4)?),
+                LogicalImportIdentity::Entity(id::<EntityId>(52)?),
+                LogicalImportIdentity::EntityType(id::<EntityTypeId>(5)?),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        let mapping = LogicalImportIdMapping::new(
+            LogicalImportIdentity::Entity(id::<EntityId>(4)?),
+            LogicalImportIdentity::Entity(id::<EntityId>(52)?),
+        )
+        .map_err(|error| error.to_string())?;
+        let unlisted_mapping = LogicalImportIdMapping::new(
+            LogicalImportIdentity::Entity(id::<EntityId>(53)?),
+            LogicalImportIdentity::Entity(id::<EntityId>(54)?),
+        )
+        .map_err(|error| error.to_string())?;
+        let unlisted_plan =
+            LogicalImportPlan::new(&source_bytes, destination_id, vec![unlisted_mapping])
+                .and_then(|plan| plan.encode())
+                .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            LogicalImportManager::prepare(&source_bytes, &unlisted_plan, &occupied),
+            Err(LogicalImportError::MappingSourceNotInExport(
+                LogicalImportIdentity::Entity(_)
+            ))
+        ));
+        let plan_bytes = LogicalImportPlan::new(&source_bytes, destination_id, vec![mapping])
+            .and_then(|plan| plan.encode())
+            .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            LogicalImportManager::prepare(&source_bytes, &plan_bytes, &occupied),
+            Err(LogicalImportError::RemapTargetOccupied(
+                LogicalImportIdentity::Entity(_)
+            ))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn logical_import_rejects_missing_schema_references() -> Result<(), String> {
+        let area = TestArea::create()?;
+        let layout = area.layout()?;
+        let history_space = install_history(&layout)?;
+        let permissions = policy(None)?;
+        let source_bytes = LogicalExportManager::new(layout)
+            .export(
+                LogicalExportScope::new(
+                    Revision::GENESIS,
+                    Revision::FIRST_COMMIT,
+                    vec![history_space],
+                    vec![RecordKind::Entity, RecordKind::HistorySpaceDefinition],
+                )
+                .map_err(|error| error.to_string())?,
+                policy_view(&permissions)?,
+            )
+            .and_then(|export| export.encode())
+            .map_err(|error| error.to_string())?;
+        let destination_id = id::<DatabaseId>(61)?;
+        let destination = LogicalImportDestinationInventory::new(destination_id, [])
+            .map_err(|error| error.to_string())?;
+        let plan_bytes = LogicalImportPlan::new(&source_bytes, destination_id, Vec::new())
+            .and_then(|plan| plan.encode())
+            .map_err(|error| error.to_string())?;
+
+        assert!(matches!(
+            LogicalImportManager::prepare(&source_bytes, &plan_bytes, &destination),
+            Err(LogicalImportError::MissingReference)
+        ));
         Ok(())
     }
 }

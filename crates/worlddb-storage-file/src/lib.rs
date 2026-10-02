@@ -10,6 +10,7 @@ mod index_generation;
 mod index_rebuild;
 mod layout;
 mod logical_export;
+mod logical_import;
 mod manifest;
 mod migration_run_journal;
 mod recovery;
@@ -58,6 +59,10 @@ pub use logical_export::{
     LogicalExport, LogicalExportClassSummary, LogicalExportEntry, LogicalExportError,
     LogicalExportHistorySpace, LogicalExportInclusion, LogicalExportManager, LogicalExportManifest,
     LogicalExportScope, LogicalExportStorageClass,
+};
+pub use logical_import::{
+    LogicalImport, LogicalImportDestinationInventory, LogicalImportError, LogicalImportIdMapping,
+    LogicalImportIdentity, LogicalImportManager, LogicalImportPlan,
 };
 pub use manifest::{
     Manifest, ManifestError, ManifestReceipt, ManifestSegmentKind, ManifestSegmentReference,
