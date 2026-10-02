@@ -9,6 +9,8 @@ step	dev	decoder-inventory-smoke	run	cargo	test --locked --package worlddb-core 
 step	dev	typescript-transport-dependencies	run	pnpm	--dir bindings/typescript install --frozen-lockfile	-
 step	dev	typescript-transport-verify	run	pnpm	--dir bindings/typescript verify	-
 step	dev	clippy-unsafe-policy	run	cargo	clippy --locked --workspace --all-targets -- -D warnings	-
+step	dev	migration-transform-static-policy	run	python	-B -X utf8 tools/check_migration_transform.py	-
+step	dev	migration-transform-static-policy-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_migration_transform_policy.py -v	-
 step	dev	workspace-lint-configuration	run	python	-B -X utf8 tools/check_workspace_lints.py	-
 step	dev	unsafe-boundary-policy	run	python	-B -X utf8 tools/check_unsafe_policy.py	-
 step	dev	exception-policy	run	python	-B -X utf8 tools/check_exceptions.py	-

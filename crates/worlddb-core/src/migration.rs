@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroU32;
 
-use crate::JobBudget;
 use crate::ids::{
     DomainId, EntityTypeId, EventKindId, LayerId, MigrationId, MigrationRunId, MigrationStepId,
-    OperationId, PredicateId, SchemaRevision,
+    OperationId, PredicateId, SchemaRevision, TimelineId,
 };
+use crate::{CalendarPeriod, JobBudget};
 
 /// The complete, closed set of migration compatibility categories.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -310,6 +310,79 @@ impl MigrationTransformerVersion {
     }
 }
 
+/// Direction of an explicit Gregorian calendar-period migration shift.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MigrationCalendarDirection {
+    /// Move the value backward by the plan's calendar period.
+    Past,
+    /// Move the value forward by the plan's calendar period.
+    Future,
+}
+
+impl MigrationCalendarDirection {
+    pub(crate) const fn wire_tag(self) -> u8 {
+        match self {
+            Self::Past => 1,
+            Self::Future => 2,
+        }
+    }
+}
+
+/// Explicit, fingerprint-bound calendar transformation parameters.
+///
+/// The timeline ID and UTC epoch come from the plan's pinned source schema.
+/// The migration uses the project's closed proleptic-Gregorian UTC profile and
+/// never consults a host clock, timezone, locale, or time-unit inference.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MigrationCalendarShift {
+    timeline_id: TimelineId,
+    epoch_unix_nanoseconds: i128,
+    period: CalendarPeriod,
+    direction: MigrationCalendarDirection,
+}
+
+impl MigrationCalendarShift {
+    /// Creates an explicit shift bound to one registered timeline profile.
+    #[must_use]
+    pub const fn new(
+        timeline_id: TimelineId,
+        epoch_unix_nanoseconds: i128,
+        period: CalendarPeriod,
+        direction: MigrationCalendarDirection,
+    ) -> Self {
+        Self {
+            timeline_id,
+            epoch_unix_nanoseconds,
+            period,
+            direction,
+        }
+    }
+
+    /// Stable timeline identity whose source schema supplies the calendar profile.
+    #[must_use]
+    pub const fn timeline_id(self) -> TimelineId {
+        self.timeline_id
+    }
+
+    /// UTC epoch offset for the timeline's ProlepticGregorianUtc profile.
+    #[must_use]
+    pub const fn epoch_unix_nanoseconds(self) -> i128 {
+        self.epoch_unix_nanoseconds
+    }
+
+    /// Explicit canonical calendar period.
+    #[must_use]
+    pub const fn period(self) -> CalendarPeriod {
+        self.period
+    }
+
+    /// Explicit direction; no direction is inferred from source values.
+    #[must_use]
+    pub const fn direction(self) -> MigrationCalendarDirection {
+        self.direction
+    }
+}
+
 /// Stable BLAKE3 digest of every semantic field in an immutable migration plan.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct MigrationPlanFingerprint([u8; 32]);
@@ -339,6 +412,8 @@ pub struct MigrationPlanSpec {
     pub schema_changes: Vec<SchemaIdentityTransition>,
     /// Version of the deterministic transformer to be used by later run tasks.
     pub transformer_version: MigrationTransformerVersion,
+    /// Optional explicit time shift, including every typed parameter it uses.
+    pub calendar_shift: Option<MigrationCalendarShift>,
     /// Finite maximum work and memory allowance for the migration.
     pub budget: JobBudget,
 }
@@ -364,6 +439,7 @@ pub struct MigrationPlan {
     steps: Vec<MigrationStepId>,
     schema_changes: Vec<SchemaIdentityTransition>,
     transformer_version: MigrationTransformerVersion,
+    calendar_shift: Option<MigrationCalendarShift>,
     budget: JobBudget,
     fingerprint: MigrationPlanFingerprint,
 }
@@ -412,6 +488,7 @@ impl MigrationPlan {
             steps: spec.steps,
             schema_changes: spec.schema_changes,
             transformer_version: spec.transformer_version,
+            calendar_shift: spec.calendar_shift,
             budget: spec.budget,
             fingerprint,
         })
@@ -459,6 +536,12 @@ impl MigrationPlan {
         self.transformer_version
     }
 
+    /// Optional explicit calendar transformation committed by this plan.
+    #[must_use]
+    pub const fn calendar_shift(&self) -> Option<MigrationCalendarShift> {
+        self.calendar_shift
+    }
+
     /// Finite work and memory budget fixed by the plan.
     #[must_use]
     pub const fn budget(&self) -> JobBudget {
@@ -485,6 +568,45 @@ impl MigrationPlan {
         Ok(())
     }
 
+    /// Checks both the exact source precondition and the available transformer version at start.
+    pub fn validate_start(
+        &self,
+        actual_revision: SchemaRevision,
+        actual_fingerprint: [u8; 32],
+        transformer_version: MigrationTransformerVersion,
+    ) -> Result<(), MigrationPlanError> {
+        self.validate_source_schema(actual_revision, actual_fingerprint)?;
+        self.validate_transformer_version(transformer_version)
+    }
+
+    /// Checks a resumed run's plan identity, source precondition, and transformer version.
+    pub fn validate_resume(
+        &self,
+        run: MigrationRun,
+        actual_revision: SchemaRevision,
+        actual_fingerprint: [u8; 32],
+        transformer_version: MigrationTransformerVersion,
+    ) -> Result<(), MigrationPlanError> {
+        if run.migration_id() != self.migration_id {
+            return Err(MigrationPlanError::RunPlanIdentityMismatch);
+        }
+        self.validate_start(actual_revision, actual_fingerprint, transformer_version)
+    }
+
+    /// Rejects execution when the available implementation differs from the plan's version.
+    pub fn validate_transformer_version(
+        &self,
+        actual: MigrationTransformerVersion,
+    ) -> Result<(), MigrationPlanError> {
+        if actual != self.transformer_version {
+            return Err(MigrationPlanError::TransformerVersionMismatch {
+                planned: self.transformer_version,
+                actual,
+            });
+        }
+        Ok(())
+    }
+
     /// Verifies an embedded or persisted fingerprint against the complete plan.
     pub fn verify_fingerprint(
         &self,
@@ -499,7 +621,12 @@ impl MigrationPlan {
 
 fn compute_plan_fingerprint(spec: &MigrationPlanSpec) -> MigrationPlanFingerprint {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"WorldDB.MigrationPlan.v1\0");
+    if spec.calendar_shift.is_some() {
+        hasher.update(b"WorldDB.MigrationPlan.v2\0");
+    } else {
+        // Plans without a calendar transform retain the M7-01 fingerprint contract.
+        hasher.update(b"WorldDB.MigrationPlan.v1\0");
+    }
     hasher.update(&spec.migration_id.to_bytes());
     hasher.update(&[spec.category.wire_tag()]);
     hasher.update(&spec.source_schema.revision.revision().value().to_be_bytes());
@@ -525,6 +652,17 @@ fn compute_plan_fingerprint(spec: &MigrationPlanSpec) -> MigrationPlanFingerprin
         hasher.update(&[change.category.wire_tag()]);
     }
     hasher.update(&spec.transformer_version.value().to_be_bytes());
+    if let Some(shift) = spec.calendar_shift {
+        hasher.update(&[1]);
+        // Profile tag 1 is the closed ProlepticGregorianUtc calendar profile.
+        hasher.update(&[1]);
+        hasher.update(&shift.timeline_id.to_bytes());
+        hasher.update(&shift.epoch_unix_nanoseconds.to_be_bytes());
+        hasher.update(&shift.period.years().to_be_bytes());
+        hasher.update(&[shift.period.months()]);
+        hasher.update(&shift.period.days().to_be_bytes());
+        hasher.update(&[shift.direction.wire_tag()]);
+    }
     hasher.update(&spec.budget.max_work_units().to_be_bytes());
     hasher.update(&spec.budget.max_memory_bytes().to_be_bytes());
     MigrationPlanFingerprint(*hasher.finalize().as_bytes())
@@ -559,6 +697,15 @@ pub enum MigrationPlanError {
     TargetSchemaNotLater,
     /// Transformer versions start at 1.
     ZeroTransformerVersion,
+    /// The implementation available at start/resume differs from the planned version.
+    TransformerVersionMismatch {
+        /// Version fixed into the plan.
+        planned: MigrationTransformerVersion,
+        /// Version offered by the current execution environment.
+        actual: MigrationTransformerVersion,
+    },
+    /// A run attempted to resume a different logical migration plan.
+    RunPlanIdentityMismatch,
     /// Current schema revision or fingerprint differs from the plan precondition.
     SourceSchemaPreconditionMismatch,
     /// Embedded fingerprint does not match the plan's canonical content.
@@ -586,6 +733,15 @@ impl fmt::Display for MigrationPlanError {
             }
             Self::ZeroTransformerVersion => {
                 formatter.write_str("migration transformer version must be positive")
+            }
+            Self::TransformerVersionMismatch { planned, actual } => write!(
+                formatter,
+                "migration transformer version {} does not match planned version {}",
+                actual.value(),
+                planned.value()
+            ),
+            Self::RunPlanIdentityMismatch => {
+                formatter.write_str("migration run refers to a different plan identity")
             }
             Self::SourceSchemaPreconditionMismatch => {
                 formatter.write_str("migration source schema precondition does not match")
@@ -762,6 +918,7 @@ mod tests {
             schema_changes: vec![change],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,
+            calendar_shift: None,
             budget: JobBudget::new(1_000, 1024 * 1024).map_err(|error| error.to_string())?,
         })
     }

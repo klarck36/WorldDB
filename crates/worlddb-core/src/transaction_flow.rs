@@ -301,6 +301,7 @@ mod tests {
             schema_changes: vec![schema_change],
             transformer_version: MigrationTransformerVersion::new(1)
                 .map_err(|error| error.to_string())?,
+            calendar_shift: None,
             budget: JobBudget::new(1_000, 1024 * 1024).map_err(|error| error.to_string())?,
         })
         .map_err(|error| error.to_string())

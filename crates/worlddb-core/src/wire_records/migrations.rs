@@ -3,10 +3,10 @@
 use crate::wire::DecoderLimits;
 use crate::wire::{decode_id, encode_id};
 use crate::{
-    JobBudget, MigrationCategory, MigrationPlan, MigrationPlanSpec, MigrationRun,
-    MigrationRunState, MigrationStepCommitIdentity, MigrationTargetSchema,
-    MigrationTransformerVersion, RecordCodecError, RecordKind, SchemaIdentityTransition,
-    SourceSchemaPrecondition,
+    CalendarPeriod, JobBudget, MigrationCalendarDirection, MigrationCalendarShift,
+    MigrationCategory, MigrationPlan, MigrationPlanSpec, MigrationRun, MigrationRunState,
+    MigrationStepCommitIdentity, MigrationTargetSchema, MigrationTransformerVersion,
+    RecordCodecError, RecordKind, SchemaIdentityTransition, SourceSchemaPrecondition, TimelineId,
 };
 
 use super::{
@@ -15,7 +15,7 @@ use super::{
     required_field,
 };
 
-const PLAN_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const PLAN_FIELDS: &[u32] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
 pub(super) fn encode_plan(value: &MigrationPlan) -> Result<Vec<u8>, RecordCodecError> {
     let steps = value
@@ -30,26 +30,27 @@ pub(super) fn encode_plan(value: &MigrationPlan) -> Result<Vec<u8>, RecordCodecE
         .collect::<Result<Vec<_>, _>>()?;
     let source = value.source_schema_precondition();
     let target = value.target_schema();
-    encode_fields(
-        RecordKind::MigrationPlan,
-        vec![
-            (1, encode_id(value.migration_id()).to_vec()),
-            (2, vec![category_tag(value.category())]),
-            (3, encode_array(&steps)),
-            (4, encode_schema_revision(source.revision())),
-            (5, source.fingerprint().to_vec()),
-            (6, encode_schema_revision(target.revision())),
-            (7, target.fingerprint().to_vec()),
-            (
-                8,
-                encode_u64(u64::from(value.transformer_version().value())),
-            ),
-            (9, encode_u64(value.budget().max_work_units())),
-            (10, encode_u64(value.budget().max_memory_bytes())),
-            (11, value.fingerprint().as_bytes().to_vec()),
-            (12, encode_array(&schema_changes)),
-        ],
-    )
+    let mut fields = vec![
+        (1, encode_id(value.migration_id()).to_vec()),
+        (2, vec![category_tag(value.category())]),
+        (3, encode_array(&steps)),
+        (4, encode_schema_revision(source.revision())),
+        (5, source.fingerprint().to_vec()),
+        (6, encode_schema_revision(target.revision())),
+        (7, target.fingerprint().to_vec()),
+        (
+            8,
+            encode_u64(u64::from(value.transformer_version().value())),
+        ),
+        (9, encode_u64(value.budget().max_work_units())),
+        (10, encode_u64(value.budget().max_memory_bytes())),
+        (11, value.fingerprint().as_bytes().to_vec()),
+        (12, encode_array(&schema_changes)),
+    ];
+    if let Some(calendar_shift) = value.calendar_shift() {
+        fields.push((13, encode_calendar_shift(calendar_shift)?));
+    }
+    encode_fields(RecordKind::MigrationPlan, fields)
 }
 
 pub(super) fn decode_plan(
@@ -93,6 +94,11 @@ pub(super) fn decode_plan(
             .map(|bytes| decode_schema_identity_transition(bytes, limits)),
         limits,
     )?;
+    let calendar_shift = fields
+        .iter()
+        .find(|(tag, _)| *tag == 13)
+        .map(|(_, bytes)| decode_calendar_shift(kind, bytes, limits))
+        .transpose()?;
 
     let plan = MigrationPlan::new(MigrationPlanSpec {
         migration_id,
@@ -102,6 +108,7 @@ pub(super) fn decode_plan(
         steps,
         schema_changes,
         transformer_version,
+        calendar_shift,
         budget,
     })
     .map_err(|error| match error {
@@ -113,6 +120,8 @@ pub(super) fn decode_plan(
         crate::MigrationPlanError::EmptySchemaChanges
         | crate::MigrationPlanError::DuplicateSchemaChange => invalid_field(kind, 12),
         crate::MigrationPlanError::ZeroTransformerVersion => invalid_field(kind, 8),
+        crate::MigrationPlanError::TransformerVersionMismatch { .. } => invalid_field(kind, 8),
+        crate::MigrationPlanError::RunPlanIdentityMismatch => invalid_field(kind, 1),
         crate::MigrationPlanError::SourceSchemaPreconditionMismatch
         | crate::MigrationPlanError::FingerprintMismatch => invalid_field(kind, 11),
     })?;
@@ -120,6 +129,78 @@ pub(super) fn decode_plan(
         return Err(invalid_field(kind, 11));
     }
     Ok(plan)
+}
+
+fn encode_calendar_shift(shift: MigrationCalendarShift) -> Result<Vec<u8>, RecordCodecError> {
+    let profile_tag = 1_u8; // ProlepticGregorianUtc, the only supported profile.
+    let nested = encode_fields(
+        RecordKind::MigrationPlan,
+        vec![
+            (1, encode_id(shift.timeline_id()).to_vec()),
+            (2, vec![profile_tag]),
+            (3, shift.epoch_unix_nanoseconds().to_be_bytes().to_vec()),
+            (4, encode_u64(u64::from(shift.period().years()))),
+            (5, vec![shift.period().months()]),
+            (6, encode_u64(u64::from(shift.period().days()))),
+            (7, vec![shift.direction().wire_tag()]),
+        ],
+    )?;
+    Ok(nested)
+}
+
+fn decode_calendar_shift(
+    kind: RecordKind,
+    bytes: &[u8],
+    limits: &DecoderLimits,
+) -> Result<MigrationCalendarShift, RecordCodecError> {
+    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3, 4, 5, 6, 7], limits)
+        .map_err(|_| invalid_field(kind, 13))?;
+    let timeline_id = decode_id::<TimelineId>(required_shift_field(kind, &fields, 1)?)
+        .map_err(|_| invalid_field(kind, 13))?;
+    match required_shift_field(kind, &fields, 2)? {
+        [1] => {}
+        _ => return Err(invalid_field(kind, 13)),
+    }
+    let epoch_unix_nanoseconds = required_shift_field(kind, &fields, 3)?
+        .try_into()
+        .map(i128::from_be_bytes)
+        .map_err(|_| invalid_field(kind, 13))?;
+    let years = u32::try_from(decode_u64(
+        kind,
+        13,
+        required_shift_field(kind, &fields, 4)?,
+    )?)
+    .map_err(|_| invalid_field(kind, 13))?;
+    let months = match required_shift_field(kind, &fields, 5)? {
+        [months] => *months,
+        _ => return Err(invalid_field(kind, 13)),
+    };
+    let days = u32::try_from(decode_u64(
+        kind,
+        13,
+        required_shift_field(kind, &fields, 6)?,
+    )?)
+    .map_err(|_| invalid_field(kind, 13))?;
+    let period = CalendarPeriod::new(years, months, days).map_err(|_| invalid_field(kind, 13))?;
+    let direction = match required_shift_field(kind, &fields, 7)? {
+        [1] => MigrationCalendarDirection::Past,
+        [2] => MigrationCalendarDirection::Future,
+        _ => return Err(invalid_field(kind, 13)),
+    };
+    Ok(MigrationCalendarShift::new(
+        timeline_id,
+        epoch_unix_nanoseconds,
+        period,
+        direction,
+    ))
+}
+
+fn required_shift_field<'a>(
+    kind: RecordKind,
+    fields: &[(u32, &'a [u8])],
+    tag: u32,
+) -> Result<&'a [u8], RecordCodecError> {
+    required_field(kind, fields, tag).map_err(|_| invalid_field(kind, 13))
 }
 
 pub(super) fn encode_run(value: &MigrationRun) -> Result<Vec<u8>, RecordCodecError> {

@@ -9,7 +9,7 @@ kind_hex	record	extensibility	fields
 1008	EntityTypeDefinition	closed	1:entity_type_id;2:symbol;3:optional_description;4:lifecycle;5:created_revision
 1009	PredicateDefinition	closed	1:predicate_id;2:symbol;3:subject_constraint;4:value_kind;5:optional_object_constraint;6:cardinality;7:resolution_policy;8:constraints_array;9:optional_decimal_metadata;10:lifecycle;11:created_revision
 100a	EventKindDefinition	closed	1:event_kind_id;2:symbol;3:roles_array;4:attributes_array;5:event_time_constraint;6:lifecycle;7:created_revision
-100b	MigrationPlan	closed	1:migration_id;2:category;3:ordered_step_ids_array;4:source_schema_revision;5:source_schema_fingerprint_32;6:target_schema_revision;7:target_schema_fingerprint_32;8:transformer_version;9:max_work_units;10:max_memory_bytes;11:plan_fingerprint_32;12:schema_identity_changes_array
+100b	MigrationPlan	closed	1:migration_id;2:category;3:ordered_step_ids_array;4:source_schema_revision;5:source_schema_fingerprint_32;6:target_schema_revision;7:target_schema_fingerprint_32;8:transformer_version;9:max_work_units;10:max_memory_bytes;11:plan_fingerprint_32;12:schema_identity_changes_array;13:optional_calendar_shift(timeline_id,proleptic_gregorian_utc_profile,epoch_unix_nanoseconds_i128_be,years,months,days,direction)
 100c	MigrationRun	closed	1:migration_run_id;2:migration_id;3:state
 100d	MigrationStepCommitIdentity	closed	1:migration_id;2:migration_run_id;3:migration_step_id;4:operation_id
 1101	Assertion	closed	1:assertion_id;2:context;3:subject_entity_id;4:predicate_id;5:value;6:polarity;7:assertion_validity;8:created_revision

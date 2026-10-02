@@ -592,6 +592,7 @@ mod mask_projection;
 mod mask_time_indexes;
 mod masks;
 mod migration;
+mod migration_transform;
 mod multi_value_resolution;
 #[cfg(test)]
 mod non_interference;
@@ -829,10 +830,15 @@ pub use masks::{
     ReplacementBoundaryValidityClosure,
 };
 pub use migration::{
-    MigrationCategory, MigrationPlan, MigrationPlanError, MigrationPlanFingerprint,
-    MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
-    MigrationTargetSchema, MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId,
-    SchemaIdentityTransition, SchemaIdentityTransitionError, SourceSchemaPrecondition,
+    MigrationCalendarDirection, MigrationCalendarShift, MigrationCategory, MigrationPlan,
+    MigrationPlanError, MigrationPlanFingerprint, MigrationPlanSpec, MigrationRun,
+    MigrationRunState, MigrationStepCommitIdentity, MigrationTargetSchema,
+    MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId, SchemaIdentityTransition,
+    SchemaIdentityTransitionError, SourceSchemaPrecondition,
+};
+pub use migration_transform::{
+    MigrationTransformBatch, MigrationTransformFingerprint, MigrationTransformer,
+    MigrationTransformerError,
 };
 pub use multi_value_resolution::{
     MultiValueConflict, MultiValueEntry, MultiValueOutcome, MultiValueReplaceContext,

@@ -18,8 +18,9 @@ use crate::{
     EventSpanClosure, EventTimeConstraint, EventTimeForm, Evidence, EvidenceRelation,
     EvidenceRetraction, EvidenceTargetRef, FrameHeader, HistorySpaceContentRef,
     HistorySpaceDefinition, Int, JobBudget, LayerDefinition, LayerSchemaSnapshot, Lifecycle, Mask,
-    MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure, MigrationCategory,
-    MigrationPlan, MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
+    MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure,
+    MigrationCalendarDirection, MigrationCalendarShift, MigrationCategory, MigrationPlan,
+    MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
     MigrationTargetSchema, MigrationTransformerVersion, PerspectiveDefinitionRevision,
     PerspectiveRetirement, PerspectiveScope, Polarity, PredicateDefinition,
     PredicateDefinitionSpec, PropositionKey, ProvenanceEdge, ProvenanceEndpointRef,
@@ -47,7 +48,7 @@ fn symbol(text: &str) -> Option<Symbol> {
 fn migration_plan_frame_with_field_replaced(field_tag: u32, value: &[u8]) -> Option<Vec<u8>> {
     let record = fixtures()?
         .into_iter()
-        .find(|(name, _)| *name == "migration_plan")?
+        .find(|(name, _)| *name == "migration_plan_calendar_shift")?
         .1;
     let encoded = encode_record(&record).ok()?;
     let frame = decode_frame(&encoded).ok()?;
@@ -75,6 +76,7 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
     let history_id = id(1)?;
     let layer_id = id(2)?;
     let migration_id = id(3)?;
+    let migration_timeline_id = id(16)?;
     let run_id = id(4)?;
     let step_id = id(5)?;
     let operation_id = id(6)?;
@@ -159,7 +161,7 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
         MigrationCategory::Additive,
     )
     .ok()?;
-    let migration_plan = MigrationPlan::new(MigrationPlanSpec {
+    let migration_plan_spec = MigrationPlanSpec {
         migration_id,
         category: MigrationCategory::Additive,
         source_schema: SourceSchemaPrecondition::new(schema_revision, [0x11; 32]),
@@ -170,7 +172,18 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
         steps: vec![step_id],
         schema_changes: vec![schema_change],
         transformer_version: MigrationTransformerVersion::new(1).ok()?,
+        calendar_shift: None,
         budget: JobBudget::new(1_000, 1024 * 1024).ok()?,
+    };
+    let migration_plan = MigrationPlan::new(migration_plan_spec.clone()).ok()?;
+    let migration_plan_calendar_shift = MigrationPlan::new(MigrationPlanSpec {
+        calendar_shift: Some(MigrationCalendarShift::new(
+            migration_timeline_id,
+            42,
+            CalendarPeriod::new(1, 2, 3).ok()?,
+            MigrationCalendarDirection::Future,
+        )),
+        ..migration_plan_spec
     })
     .ok()?;
     let perspective_definition = PerspectiveDefinitionRevision::new(
@@ -230,6 +243,10 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
             Record::EventKindDefinition(event_kind),
         ),
         ("migration_plan", Record::MigrationPlan(migration_plan)),
+        (
+            "migration_plan_calendar_shift",
+            Record::MigrationPlan(migration_plan_calendar_shift),
+        ),
         (
             "migration_run",
             Record::MigrationRun(MigrationRun::new(
@@ -1490,6 +1507,53 @@ fn migration_plan_decoder_reports_precise_invalid_fields() {
             Err(RecordCodecError::InvalidFieldValue {
                 kind: 0x100b,
                 field: 10
+            })
+        ));
+    }
+
+    for invalid_shift in [&[2][..], &[1][..]] {
+        let invalid_calendar_shift = migration_plan_frame_with_field_replaced(13, invalid_shift);
+        assert!(invalid_calendar_shift.is_some());
+        if let Some(frame) = invalid_calendar_shift {
+            assert!(matches!(
+                decode_record(&frame),
+                Err(RecordCodecError::InvalidFieldValue {
+                    kind: 0x100b,
+                    field: 13
+                })
+            ));
+        }
+    }
+
+    let timeline_id = id::<TimelineId>(16);
+    assert!(timeline_id.is_some());
+    let Some(timeline_id) = timeline_id else {
+        return;
+    };
+    let invalid_profile = super::encode_fields(
+        RecordKind::MigrationPlan,
+        vec![
+            (1, encode_id(timeline_id).to_vec()),
+            (2, vec![2]),
+            (3, 0_i128.to_be_bytes().to_vec()),
+            (4, vec![0]),
+            (5, vec![0]),
+            (6, vec![0]),
+            (7, vec![2]),
+        ],
+    );
+    assert!(invalid_profile.is_ok());
+    let Some(invalid_profile) = invalid_profile.ok() else {
+        return;
+    };
+    let invalid_calendar_profile = migration_plan_frame_with_field_replaced(13, &invalid_profile);
+    assert!(invalid_calendar_profile.is_some());
+    if let Some(frame) = invalid_calendar_profile {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 13
             })
         ));
     }
