@@ -75,6 +75,15 @@ pub enum WalError {
     SegmentSequenceGap { expected: u64, actual: u64 },
     /// The next segment number cannot be represented.
     SegmentSequenceOverflow,
+    /// A WAL checkpoint requires a fully verified tail with no recovery finding.
+    CheckpointRequiresCleanWal,
+    /// The requested checkpoint revision is not the current verified head.
+    CheckpointRevisionMismatch {
+        expected: Revision,
+        actual: Revision,
+    },
+    /// The verified WAL head has no matching commit-marker boundary.
+    CheckpointBoundaryMissing { revision: Revision },
     /// A WAL segment exceeds the bounded frame-read policy.
     SegmentTooLarge { limit: u64, actual: u64 },
     /// A complete frame header or body is missing at the end of a segment.
@@ -155,6 +164,20 @@ impl fmt::Display for WalError {
                 "WAL segment sequence expected {expected}, found {actual}"
             ),
             Self::SegmentSequenceOverflow => formatter.write_str("WAL segment sequence overflow"),
+            Self::CheckpointRequiresCleanWal => {
+                formatter.write_str("WAL checkpoint requires a clean committed prefix")
+            }
+            Self::CheckpointRevisionMismatch { expected, actual } => write!(
+                formatter,
+                "WAL checkpoint expected revision {}, found head {}",
+                expected.value(),
+                actual.value()
+            ),
+            Self::CheckpointBoundaryMissing { revision } => write!(
+                formatter,
+                "WAL checkpoint has no commit boundary at revision {}",
+                revision.value()
+            ),
             Self::SegmentTooLarge { limit, actual } => write!(
                 formatter,
                 "WAL segment exceeds {limit} byte read limit: {actual} bytes"
@@ -346,6 +369,55 @@ impl WalCommitHash {
 pub struct WalCommitHead {
     revision: Revision,
     commit_hash: WalCommitHash,
+}
+
+/// Exact byte boundaries for one durable, closed WAL prefix.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WalCheckpoint {
+    revision: Revision,
+    commit_hash: WalCommitHash,
+    segments: Vec<WalCheckpointSegment>,
+}
+
+impl WalCheckpoint {
+    /// Revision captured by the checkpoint.
+    #[must_use]
+    pub const fn revision(&self) -> Revision {
+        self.revision
+    }
+
+    /// Commit-chain digest captured by the checkpoint.
+    #[must_use]
+    pub const fn commit_hash(&self) -> WalCommitHash {
+        self.commit_hash
+    }
+
+    /// Ordered WAL segments and exact byte lengths in the closed prefix.
+    #[must_use]
+    pub fn segments(&self) -> &[WalCheckpointSegment] {
+        &self.segments
+    }
+}
+
+/// One WAL file included through the exact checkpoint byte length.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WalCheckpointSegment {
+    sequence: u64,
+    byte_length: u64,
+}
+
+impl WalCheckpointSegment {
+    /// Monotonic WAL segment sequence.
+    #[must_use]
+    pub const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    /// Number of leading bytes covered by the checkpoint.
+    #[must_use]
+    pub const fn byte_length(self) -> u64 {
+        self.byte_length
+    }
 }
 
 pub(crate) struct WalRecoveryPrefix {
@@ -801,6 +873,149 @@ impl WalPrepareLog {
     pub fn commit_head(&self, lock: &WriterLock) -> Result<WalCommitHead, WalError> {
         self.require_lock(lock)?;
         self.scan_commit_head()
+    }
+
+    /// Verifies and seals a committed WAL prefix before a hot snapshot copy.
+    ///
+    /// The caller holds the writer lock. The active segment is synced and a
+    /// fresh empty segment is published when necessary, so later writes append
+    /// beyond the returned immutable prefix. Only the prefix through
+    /// `expected_revision` is returned, even when an earlier checkpoint left
+    /// an empty active segment after it.
+    pub fn checkpoint(
+        &self,
+        lock: &WriterLock,
+        expected_revision: Revision,
+    ) -> Result<WalCheckpoint, WalError> {
+        self.require_lock(lock)?;
+        if !lock.require_write_access() {
+            return Err(WalError::RecoveryRequired);
+        }
+        let prefix = self.scan_recovery_prefix(lock)?;
+        if prefix.finding.is_some() {
+            return Err(WalError::CheckpointRequiresCleanWal);
+        }
+        if prefix.head.revision != expected_revision {
+            return Err(WalError::CheckpointRevisionMismatch {
+                expected: expected_revision,
+                actual: prefix.head.revision,
+            });
+        }
+
+        let checkpoint_boundary = if expected_revision == Revision::GENESIS {
+            None
+        } else {
+            let committed = prefix
+                .committed_frames
+                .iter()
+                .find(|frame| frame.receipt().revision() == expected_revision)
+                .ok_or(WalError::CheckpointBoundaryMissing {
+                    revision: expected_revision,
+                })?;
+            let receipt = committed.receipt();
+            let byte_length = receipt
+                .marker_offset()
+                .checked_add(receipt.marker_length())
+                .ok_or(WalError::CheckpointBoundaryMissing {
+                    revision: expected_revision,
+                })?;
+            Some((receipt.reference().segment_sequence(), byte_length))
+        };
+
+        let all_segments = self.list_segments()?;
+        for (_, path) in &all_segments {
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|source| WalError::Io {
+                    operation: "open WAL segment for checkpoint sync",
+                    source,
+                })?;
+            file.sync_all().map_err(|source| WalError::Io {
+                operation: "sync WAL checkpoint segment",
+                source,
+            })?;
+        }
+
+        if let Some((last_sequence, last_path)) = all_segments.last() {
+            let length = fs::metadata(last_path)
+                .map_err(|source| WalError::Io {
+                    operation: "inspect active WAL checkpoint segment",
+                    source,
+                })?
+                .len();
+            if length > 0 {
+                let next_sequence = last_sequence
+                    .checked_add(1)
+                    .ok_or(WalError::SegmentSequenceOverflow)?;
+                let next_path = self.segment_path(next_sequence);
+                let next_file = OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(&next_path)
+                    .map_err(|source| WalError::Io {
+                        operation: "publish next WAL segment at checkpoint",
+                        source,
+                    })?;
+                next_file.sync_all().map_err(|source| WalError::Io {
+                    operation: "sync next WAL segment at checkpoint",
+                    source,
+                })?;
+                drop(next_file);
+                crate::manifest::sync_directory(&self.directory).map_err(|source| {
+                    WalError::Io {
+                        operation: "sync WAL directory at checkpoint",
+                        source,
+                    }
+                })?;
+            }
+        }
+
+        let mut segments = Vec::new();
+        if let Some((boundary_sequence, boundary_length)) = checkpoint_boundary {
+            let segment_count =
+                usize::try_from(boundary_sequence).map_err(|_| WalError::AllocationFailed)?;
+            segments
+                .try_reserve_exact(segment_count)
+                .map_err(|_| WalError::AllocationFailed)?;
+            for (sequence, path) in all_segments {
+                if sequence > boundary_sequence {
+                    break;
+                }
+                let actual_length = fs::metadata(path)
+                    .map_err(|source| WalError::Io {
+                        operation: "inspect closed WAL checkpoint segment",
+                        source,
+                    })?
+                    .len();
+                let byte_length = if sequence == boundary_sequence {
+                    if actual_length != boundary_length {
+                        return Err(WalError::CheckpointBoundaryMissing {
+                            revision: expected_revision,
+                        });
+                    }
+                    boundary_length
+                } else {
+                    actual_length
+                };
+                segments.push(WalCheckpointSegment {
+                    sequence,
+                    byte_length,
+                });
+            }
+            if segments.last().map(|segment| segment.sequence) != Some(boundary_sequence) {
+                return Err(WalError::CheckpointBoundaryMissing {
+                    revision: expected_revision,
+                });
+            }
+        }
+
+        Ok(WalCheckpoint {
+            revision: expected_revision,
+            commit_hash: prefix.head.commit_hash,
+            segments,
+        })
     }
 
     /// Verifies the complete WAL commit chain and returns the hash at exactly
@@ -1534,7 +1749,7 @@ fn encode_prepare(operation_id: OperationId, payload: &[u8]) -> Result<Vec<u8>, 
     Ok(frame)
 }
 
-fn segment_file_name(sequence: u64) -> String {
+pub(crate) fn segment_file_name(sequence: u64) -> String {
     format!("{SEGMENT_PREFIX}{sequence:0SEGMENT_NUMBER_WIDTH$}{SEGMENT_SUFFIX}")
 }
 

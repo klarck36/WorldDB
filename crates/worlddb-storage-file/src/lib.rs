@@ -3,6 +3,7 @@
 //! Local filesystem layout and format-probe adapter for WorldDB.
 
 mod audit_wal;
+mod backup;
 mod compaction;
 mod format;
 mod index_generation;
@@ -28,6 +29,10 @@ pub use audit_wal::{
     CommittedRawReadAttempt, RawReadAuditAccessError, RawReadAuditError, RawReadAuditHead,
     RawReadAuditPolicyError, RawReadAuditReceipt, RawReadAuditRecoveryDisposition,
     RawReadAuditRecoveryReport, RawReadAuditWal, RawReadAuditWriter,
+};
+pub use backup::{
+    BackupAuthenticity, BackupError, BackupMacKey, BackupProgressEvent, BackupVerification,
+    ExactBackupManager, verify_exact_backup,
 };
 pub use compaction::{
     CompactionError, CompactionManager, CompactionOutcome, ReclamationOutcome, SegmentPin,
@@ -74,8 +79,9 @@ pub use verify::{
     StorageVerifyFinding, StorageVerifyInventory, StorageVerifyIssue, StorageVerifyReport,
 };
 pub use wal::{
-    WalCommitHash, WalCommitHead, WalCommitReceipt, WalCommittedFrame, WalError, WalLogEntry,
-    WalOperationStatus, WalPrepareLog, WalPrepareReference, WalPreparedFrame,
+    WalCheckpoint, WalCheckpointSegment, WalCommitHash, WalCommitHead, WalCommitReceipt,
+    WalCommittedFrame, WalError, WalLogEntry, WalOperationStatus, WalPrepareLog,
+    WalPrepareReference, WalPreparedFrame,
 };
 pub use worlddb_core::storage_internal::SegmentId;
 pub use writer_lock::{WriterLock, WriterLockError};

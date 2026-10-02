@@ -1,28 +1,39 @@
 //! Immutable history compaction and pin-aware reclamation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use worlddb_core::storage_internal::generate_storage_maintenance_operation_id;
 use worlddb_core::{
-    DecodedRecord, DecoderLimits, IdGenerationError, Revision, encode_decoded_record,
+    DecodedRecord, DecoderLimits, DomainId, IdGenerationError, Revision, encode_decoded_record,
 };
 
 use crate::manifest::compare_segment_references;
 use crate::segment::MAX_CANONICAL_BYTES;
 use crate::{
-    DatabaseLayout, HistorySegmentStore, ManifestError, ManifestSegmentKind,
-    ManifestSegmentReference, ManifestSnapshot, ManifestStore, RecoveryError, RecoveryManager,
-    SegmentError, SegmentId, SnapshotCommitError, WalPrepareLog, WriterLock,
+    ContentDigest, DatabaseLayout, HistorySegmentStore, Manifest, ManifestError,
+    ManifestSegmentKind, ManifestSegmentReference, ManifestSnapshot, ManifestStore, RecoveryError,
+    RecoveryManager, SegmentError, SegmentId, SnapshotCommitError, WalPrepareLog, WriterLock,
 };
 
 type PinKey = (ManifestSegmentKind, SegmentId);
 type PinMap = BTreeMap<PinKey, PinCounts>;
 type SharedPinMap = Arc<Mutex<PinMap>>;
 
+const BACKUP_PIN_MAGIC: &[u8; 8] = b"WDBPIN\0\x01";
+const BACKUP_PIN_CONTEXT: &[u8] = b"worlddb.backup.pin.v1\0";
+const BACKUP_PIN_SUFFIX: &str = ".wdbpin";
+const BACKUP_PIN_ITEM_BYTES: usize = 1 + 16 + 32 + 8;
+const BACKUP_PIN_MAX_ITEMS: usize = 262_144;
+const BACKUP_PIN_MAX_BYTES: usize = 16 * 1024 * 1024;
+
 static PIN_REGISTRIES: OnceLock<Mutex<BTreeMap<PathBuf, Weak<Mutex<PinMap>>>>> = OnceLock::new();
+static NEXT_BACKUP_PIN: AtomicU64 = AtomicU64::new(0);
 
 /// A reader or durable operation that keeps one immutable segment alive.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -69,6 +80,24 @@ pub struct SegmentPin {
     key: PinKey,
     kind: SegmentPinKind,
     reference: ManifestSegmentReference,
+}
+
+/// Cross-process lease for a complete exact-backup segment inventory.
+pub(crate) struct DurableBackupPin {
+    directory: PathBuf,
+    path: Option<PathBuf>,
+    file: Option<File>,
+}
+
+impl Drop for DurableBackupPin {
+    fn drop(&mut self) {
+        self.file.take();
+        if let Some(path) = self.path.take() {
+            if fs::remove_file(path).is_ok() {
+                let _ = crate::manifest::sync_directory(&self.directory);
+            }
+        }
+    }
 }
 
 impl SegmentPin {
@@ -118,6 +147,13 @@ pub enum CompactionError {
     ManifestSnapshotMismatch,
     /// A pin counter reached its bounded integer maximum.
     PinCountOverflow,
+    /// An active durable backup pin is malformed, so reclamation must fail closed.
+    BackupPinInvalid,
+    /// A durable backup-pin file operation failed.
+    BackupPinIo {
+        operation: &'static str,
+        source: io::Error,
+    },
     /// The pin registry mutex was poisoned before a pin could be created.
     PinRegistryPoisoned,
     /// The core UUIDv7 policy could not generate a maintenance OperationId.
@@ -153,6 +189,10 @@ impl fmt::Display for CompactionError {
             Self::ManifestSnapshotMismatch => formatter
                 .write_str("published manifest differs from the committed compaction inventory"),
             Self::PinCountOverflow => formatter.write_str("segment pin count overflowed"),
+            Self::BackupPinInvalid => {
+                formatter.write_str("durable backup pin is malformed; reclamation is blocked")
+            }
+            Self::BackupPinIo { operation, source } => write!(formatter, "{operation}: {source}"),
             Self::PinRegistryPoisoned => {
                 formatter.write_str("segment pin registry is unavailable after a panic")
             }
@@ -178,6 +218,7 @@ impl std::error::Error for CompactionError {
             Self::Manifest(error) => Some(error),
             Self::SnapshotCommit(error) => Some(error),
             Self::Recovery(error) => Some(error),
+            Self::BackupPinIo { source, .. } => Some(source),
             Self::ForeignWriterLock
             | Self::RecoveryRequired
             | Self::SegmentNotCurrent
@@ -185,6 +226,7 @@ impl std::error::Error for CompactionError {
             | Self::ConflictingReclamationReference
             | Self::ManifestSnapshotMismatch
             | Self::PinCountOverflow
+            | Self::BackupPinInvalid
             | Self::PinRegistryPoisoned => None,
         }
     }
@@ -307,6 +349,30 @@ impl CompactionManager {
         })
     }
 
+    /// Pins every segment in one current exact-backup snapshot, including a
+    /// durable cross-process lease consumed by reclamation.
+    pub(crate) fn pin_backup_snapshot(
+        &self,
+        writer_lock: &WriterLock,
+        references: &[ManifestSegmentReference],
+    ) -> Result<(Vec<SegmentPin>, DurableBackupPin), CompactionError> {
+        self.require_write_lock(writer_lock)?;
+        let current = ManifestStore::new(self.layout.clone())
+            .read_current()
+            .map_err(CompactionError::Manifest)?;
+        if current.as_ref().map_or(&[][..], Manifest::segments) != references {
+            return Err(CompactionError::SegmentNotCurrent);
+        }
+        let mut pins = Vec::new();
+        pins.try_reserve_exact(references.len())
+            .map_err(|_| CompactionError::PinCountOverflow)?;
+        for reference in references {
+            pins.push(self.pin_current_segment(*reference, SegmentPinKind::Backup)?);
+        }
+        let durable = create_durable_backup_pin(&self.layout, references)?;
+        Ok((pins, durable))
+    }
+
     /// Rewrites the current History segments when the result uses fewer files.
     ///
     /// This is a storage maintenance commit: it advances the durable revision
@@ -406,6 +472,7 @@ impl CompactionManager {
     ) -> Result<ReclamationOutcome, CompactionError> {
         self.require_write_lock(writer_lock)?;
         let pins = self.lock_pins()?;
+        let durable_pins = active_backup_pin_keys(&self.layout)?;
         let current = ManifestStore::new(self.layout.clone())
             .read_current()
             .map_err(CompactionError::Manifest)?;
@@ -438,7 +505,9 @@ impl CompactionManager {
         for (key, reference) in unique {
             if current_keys.contains(&key) {
                 outcome.still_referenced.push(reference);
-            } else if pins.get(&key).is_some_and(|counts| !counts.is_empty()) {
+            } else if pins.get(&key).is_some_and(|counts| !counts.is_empty())
+                || durable_pins.contains(&key)
+            {
                 outcome.retained_by_pin.push(reference);
             } else {
                 eligible.push(reference);
@@ -466,6 +535,345 @@ impl CompactionManager {
             .lock()
             .map_err(|_| CompactionError::PinRegistryPoisoned)
     }
+}
+
+fn create_durable_backup_pin(
+    layout: &DatabaseLayout,
+    references: &[ManifestSegmentReference],
+) -> Result<DurableBackupPin, CompactionError> {
+    let directory = layout.staging_directory().join("backup-pins");
+    fs::create_dir_all(&directory).map_err(|source| CompactionError::BackupPinIo {
+        operation: "create durable backup-pin directory",
+        source,
+    })?;
+    validate_backup_pin_directory(layout, &directory)?;
+    if references.is_empty() {
+        return Ok(DurableBackupPin {
+            directory,
+            path: None,
+            file: None,
+        });
+    }
+    let bytes = encode_backup_pin_manifest(references)?;
+    let mut attempt = 0_u8;
+    while attempt < 16 {
+        let sequence = NEXT_BACKUP_PIN.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            "pin-{}-{sequence:020}{BACKUP_PIN_SUFFIX}",
+            std::process::id()
+        ));
+        let mut file = match OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                attempt += 1;
+                continue;
+            }
+            Err(source) => {
+                return Err(CompactionError::BackupPinIo {
+                    operation: "create durable backup-pin file",
+                    source,
+                });
+            }
+        };
+        file.write_all(&bytes)
+            .map_err(|source| CompactionError::BackupPinIo {
+                operation: "write durable backup-pin file",
+                source,
+            })?;
+        file.sync_all()
+            .map_err(|source| CompactionError::BackupPinIo {
+                operation: "sync durable backup-pin file",
+                source,
+            })?;
+        crate::manifest::sync_directory(&directory).map_err(|source| {
+            CompactionError::BackupPinIo {
+                operation: "sync durable backup-pin directory",
+                source,
+            }
+        })?;
+        match fs4::FileExt::try_lock_shared(&file) {
+            Ok(()) => {
+                return Ok(DurableBackupPin {
+                    directory,
+                    path: Some(path),
+                    file: Some(file),
+                });
+            }
+            Err(fs4::TryLockError::WouldBlock) => {
+                return Err(CompactionError::BackupPinIo {
+                    operation: "lock durable backup-pin file",
+                    source: io::Error::new(io::ErrorKind::WouldBlock, "backup pin is locked"),
+                });
+            }
+            Err(fs4::TryLockError::Error(source)) => {
+                return Err(CompactionError::BackupPinIo {
+                    operation: "lock durable backup-pin file",
+                    source,
+                });
+            }
+        }
+    }
+    Err(CompactionError::BackupPinIo {
+        operation: "allocate unique durable backup-pin name",
+        source: io::Error::new(io::ErrorKind::AlreadyExists, "backup pin names exhausted"),
+    })
+}
+
+fn active_backup_pin_keys(layout: &DatabaseLayout) -> Result<BTreeSet<PinKey>, CompactionError> {
+    let directory = layout.staging_directory().join("backup-pins");
+    match fs::symlink_metadata(&directory) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(source) => {
+            return Err(CompactionError::BackupPinIo {
+                operation: "inspect durable backup-pin directory",
+                source,
+            });
+        }
+        Ok(_) => {}
+    }
+    validate_backup_pin_directory(layout, &directory)?;
+    let mut pinned = BTreeSet::new();
+    for entry in fs::read_dir(&directory).map_err(|source| CompactionError::BackupPinIo {
+        operation: "list durable backup pins",
+        source,
+    })? {
+        let entry = entry.map_err(|source| CompactionError::BackupPinIo {
+            operation: "read durable backup-pin entry",
+            source,
+        })?;
+        let path = entry.path();
+        let metadata =
+            fs::symlink_metadata(&path).map_err(|source| CompactionError::BackupPinIo {
+                operation: "inspect durable backup-pin file",
+                source,
+            })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("wdbpin")
+        {
+            return Err(CompactionError::BackupPinInvalid);
+        }
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|source| CompactionError::BackupPinIo {
+                operation: "open durable backup-pin file",
+                source,
+            })?;
+        match fs4::FileExt::try_lock(&file) {
+            Ok(()) => {
+                drop(file);
+                match fs::remove_file(&path) {
+                    Ok(()) => {
+                        crate::manifest::sync_directory(&directory).map_err(|source| {
+                            CompactionError::BackupPinIo {
+                                operation: "sync stale backup-pin cleanup",
+                                source,
+                            }
+                        })?;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(CompactionError::BackupPinIo {
+                            operation: "remove stale backup pin",
+                            source,
+                        });
+                    }
+                }
+            }
+            Err(fs4::TryLockError::WouldBlock) => {
+                let length = usize::try_from(metadata.len())
+                    .map_err(|_| CompactionError::BackupPinInvalid)?;
+                if length > BACKUP_PIN_MAX_BYTES {
+                    return Err(CompactionError::BackupPinInvalid);
+                }
+                let mut bytes = Vec::new();
+                bytes
+                    .try_reserve_exact(length)
+                    .map_err(|_| CompactionError::BackupPinInvalid)?;
+                file.take(
+                    u64::try_from(BACKUP_PIN_MAX_BYTES)
+                        .unwrap_or(u64::MAX)
+                        .saturating_add(1),
+                )
+                .read_to_end(&mut bytes)
+                .map_err(|source| CompactionError::BackupPinIo {
+                    operation: "read active durable backup pin",
+                    source,
+                })?;
+                if bytes.len() != length {
+                    return Err(CompactionError::BackupPinInvalid);
+                }
+                pinned.extend(decode_backup_pin_manifest(&bytes)?);
+            }
+            Err(fs4::TryLockError::Error(source)) => {
+                return Err(CompactionError::BackupPinIo {
+                    operation: "check durable backup-pin lease",
+                    source,
+                });
+            }
+        }
+    }
+    Ok(pinned)
+}
+
+fn validate_backup_pin_directory(
+    layout: &DatabaseLayout,
+    directory: &Path,
+) -> Result<(), CompactionError> {
+    let metadata =
+        fs::symlink_metadata(directory).map_err(|source| CompactionError::BackupPinIo {
+            operation: "inspect durable backup-pin directory",
+            source,
+        })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let canonical = fs::canonicalize(directory).map_err(|source| CompactionError::BackupPinIo {
+        operation: "resolve durable backup-pin directory",
+        source,
+    })?;
+    if !canonical.starts_with(layout.root()) {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    Ok(())
+}
+
+fn encode_backup_pin_manifest(
+    references: &[ManifestSegmentReference],
+) -> Result<Vec<u8>, CompactionError> {
+    if references.len() > BACKUP_PIN_MAX_ITEMS {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let capacity = 8_usize
+        .checked_add(4)
+        .and_then(|value| value.checked_add(references.len().checked_mul(BACKUP_PIN_ITEM_BYTES)?))
+        .and_then(|value| value.checked_add(32))
+        .ok_or(CompactionError::BackupPinInvalid)?;
+    if capacity > BACKUP_PIN_MAX_BYTES {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| CompactionError::BackupPinInvalid)?;
+    bytes.extend_from_slice(BACKUP_PIN_MAGIC);
+    bytes.extend_from_slice(
+        &u32::try_from(references.len())
+            .map_err(|_| CompactionError::BackupPinInvalid)?
+            .to_be_bytes(),
+    );
+    for reference in references {
+        let tag = match reference.kind() {
+            ManifestSegmentKind::History => 1,
+            ManifestSegmentKind::SecurityPolicy => 2,
+        };
+        bytes.push(tag);
+        bytes.extend_from_slice(&reference.id().to_bytes());
+        bytes.extend_from_slice(reference.content_digest().as_bytes());
+        bytes.extend_from_slice(&reference.through_revision().value().to_be_bytes());
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(BACKUP_PIN_CONTEXT);
+    hasher.update(&bytes);
+    bytes.extend_from_slice(hasher.finalize().as_bytes());
+    Ok(bytes)
+}
+
+fn decode_backup_pin_manifest(bytes: &[u8]) -> Result<BTreeSet<PinKey>, CompactionError> {
+    if bytes.len() < 8 + 4 + 32 || bytes.len() > BACKUP_PIN_MAX_BYTES {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let payload_end = bytes
+        .len()
+        .checked_sub(32)
+        .ok_or(CompactionError::BackupPinInvalid)?;
+    let payload = bytes
+        .get(..payload_end)
+        .ok_or(CompactionError::BackupPinInvalid)?;
+    let claimed_digest: [u8; 32] = bytes
+        .get(payload_end..)
+        .ok_or(CompactionError::BackupPinInvalid)?
+        .try_into()
+        .map_err(|_| CompactionError::BackupPinInvalid)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(BACKUP_PIN_CONTEXT);
+    hasher.update(payload);
+    if *hasher.finalize().as_bytes() != claimed_digest
+        || payload.get(..8) != Some(BACKUP_PIN_MAGIC.as_slice())
+    {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let count_bytes: [u8; 4] = payload
+        .get(8..12)
+        .ok_or(CompactionError::BackupPinInvalid)?
+        .try_into()
+        .map_err(|_| CompactionError::BackupPinInvalid)?;
+    let count = usize::try_from(u32::from_be_bytes(count_bytes))
+        .map_err(|_| CompactionError::BackupPinInvalid)?;
+    if count > BACKUP_PIN_MAX_ITEMS
+        || payload.len()
+            != 12_usize
+                .checked_add(
+                    count
+                        .checked_mul(BACKUP_PIN_ITEM_BYTES)
+                        .ok_or(CompactionError::BackupPinInvalid)?,
+                )
+                .ok_or(CompactionError::BackupPinInvalid)?
+    {
+        return Err(CompactionError::BackupPinInvalid);
+    }
+    let mut pinned = BTreeSet::new();
+    let mut offset = 12_usize;
+    for _ in 0..count {
+        let end = offset
+            .checked_add(BACKUP_PIN_ITEM_BYTES)
+            .ok_or(CompactionError::BackupPinInvalid)?;
+        let entry = payload
+            .get(offset..end)
+            .ok_or(CompactionError::BackupPinInvalid)?;
+        let kind = match entry.first().copied() {
+            Some(1) => ManifestSegmentKind::History,
+            Some(2) => ManifestSegmentKind::SecurityPolicy,
+            _ => return Err(CompactionError::BackupPinInvalid),
+        };
+        let id_bytes: [u8; 16] = entry
+            .get(1..17)
+            .ok_or(CompactionError::BackupPinInvalid)?
+            .try_into()
+            .map_err(|_| CompactionError::BackupPinInvalid)?;
+        let id =
+            SegmentId::try_from_bytes(id_bytes).map_err(|_| CompactionError::BackupPinInvalid)?;
+        let digest_bytes: [u8; 32] = entry
+            .get(17..49)
+            .ok_or(CompactionError::BackupPinInvalid)?
+            .try_into()
+            .map_err(|_| CompactionError::BackupPinInvalid)?;
+        let revision_bytes: [u8; 8] = entry
+            .get(49..57)
+            .ok_or(CompactionError::BackupPinInvalid)?
+            .try_into()
+            .map_err(|_| CompactionError::BackupPinInvalid)?;
+        let revision = Revision::new(u64::from_be_bytes(revision_bytes))
+            .map_err(|_| CompactionError::BackupPinInvalid)?;
+        let _reference = ManifestSegmentReference::new(
+            kind,
+            id,
+            ContentDigest::from_bytes(digest_bytes),
+            revision,
+        );
+        if !pinned.insert((kind, id)) {
+            return Err(CompactionError::BackupPinInvalid);
+        }
+        offset = end;
+    }
+    Ok(pinned)
 }
 
 fn shared_pin_map(root: &std::path::Path) -> SharedPinMap {
@@ -644,8 +1052,17 @@ fn flush_chunk(
 
 #[cfg(test)]
 mod tests {
-    use super::fits_segment;
-    use worlddb_core::DecoderLimits;
+    use std::env;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{active_backup_pin_keys, create_durable_backup_pin, fits_segment};
+    use crate::{
+        ContentDigest, DatabaseLayout, ManifestSegmentKind, ManifestSegmentReference, SegmentId,
+    };
+    use worlddb_core::{DecoderLimits, DomainId, Revision};
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn segment_chunking_respects_registered_frame_count_and_byte_limits() {
@@ -654,5 +1071,35 @@ mod tests {
         assert!(!fits_segment(0, 0, limits));
         assert!(!fits_segment(limits.max_records_per_batch + 1, 1, limits));
         assert!(!fits_segment(1, limits.max_batch_bytes + 1, limits));
+    }
+
+    #[test]
+    fn durable_backup_pin_protects_history_until_its_lease_is_released() -> Result<(), String> {
+        let sequence = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!(
+            "worlddb-durable-pin-{}-{sequence}",
+            std::process::id()
+        ));
+        let layout = DatabaseLayout::create(&root).map_err(|error| error.to_string())?;
+        let mut id_bytes = [0_u8; 16];
+        id_bytes[6] = 0x70;
+        id_bytes[8] = 0x80;
+        id_bytes[15] = 7;
+        let id = SegmentId::try_from_bytes(id_bytes).map_err(|error| error.to_string())?;
+        let reference = ManifestSegmentReference::new(
+            ManifestSegmentKind::History,
+            id,
+            ContentDigest::from_bytes([0x39; 32]),
+            Revision::GENESIS,
+        );
+        let pin =
+            create_durable_backup_pin(&layout, &[reference]).map_err(|error| error.to_string())?;
+        let active = active_backup_pin_keys(&layout).map_err(|error| error.to_string())?;
+        assert!(active.contains(&(ManifestSegmentKind::History, id)));
+        drop(pin);
+        let released = active_backup_pin_keys(&layout).map_err(|error| error.to_string())?;
+        assert!(!released.contains(&(ManifestSegmentKind::History, id)));
+        fs::remove_dir_all(&root).map_err(|error| error.to_string())?;
+        Ok(())
     }
 }

@@ -681,6 +681,12 @@ pub mod storage_internal {
 
     pub use crate::ids::SegmentId;
 
+    /// Creates the persistent identity for one newly initialized database.
+    #[doc(hidden)]
+    pub fn generate_database_id() -> Result<crate::ids::DatabaseId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates the database identity for a new salvage fork through the core UUIDv7 policy.
     #[doc(hidden)]
     pub fn generate_salvage_fork_database_id()

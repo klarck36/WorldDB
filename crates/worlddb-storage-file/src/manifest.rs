@@ -934,7 +934,7 @@ fn decode_current(bytes: &[u8]) -> Result<CurrentPointer, ManifestError> {
     })
 }
 
-fn manifest_path(directory: &Path, generation: u64) -> PathBuf {
+pub(crate) fn manifest_path(directory: &Path, generation: u64) -> PathBuf {
     directory.join(format!(
         "{MANIFEST_PREFIX}{generation:0MANIFEST_NUMBER_WIDTH$}{MANIFEST_SUFFIX}"
     ))

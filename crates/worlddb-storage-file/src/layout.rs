@@ -6,11 +6,14 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use worlddb_core::{DatabaseId, DomainId, IdGenerationError, IdValidationError};
+
 use crate::format::{FORMAT_FILE_BYTES, FormatCapabilities, FormatProbeError, probe_format};
 use crate::recovery::RecoveryScanner;
 use crate::writer_lock::{WriterLock, WriterLockError};
 
 const FORMAT_FILE_NAME: &str = "FORMAT";
+const DATABASE_ID_FILE_NAME: &str = "DATABASE_ID";
 const WRITER_LOCK_FILE_NAME: &str = "LOCK";
 const CURRENT_FILE_NAME: &str = "CURRENT";
 const LAYOUT_DIRECTORIES: &[&str] = &[
@@ -33,6 +36,10 @@ static NEXT_STAGE_FILE: AtomicU64 = AtomicU64::new(0);
 pub enum StorageFileError {
     /// The requested database path already exists and will not be overwritten.
     DatabaseAlreadyExists,
+    /// The system could not generate a persistent database identity.
+    Identity(IdGenerationError),
+    /// A persisted database identity is malformed.
+    InvalidDatabaseId(IdValidationError),
     /// A required directory or file is missing or has the wrong type.
     InvalidLayoutEntry { relative_path: &'static str },
     /// A required database entry resolves outside the canonical database root.
@@ -56,6 +63,12 @@ impl fmt::Display for StorageFileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DatabaseAlreadyExists => formatter.write_str("database directory already exists"),
+            Self::Identity(error) => {
+                write!(formatter, "database identity generation failed: {error}")
+            }
+            Self::InvalidDatabaseId(error) => {
+                write!(formatter, "database identity is invalid: {error}")
+            }
             Self::InvalidLayoutEntry { relative_path } => {
                 write!(
                     formatter,
@@ -82,6 +95,8 @@ impl std::error::Error for StorageFileError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
+            Self::Identity(error) => Some(error),
+            Self::InvalidDatabaseId(error) => Some(error),
             Self::Format(error) => Some(error),
             Self::WriterLock(error) => Some(error),
             _ => None,
@@ -94,6 +109,7 @@ impl std::error::Error for StorageFileError {
 pub struct DatabaseLayout {
     root: PathBuf,
     format_capabilities: FormatCapabilities,
+    database_id: Option<DatabaseId>,
 }
 
 impl DatabaseLayout {
@@ -130,6 +146,34 @@ impl DatabaseLayout {
         }
         validate_layout_directories(&root)?;
 
+        let database_id = worlddb_core::storage_internal::generate_database_id()
+            .map_err(StorageFileError::Identity)?;
+        let database_id_path = root.join(DATABASE_ID_FILE_NAME);
+        let mut database_id_file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&database_id_path)
+            .map_err(|source| StorageFileError::Io {
+                operation: "create database identity",
+                source,
+            })?;
+        database_id_file
+            .write_all(&database_id.to_bytes())
+            .map_err(|source| StorageFileError::Io {
+                operation: "write database identity",
+                source,
+            })?;
+        database_id_file
+            .sync_all()
+            .map_err(|source| StorageFileError::Io {
+                operation: "sync database identity",
+                source,
+            })?;
+        crate::manifest::sync_directory(&root).map_err(|source| StorageFileError::Io {
+            operation: "sync database identity directory",
+            source,
+        })?;
+
         let format_capabilities = FormatCapabilities::current();
         let format_bytes = format_capabilities
             .encode()
@@ -159,6 +203,7 @@ impl DatabaseLayout {
         Ok(Self {
             root,
             format_capabilities,
+            database_id: Some(database_id),
         })
     }
 
@@ -188,10 +233,54 @@ impl DatabaseLayout {
                 source,
             })?;
         let format_capabilities = probe_format(&format_bytes).map_err(StorageFileError::Format)?;
+        let database_id_path = root.join(DATABASE_ID_FILE_NAME);
+        let database_id = match fs::symlink_metadata(&database_id_path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() != 16
+                {
+                    return Err(StorageFileError::InvalidLayoutEntry {
+                        relative_path: DATABASE_ID_FILE_NAME,
+                    });
+                }
+                validate_file_inside_root(&root, &database_id_path, DATABASE_ID_FILE_NAME)?;
+                let mut bytes = Vec::with_capacity(16);
+                File::open(&database_id_path)
+                    .map_err(|source| StorageFileError::Io {
+                        operation: "open database identity",
+                        source,
+                    })?
+                    .take(17)
+                    .read_to_end(&mut bytes)
+                    .map_err(|source| StorageFileError::Io {
+                        operation: "read database identity",
+                        source,
+                    })?;
+                if bytes.len() != 16 {
+                    return Err(StorageFileError::InvalidLayoutEntry {
+                        relative_path: DATABASE_ID_FILE_NAME,
+                    });
+                }
+                let raw: [u8; 16] =
+                    bytes
+                        .try_into()
+                        .map_err(|_| StorageFileError::InvalidLayoutEntry {
+                            relative_path: DATABASE_ID_FILE_NAME,
+                        })?;
+                Some(DatabaseId::try_from_bytes(raw).map_err(StorageFileError::InvalidDatabaseId)?)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(StorageFileError::Io {
+                    operation: "inspect database identity",
+                    source,
+                });
+            }
+        };
 
         Ok(Self {
             root,
             format_capabilities,
+            database_id,
         })
     }
 
@@ -207,10 +296,22 @@ impl DatabaseLayout {
         self.format_capabilities
     }
 
+    /// Persistent identity assigned when the database was created, when present.
+    #[must_use]
+    pub const fn database_id(&self) -> Option<DatabaseId> {
+        self.database_id
+    }
+
     /// Path of the format-probe frame.
     #[must_use]
     pub fn format_file(&self) -> PathBuf {
         self.root.join(FORMAT_FILE_NAME)
+    }
+
+    /// Path of the persistent database identity.
+    #[must_use]
+    pub fn database_id_file(&self) -> PathBuf {
+        self.root.join(DATABASE_ID_FILE_NAME)
     }
 
     /// Path of the current-manifest pointer.
@@ -398,15 +499,15 @@ fn validate_file_inside_root(
     path: &Path,
     relative_path: &'static str,
 ) -> Result<(), StorageFileError> {
-    let metadata = fs::metadata(path).map_err(|source| StorageFileError::Io {
-        operation: "inspect database format file",
+    let metadata = fs::symlink_metadata(path).map_err(|source| StorageFileError::Io {
+        operation: "inspect database file",
         source,
     })?;
-    if !metadata.is_file() {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(StorageFileError::InvalidLayoutEntry { relative_path });
     }
     let canonical = fs::canonicalize(path).map_err(|source| StorageFileError::Io {
-        operation: "resolve database format file",
+        operation: "resolve database file",
         source,
     })?;
     if !canonical.starts_with(root) {
