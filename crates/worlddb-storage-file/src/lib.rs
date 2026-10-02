@@ -28,11 +28,11 @@ mod writer_lock;
 pub use audit_wal::{
     CommittedRawReadAttempt, RawReadAuditAccessError, RawReadAuditError, RawReadAuditHead,
     RawReadAuditPolicyError, RawReadAuditReceipt, RawReadAuditRecoveryDisposition,
-    RawReadAuditRecoveryReport, RawReadAuditWal, RawReadAuditWriter,
+    RawReadAuditRecoveryReport, RawReadAuditSnapshot, RawReadAuditWal, RawReadAuditWriter,
 };
 pub use backup::{
-    BackupAuthenticity, BackupError, BackupMacKey, BackupProgressEvent, BackupVerification,
-    ExactBackupManager, verify_exact_backup,
+    BackupAuthenticity, BackupError, BackupMacKey, BackupProfile, BackupProgressEvent,
+    BackupVerification, ExactBackupManager, verify_audit_complete_backup, verify_exact_backup,
 };
 pub use compaction::{
     CompactionError, CompactionManager, CompactionOutcome, ReclamationOutcome, SegmentPin,

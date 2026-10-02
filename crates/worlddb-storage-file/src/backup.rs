@@ -7,27 +7,34 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use worlddb_core::{DatabaseId, DomainId, Revision};
+use worlddb_core::{
+    AuditSequence, DatabaseId, DomainId, PolicyTarget, Revision, SecurityPolicyView,
+};
 
 use crate::compaction::{CompactionError, DurableBackupPin, SegmentPin};
 use crate::manifest::{Manifest, ManifestError, ManifestSegmentKind, ManifestStore, manifest_path};
 use crate::segment::segment_path;
 use crate::wal::segment_file_name;
 use crate::{
-    CompactionManager, DatabaseLayout, SegmentId, StorageFileError, StorageVerifier,
-    StorageVerifyError, StorageVerifyReport, WalCommitHash, WalError, WalPrepareLog,
-    WriterLockError,
+    CompactionManager, DatabaseLayout, RawReadAuditAccessError, RawReadAuditError,
+    RawReadAuditSnapshot, RawReadAuditWal, RawReadAuditWriter, SegmentId, StorageFileError,
+    StorageVerifier, StorageVerifyError, StorageVerifyReport, WalCommitHash, WalError,
+    WalPrepareLog, WriterLockError,
 };
 
 const BACKUP_MANIFEST_FILE: &str = "EXACT_BACKUP";
 const BACKUP_INCOMPLETE_FILE: &str = "EXACT_BACKUP.INCOMPLETE";
+const AUDIT_BACKUP_MANIFEST_PATH: &str = "audit/AUDIT_MANIFEST";
+const AUDIT_WAL_PATH: &str = "audit/wal/raw-read.wal";
 const BACKUP_MAGIC: &[u8; 8] = b"WDBBKP\0\x01";
+const AUDIT_BACKUP_MAGIC: &[u8; 8] = b"WDBAUD\0\x01";
 const INVENTORY_CONTEXT: &[u8] = b"worlddb.exact-backup.inventory.v1\0";
 const AUTH_CONTEXT: &[u8] = b"worlddb.exact-backup.auth.v1\0";
 const BACKUP_MANIFEST_LIMIT: usize = 64 * 1024 * 1024;
 const BACKUP_ITEM_LIMIT: usize = 1_000_000;
 const ITEM_PATH_LIMIT: usize = 512;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const AUDIT_BACKUP_MANIFEST_LIMIT: usize = 1024 * 1024;
 const INCOMPLETE_MARKER: &[u8] = b"WorldDB ExactDatabaseBackup is incomplete.\n";
 
 /// Why an exact backup could not be created or independently verified.
@@ -48,6 +55,10 @@ pub enum BackupError {
     Manifest(ManifestError),
     /// Segment pinning failed.
     Compaction(CompactionError),
+    /// Independent audit WAL verification or snapshot capture failed.
+    Audit(RawReadAuditError),
+    /// Audit backup snapshot was not authorized for both reading and export.
+    AuditAccess(RawReadAuditAccessError),
     /// An independent storage verification pass could not finish.
     StorageVerify(StorageVerifyError),
     /// The source database has no durable database identity.
@@ -78,6 +89,10 @@ pub enum BackupError {
     InvalidKeyId,
     /// A backup item path is not a safe canonical relative path.
     InvalidItemPath,
+    /// The source contains audit segment files whose format has no supported verifier yet.
+    AuditSegmentsUnsupported,
+    /// The requested verification profile differs from the profile declared by the backup.
+    ProfileMismatch,
     /// The requested backup exceeds one of its explicit resource limits.
     ResourceLimit,
     /// The process could not reserve bounded inventory memory.
@@ -93,6 +108,8 @@ impl fmt::Display for BackupError {
             Self::Wal(error) => write!(formatter, "WAL backup checkpoint failed: {error}"),
             Self::Manifest(error) => write!(formatter, "manifest backup failed: {error}"),
             Self::Compaction(error) => write!(formatter, "backup snapshot pin failed: {error}"),
+            Self::Audit(error) => write!(formatter, "audit backup snapshot failed: {error}"),
+            Self::AuditAccess(error) => write!(formatter, "audit backup access denied: {error}"),
             Self::StorageVerify(error) => write!(formatter, "storage verification failed: {error}"),
             Self::DatabaseIdentityMissing => {
                 formatter.write_str("source database has no persistent DatabaseId")
@@ -132,6 +149,12 @@ impl fmt::Display for BackupError {
             }
             Self::InvalidKeyId => formatter.write_str("backup MAC key ID is invalid"),
             Self::InvalidItemPath => formatter.write_str("backup item path is not canonical"),
+            Self::AuditSegmentsUnsupported => formatter.write_str(
+                "audit segment files exist but this storage version cannot verify their format",
+            ),
+            Self::ProfileMismatch => {
+                formatter.write_str("backup does not declare the requested backup profile")
+            }
             Self::ResourceLimit => formatter.write_str("backup exceeds a bounded resource limit"),
             Self::AllocationFailed => formatter.write_str("backup inventory allocation failed"),
         }
@@ -147,10 +170,22 @@ impl std::error::Error for BackupError {
             Self::Wal(error) => Some(error),
             Self::Manifest(error) => Some(error),
             Self::Compaction(error) => Some(error),
+            Self::Audit(error) => Some(error),
+            Self::AuditAccess(error) => Some(error),
             Self::StorageVerify(error) => Some(error),
             _ => None,
         }
     }
+}
+
+/// Declared byte scope of a completed backup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum BackupProfile {
+    /// Exact WorldDB data/schema snapshot with audit data explicitly excluded.
+    ExactDatabase = 1,
+    /// Exact WorldDB snapshot plus independently verified raw-read audit history.
+    AuditComplete = 2,
 }
 
 /// BLAKE3 keyed-MAC material used to bind an exact backup to a named key.
@@ -218,10 +253,11 @@ pub enum BackupAuthenticity {
 /// Progress emitted after the snapshot is pinned and as target files are copied.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackupProgressEvent {
-    /// The exact source revision and immutable manifest inventory are pinned.
+    /// The data revision and inventory are pinned, with the independent audit watermark if present.
     SnapshotPinned {
         database_id: DatabaseId,
         revision: Revision,
+        audit_safe_sequence: Option<AuditSequence>,
         item_count: usize,
     },
     /// One declared inventory item was copied and hashed.
@@ -235,6 +271,7 @@ pub enum BackupProgressEvent {
 /// Result of independent exact-backup verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupVerification {
+    profile: BackupProfile,
     database_id: DatabaseId,
     revision: Revision,
     commit_hash: WalCommitHash,
@@ -243,10 +280,17 @@ pub struct BackupVerification {
     inventory_digest: [u8; 32],
     manifest_digest: [u8; 32],
     authenticity: BackupAuthenticity,
+    audit_safe_sequence: Option<AuditSequence>,
     storage: StorageVerifyReport,
 }
 
 impl BackupVerification {
+    /// Profile declared and verified by the backup manifest.
+    #[must_use]
+    pub const fn profile(&self) -> BackupProfile {
+        self.profile
+    }
+
     /// Stable identity of the backed-up database.
     #[must_use]
     pub const fn database_id(&self) -> DatabaseId {
@@ -295,6 +339,12 @@ impl BackupVerification {
         &self.authenticity
     }
 
+    /// Highest included independent audit sequence for `AuditComplete`; `None` for data-only.
+    #[must_use]
+    pub const fn audit_safe_sequence(&self) -> Option<AuditSequence> {
+        self.audit_safe_sequence
+    }
+
     /// Independent WorldDB storage verification of the target snapshot.
     #[must_use]
     pub const fn storage_report(&self) -> &StorageVerifyReport {
@@ -329,10 +379,85 @@ impl ExactBackupManager {
         &self,
         target: impl AsRef<Path>,
         key: Option<&BackupMacKey>,
+        progress: impl FnMut(BackupProgressEvent),
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_progress(target, key, None, progress)
+    }
+
+    /// Creates an `AuditCompleteBackup` from the exact database snapshot and a pinned audit head.
+    pub fn create_audit_complete_backup(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        audit_writer: &RawReadAuditWriter,
+        policy: SecurityPolicyView<'_>,
+        audit_target: PolicyTarget,
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_audit_complete_backup_with_progress(
+            target,
+            key,
+            audit_writer,
+            policy,
+            audit_target,
+            |_| {},
+        )
+    }
+
+    /// Creates an audit-complete backup and emits progress during the data and audit copies.
+    pub fn create_audit_complete_backup_with_progress(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        audit_writer: &RawReadAuditWriter,
+        policy: SecurityPolicyView<'_>,
+        audit_target: PolicyTarget,
+        progress: impl FnMut(BackupProgressEvent),
+    ) -> Result<BackupVerification, BackupError> {
+        let audit_snapshot = audit_writer
+            .snapshot_for_backup(policy, audit_target)
+            .map_err(BackupError::AuditAccess)?;
+        ensure_empty_audit_segments(&self.source)?;
+        self.create_backup_with_progress(target, key, Some(audit_snapshot), progress)
+    }
+
+    fn create_backup_with_progress(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        audit_snapshot: Option<RawReadAuditSnapshot>,
         mut progress: impl FnMut(BackupProgressEvent),
     ) -> Result<BackupVerification, BackupError> {
         let target_root = normalize_target(target.as_ref(), self.source.root())?;
-        let snapshot = self.capture_snapshot()?;
+        let mut snapshot = self.capture_snapshot()?;
+        if let Some(audit_snapshot) = audit_snapshot {
+            let (audit_database_id, audit_head, audit_bytes) = audit_snapshot.into_parts();
+            if audit_database_id != Some(snapshot.metadata.database_id) {
+                return Err(BackupError::SourceSnapshotMismatch);
+            }
+            let verified_head =
+                RawReadAuditWal::verify_backup_bytes(&audit_bytes).map_err(BackupError::Audit)?;
+            if verified_head != audit_head {
+                return Err(BackupError::SourceSnapshotMismatch);
+            }
+            let audit_manifest =
+                AuditBackupManifest::new(snapshot.metadata.database_id, audit_head, &audit_bytes)?
+                    .encode()?;
+            snapshot
+                .sources
+                .push(inline_source_item(AUDIT_WAL_PATH, audit_bytes)?);
+            snapshot.sources.push(inline_source_item(
+                AUDIT_BACKUP_MANIFEST_PATH,
+                audit_manifest,
+            )?);
+            snapshot
+                .sources
+                .sort_by(|left, right| left.path.cmp(&right.path));
+            snapshot.metadata.profile = BackupProfile::AuditComplete;
+            snapshot.metadata.audit_head = Some(AuditBackupHead {
+                safe_sequence: audit_head.sequence().value(),
+                commit_hash: *audit_head.commit_hash(),
+            });
+        }
         let target_layout =
             DatabaseLayout::create(&target_root).map_err(BackupError::StorageFile)?;
         write_incomplete_marker(target_layout.root())?;
@@ -340,6 +465,10 @@ impl ExactBackupManager {
         progress(BackupProgressEvent::SnapshotPinned {
             database_id: snapshot.metadata.database_id,
             revision: snapshot.metadata.revision,
+            audit_safe_sequence: snapshot
+                .metadata
+                .audit_head
+                .map(|head| AuditSequence::new(head.safe_sequence)),
             item_count: snapshot.sources.len(),
         });
 
@@ -516,12 +645,14 @@ impl ExactBackupManager {
         sources.sort_by(|left, right| left.path.cmp(&right.path));
 
         let metadata = BackupMetadata {
+            profile: BackupProfile::ExactDatabase,
             database_id,
             revision: head.revision(),
             commit_hash: head.commit_hash(),
             manifest_generation,
             required_format_flags: self.source.format_capabilities().required_flags(),
             optional_format_flags: self.source.format_capabilities().optional_flags(),
+            audit_head: None,
         };
         drop(lock);
         Ok(PinnedSnapshot {
@@ -541,6 +672,18 @@ pub fn verify_exact_backup(
     verify_exact_backup_internal(target.as_ref(), key, false)
 }
 
+/// Independently verifies a completed `AuditCompleteBackup`, rejecting data-only backups.
+pub fn verify_audit_complete_backup(
+    target: impl AsRef<Path>,
+    key: Option<&BackupMacKey>,
+) -> Result<BackupVerification, BackupError> {
+    let verification = verify_exact_backup(target, key)?;
+    if verification.profile != BackupProfile::AuditComplete {
+        return Err(BackupError::ProfileMismatch);
+    }
+    Ok(verification)
+}
+
 struct PinnedSnapshot {
     metadata: BackupMetadata,
     sources: Vec<SourceItem>,
@@ -550,12 +693,116 @@ struct PinnedSnapshot {
 
 #[derive(Clone, Copy)]
 struct BackupMetadata {
+    profile: BackupProfile,
     database_id: DatabaseId,
     revision: Revision,
     commit_hash: WalCommitHash,
     manifest_generation: Option<u64>,
     required_format_flags: u64,
     optional_format_flags: u64,
+    audit_head: Option<AuditBackupHead>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AuditBackupHead {
+    safe_sequence: u64,
+    commit_hash: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AuditBackupManifest {
+    database_id: DatabaseId,
+    safe_sequence: u64,
+    commit_hash: [u8; 32],
+    wal_length: u64,
+    wal_digest: [u8; 32],
+    segment_count: u32,
+}
+
+impl AuditBackupManifest {
+    fn new(
+        database_id: DatabaseId,
+        head: crate::RawReadAuditHead,
+        wal_bytes: &[u8],
+    ) -> Result<Self, BackupError> {
+        Ok(Self {
+            database_id,
+            safe_sequence: head.sequence().value(),
+            commit_hash: *head.commit_hash(),
+            wal_length: u64::try_from(wal_bytes.len()).map_err(|_| BackupError::ResourceLimit)?,
+            wal_digest: *blake3::hash(wal_bytes).as_bytes(),
+            // This storage generation keeps the audit history in one bounded WAL. It does not
+            // yet publish immutable audit segments; a nonempty segment directory fails closed.
+            segment_count: 0,
+        })
+    }
+
+    fn encode(&self) -> Result<Vec<u8>, BackupError> {
+        if self.segment_count != 0 {
+            return Err(BackupError::AuditSegmentsUnsupported);
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(142)
+            .map_err(|_| BackupError::AllocationFailed)?;
+        bytes.extend_from_slice(AUDIT_BACKUP_MAGIC);
+        push_u16(&mut bytes, 1);
+        bytes.extend_from_slice(&self.database_id.to_bytes());
+        push_u64(&mut bytes, self.safe_sequence);
+        bytes.extend_from_slice(&self.commit_hash);
+        push_u64(&mut bytes, self.wal_length);
+        bytes.extend_from_slice(&self.wal_digest);
+        push_u32(&mut bytes, self.segment_count);
+        let digest = *blake3::hash(&bytes).as_bytes();
+        bytes.extend_from_slice(&digest);
+        if bytes.len() > AUDIT_BACKUP_MANIFEST_LIMIT {
+            return Err(BackupError::ResourceLimit);
+        }
+        Ok(bytes)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, BackupError> {
+        if bytes.len() > AUDIT_BACKUP_MANIFEST_LIMIT {
+            return Err(BackupError::ResourceLimit);
+        }
+        let mut cursor = ByteCursor::new(bytes);
+        if cursor.take(8)? != AUDIT_BACKUP_MAGIC || cursor.u16()? != 1 {
+            return Err(BackupError::InvalidBackupManifest);
+        }
+        let database_id = DatabaseId::try_from_bytes(cursor.array16()?)
+            .map_err(|_| BackupError::InvalidBackupManifest)?;
+        let safe_sequence = cursor.u64()?;
+        let commit_hash = cursor.array32()?;
+        let wal_length = cursor.u64()?;
+        let wal_digest = cursor.array32()?;
+        let segment_count = cursor.u32()?;
+        let digest_offset = cursor.position();
+        let digest = cursor.array32()?;
+        if !cursor.is_at_end()
+            || segment_count != 0
+            || *blake3::hash(
+                bytes
+                    .get(..digest_offset)
+                    .ok_or(BackupError::InvalidBackupManifest)?,
+            )
+            .as_bytes()
+                != digest
+        {
+            return Err(BackupError::InvalidBackupManifest);
+        }
+        let manifest = Self {
+            database_id,
+            safe_sequence,
+            commit_hash,
+            wal_length,
+            wal_digest,
+            segment_count,
+        };
+        if manifest.encode()? != bytes {
+            return Err(BackupError::InvalidBackupManifest);
+        }
+        Ok(manifest)
+    }
 }
 
 enum CopyInput {
@@ -579,6 +826,8 @@ enum BackupItemKind {
     Wal = 5,
     HistorySegment = 6,
     SecuritySegment = 7,
+    AuditManifest = 8,
+    AuditWal = 9,
 }
 
 impl BackupItemKind {
@@ -587,6 +836,8 @@ impl BackupItemKind {
             "FORMAT" => Ok(Self::Format),
             "DATABASE_ID" => Ok(Self::DatabaseId),
             "CURRENT" => Ok(Self::Current),
+            AUDIT_BACKUP_MANIFEST_PATH => Ok(Self::AuditManifest),
+            AUDIT_WAL_PATH => Ok(Self::AuditWal),
             value if is_canonical_manifest_path(value) => Ok(Self::Manifest),
             value if is_canonical_wal_path(value) => Ok(Self::Wal),
             value if is_canonical_segment_path(value, "segments/") => Ok(Self::HistorySegment),
@@ -606,6 +857,8 @@ impl BackupItemKind {
             5 => Ok(Self::Wal),
             6 => Ok(Self::HistorySegment),
             7 => Ok(Self::SecuritySegment),
+            8 => Ok(Self::AuditManifest),
+            9 => Ok(Self::AuditWal),
             _ => Err(BackupError::InvalidBackupManifest),
         }
     }
@@ -637,23 +890,27 @@ struct BackupManifest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BackupMetadataOwned {
+    profile: BackupProfile,
     database_id: DatabaseId,
     revision: Revision,
     commit_hash: WalCommitHash,
     manifest_generation: Option<u64>,
     required_format_flags: u64,
     optional_format_flags: u64,
+    audit_head: Option<AuditBackupHead>,
 }
 
 impl From<BackupMetadata> for BackupMetadataOwned {
     fn from(value: BackupMetadata) -> Self {
         Self {
+            profile: value.profile,
             database_id: value.database_id,
             revision: value.revision,
             commit_hash: value.commit_hash,
             manifest_generation: value.manifest_generation,
             required_format_flags: value.required_format_flags,
             optional_format_flags: value.optional_format_flags,
+            audit_head: value.audit_head,
         }
     }
 }
@@ -662,6 +919,7 @@ impl BackupManifest {
     fn new(metadata: BackupMetadata, items: Vec<BackupItem>) -> Result<Self, BackupError> {
         validate_items(&items)?;
         let metadata = BackupMetadataOwned::from(metadata);
+        validate_backup_profile(metadata.profile, metadata.audit_head, &items)?;
         let inventory_digest = calculate_inventory_digest(&items)?;
         let mut manifest = Self {
             metadata,
@@ -725,7 +983,13 @@ impl BackupManifest {
             97_usize
         } else {
             89_usize
-        };
+        }
+        .checked_add(if self.metadata.audit_head.is_some() {
+            40
+        } else {
+            0
+        })
+        .ok_or(BackupError::ResourceLimit)?;
         let encoded_size = self.items.iter().try_fold(
             fixed_header
                 .checked_add(32)
@@ -744,9 +1008,18 @@ impl BackupManifest {
             .try_reserve_exact(encoded_size)
             .map_err(|_| BackupError::AllocationFailed)?;
         bytes.extend_from_slice(BACKUP_MAGIC);
-        bytes.push(1); // ExactDatabaseBackup profile.
-        bytes.push(0); // audit_scope=Excluded.
-        push_u16(&mut bytes, 1); // Backup manifest schema version.
+        bytes.push(self.metadata.profile as u8);
+        bytes.push(match self.metadata.profile {
+            BackupProfile::ExactDatabase => 0, // audit_scope=Excluded.
+            BackupProfile::AuditComplete => 1, // audit_scope=Included.
+        });
+        push_u16(
+            &mut bytes,
+            match self.metadata.profile {
+                BackupProfile::ExactDatabase => 1,
+                BackupProfile::AuditComplete => 2,
+            },
+        );
         push_u64(&mut bytes, self.metadata.required_format_flags);
         push_u64(&mut bytes, self.metadata.optional_format_flags);
         bytes.extend_from_slice(&self.metadata.database_id.to_bytes());
@@ -758,6 +1031,10 @@ impl BackupManifest {
                 push_u64(&mut bytes, generation);
             }
             None => bytes.push(0),
+        }
+        if let Some(audit_head) = self.metadata.audit_head {
+            push_u64(&mut bytes, audit_head.safe_sequence);
+            bytes.extend_from_slice(&audit_head.commit_hash);
         }
         push_u32(
             &mut bytes,
@@ -789,9 +1066,14 @@ impl BackupManifest {
         if cursor.take(8)? != BACKUP_MAGIC {
             return Err(BackupError::InvalidBackupManifest);
         }
-        if cursor.u8()? != 1 || cursor.u8()? != 0 || cursor.u16()? != 1 {
-            return Err(BackupError::InvalidBackupManifest);
-        }
+        let profile_tag = cursor.u8()?;
+        let audit_scope = cursor.u8()?;
+        let schema_version = cursor.u16()?;
+        let profile = match (profile_tag, audit_scope, schema_version) {
+            (1, 0, 1) => BackupProfile::ExactDatabase,
+            (2, 1, 2) => BackupProfile::AuditComplete,
+            _ => return Err(BackupError::InvalidBackupManifest),
+        };
         let required_format_flags = cursor.u64()?;
         let optional_format_flags = cursor.u64()?;
         let database_id = DatabaseId::try_from_bytes(cursor.array16()?)
@@ -803,6 +1085,14 @@ impl BackupManifest {
             0 => None,
             1 => Some(cursor.u64()?),
             _ => return Err(BackupError::InvalidBackupManifest),
+        };
+        let audit_head = if profile == BackupProfile::AuditComplete {
+            Some(AuditBackupHead {
+                safe_sequence: cursor.u64()?,
+                commit_hash: cursor.array32()?,
+            })
+        } else {
+            None
         };
         let item_count = usize::try_from(cursor.u32()?).map_err(|_| BackupError::ResourceLimit)?;
         if item_count > BACKUP_ITEM_LIMIT {
@@ -845,6 +1135,7 @@ impl BackupManifest {
             return Err(BackupError::IntegrityMismatch);
         }
         validate_items(&items)?;
+        validate_backup_profile(profile, audit_head, &items)?;
         let mac = match cursor.u8()? {
             0 => None,
             1 => {
@@ -873,12 +1164,14 @@ impl BackupManifest {
         }
         let mut manifest = Self {
             metadata: BackupMetadataOwned {
+                profile,
                 database_id,
                 revision,
                 commit_hash,
                 manifest_generation,
                 required_format_flags,
                 optional_format_flags,
+                audit_head,
             },
             items,
             inventory_digest,
@@ -937,6 +1230,7 @@ fn verify_exact_backup_internal(
     {
         return Err(BackupError::TargetSnapshotMismatch);
     }
+    let audit_safe_sequence = verify_audit_backup(&target_root, &manifest)?;
     let authenticity = verify_authenticity(&manifest, key);
     let lock = layout.try_writer_lock().map_err(BackupError::WriterLock)?;
     let storage = StorageVerifier::new(layout.clone())
@@ -969,6 +1263,7 @@ fn verify_exact_backup_internal(
     }
     drop(lock);
     Ok(BackupVerification {
+        profile: manifest.metadata.profile,
         database_id: manifest.metadata.database_id,
         revision: manifest.metadata.revision,
         commit_hash: manifest.metadata.commit_hash,
@@ -977,8 +1272,60 @@ fn verify_exact_backup_internal(
         inventory_digest: manifest.inventory_digest,
         manifest_digest: manifest.manifest_digest,
         authenticity,
+        audit_safe_sequence,
         storage,
     })
+}
+
+fn verify_audit_backup(
+    root: &Path,
+    manifest: &BackupManifest,
+) -> Result<Option<AuditSequence>, BackupError> {
+    if manifest.metadata.profile == BackupProfile::ExactDatabase {
+        return Ok(None);
+    }
+    let expected = manifest
+        .metadata
+        .audit_head
+        .ok_or(BackupError::InvalidBackupManifest)?;
+    let wal_item = manifest
+        .items
+        .iter()
+        .find(|item| item.kind == BackupItemKind::AuditWal)
+        .ok_or(BackupError::InvalidBackupManifest)?;
+    let audit_manifest_item = manifest
+        .items
+        .iter()
+        .find(|item| item.kind == BackupItemKind::AuditManifest)
+        .ok_or(BackupError::InvalidBackupManifest)?;
+    let wal_path = join_item_path(root, &wal_item.path)?;
+    let wal_bytes = read_bounded_file(&wal_path, BACKUP_MANIFEST_LIMIT, root)?;
+    let actual_head =
+        RawReadAuditWal::verify_backup_bytes(&wal_bytes).map_err(BackupError::Audit)?;
+    let audit_manifest_path = join_item_path(root, &audit_manifest_item.path)?;
+    let audit_manifest_bytes =
+        read_bounded_file(&audit_manifest_path, AUDIT_BACKUP_MANIFEST_LIMIT, root)?;
+    let audit_manifest = AuditBackupManifest::decode(&audit_manifest_bytes)?;
+    let wal_length = u64::try_from(wal_bytes.len()).map_err(|_| BackupError::ResourceLimit)?;
+    let wal_digest = *blake3::hash(&wal_bytes).as_bytes();
+    let audit_manifest_length =
+        u64::try_from(audit_manifest_bytes.len()).map_err(|_| BackupError::ResourceLimit)?;
+    if actual_head.sequence().value() != expected.safe_sequence
+        || actual_head.commit_hash() != &expected.commit_hash
+        || audit_manifest.database_id != manifest.metadata.database_id
+        || audit_manifest.safe_sequence != expected.safe_sequence
+        || audit_manifest.commit_hash != expected.commit_hash
+        || audit_manifest.wal_length != wal_length
+        || audit_manifest.wal_digest != wal_digest
+        || audit_manifest.segment_count != 0
+        || wal_item.length != wal_length
+        || wal_item.digest != wal_digest
+        || audit_manifest_item.length != audit_manifest_length
+        || audit_manifest_item.digest != *blake3::hash(&audit_manifest_bytes).as_bytes()
+    {
+        return Err(BackupError::IntegrityMismatch);
+    }
+    Ok(Some(AuditSequence::new(expected.safe_sequence)))
 }
 
 fn verify_authenticity(
@@ -1270,6 +1617,64 @@ fn validate_items(items: &[BackupItem]) -> Result<(), BackupError> {
             return Err(BackupError::InvalidBackupManifest);
         }
         previous = Some(&item.path);
+    }
+    Ok(())
+}
+
+fn validate_backup_profile(
+    profile: BackupProfile,
+    audit_head: Option<AuditBackupHead>,
+    items: &[BackupItem],
+) -> Result<(), BackupError> {
+    let audit_manifest_count = items
+        .iter()
+        .filter(|item| item.kind == BackupItemKind::AuditManifest)
+        .count();
+    let audit_wal_count = items
+        .iter()
+        .filter(|item| item.kind == BackupItemKind::AuditWal)
+        .count();
+    match profile {
+        BackupProfile::ExactDatabase
+            if audit_head.is_none() && audit_manifest_count == 0 && audit_wal_count == 0 =>
+        {
+            Ok(())
+        }
+        BackupProfile::AuditComplete
+            if audit_head.is_some() && audit_manifest_count == 1 && audit_wal_count == 1 =>
+        {
+            Ok(())
+        }
+        _ => Err(BackupError::InvalidBackupManifest),
+    }
+}
+
+fn ensure_empty_audit_segments(layout: &DatabaseLayout) -> Result<(), BackupError> {
+    let directory = layout.audit_segments_directory();
+    let metadata = fs::symlink_metadata(&directory).map_err(|source| BackupError::Io {
+        operation: "inspect audit segment directory",
+        source,
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(BackupError::InventoryMismatch);
+    }
+    let canonical = fs::canonicalize(&directory).map_err(|source| BackupError::Io {
+        operation: "resolve audit segment directory",
+        source,
+    })?;
+    if !canonical.starts_with(layout.root()) {
+        return Err(BackupError::InventoryMismatch);
+    }
+    let mut entries = fs::read_dir(canonical).map_err(|source| BackupError::Io {
+        operation: "list audit segment directory",
+        source,
+    })?;
+    if let Some(entry) = entries.next() {
+        entry.map_err(|source| BackupError::Io {
+            operation: "read audit segment directory entry",
+            source,
+        })?;
+        return Err(BackupError::AuditSegmentsUnsupported);
     }
     Ok(())
 }

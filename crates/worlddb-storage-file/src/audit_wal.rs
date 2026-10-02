@@ -10,10 +10,10 @@ use std::sync::{Mutex, MutexGuard};
 use worlddb_core::{
     AdminRawAuditAuthorizer, AdminRawAuditError, AdminRawAuthorizeRequest, AuditAccessPermissions,
     AuditCodecError, AuditOperationId, AuditRetentionPolicy, AuditSequence, AuditSequenceError,
-    CHECKSUM_LEN, ClientRequestId, DecoderLimits, DomainId, FRAME_HEADER_LEN, FrameError,
-    FrameHeader, IdGenerationError, PolicyTarget, RawReadAttempt, RawReadAttemptIdentity,
-    RawReadAttemptScope, SecurityPolicyView, TlvDecoder, TlvEncoder, WireError, decode_frame,
-    decode_raw_read_attempt, encode_frame, encode_raw_read_attempt,
+    CHECKSUM_LEN, ClientRequestId, DatabaseId, DecoderLimits, DomainId, FRAME_HEADER_LEN,
+    FrameError, FrameHeader, IdGenerationError, PolicyTarget, RawReadAttempt,
+    RawReadAttemptIdentity, RawReadAttemptScope, SecurityPolicyView, TlvDecoder, TlvEncoder,
+    WireError, decode_frame, decode_raw_read_attempt, encode_frame, encode_raw_read_attempt,
 };
 
 use crate::layout::DatabaseLayout;
@@ -49,6 +49,38 @@ impl RawReadAuditHead {
     #[must_use]
     pub const fn commit_hash(&self) -> &[u8; 32] {
         &self.commit_hash
+    }
+}
+
+/// In-memory, bounded audit prefix captured for an AuditCompleteBackup.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RawReadAuditSnapshot {
+    database_id: Option<DatabaseId>,
+    head: RawReadAuditHead,
+    bytes: Vec<u8>,
+}
+
+impl RawReadAuditSnapshot {
+    /// Database identity associated with this audit namespace, when the layout has one.
+    #[must_use]
+    pub const fn database_id(&self) -> Option<DatabaseId> {
+        self.database_id
+    }
+
+    /// Independent audit sequence and commit hash at the snapshot boundary.
+    #[must_use]
+    pub const fn head(&self) -> RawReadAuditHead {
+        self.head
+    }
+
+    /// Exact, fully verified WAL bytes through `head`.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub(crate) fn into_parts(self) -> (Option<DatabaseId>, RawReadAuditHead, Vec<u8>) {
+        (self.database_id, self.head, self.bytes)
     }
 }
 
@@ -374,6 +406,52 @@ impl RawReadAuditWal {
         recover_tail_locked(&self.layout)
     }
 
+    /// Captures a clean audit prefix while excluding another process's audit writer.
+    ///
+    /// This method does not repair an incomplete tail. Use the live writer's equivalent method
+    /// when this process owns the audit writer lock.
+    pub fn snapshot_for_backup(
+        &self,
+        policy: SecurityPolicyView<'_>,
+        target: PolicyTarget,
+    ) -> Result<RawReadAuditSnapshot, RawReadAuditAccessError> {
+        let permissions = AuditAccessPermissions::evaluate(
+            policy.current_snapshot(),
+            policy.principal_id(),
+            target,
+        );
+        if !permissions.may_read() {
+            return Err(RawReadAuditAccessError::ReadUnauthorized);
+        }
+        if !permissions.may_export() {
+            return Err(RawReadAuditAccessError::ExportUnauthorized);
+        }
+        let _lock =
+            AuditWriterLock::try_acquire(&self.layout).map_err(RawReadAuditAccessError::Audit)?;
+        let scan = scan_wal(&self.layout).map_err(RawReadAuditAccessError::Audit)?;
+        Ok(snapshot_from_scan(&self.layout, scan))
+    }
+
+    /// Independently verifies raw audit WAL bytes and returns their committed head.
+    pub(crate) fn verify_backup_bytes(bytes: &[u8]) -> Result<RawReadAuditHead, RawReadAuditError> {
+        if bytes.len() > MAX_AUDIT_WAL_BYTES {
+            return Err(RawReadAuditError::WALTooLarge {
+                limit: MAX_AUDIT_WAL_BYTES,
+                actual: bytes.len(),
+            });
+        }
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(bytes.len())
+            .map_err(|_| RawReadAuditError::AllocationFailed)?;
+        owned.extend_from_slice(bytes);
+        let scan = scan_wal_bytes(owned)?;
+        if scan.incomplete_tail || scan.committed_length != bytes.len() {
+            return Err(RawReadAuditError::RecoveryRequired);
+        }
+        Ok(scan.head)
+    }
+
     /// Reads the audit history after current-version policy authorizes AuditRead.
     pub fn read_authorized(
         &self,
@@ -472,6 +550,38 @@ impl RawReadAuditWriter {
             return Err(RawReadAuditError::WriterPoisoned);
         }
         Ok(state.head)
+    }
+
+    /// Captures the current committed audit prefix while serializing against this writer's appends.
+    pub fn snapshot_for_backup(
+        &self,
+        policy: SecurityPolicyView<'_>,
+        target: PolicyTarget,
+    ) -> Result<RawReadAuditSnapshot, RawReadAuditAccessError> {
+        let permissions = AuditAccessPermissions::evaluate(
+            policy.current_snapshot(),
+            policy.principal_id(),
+            target,
+        );
+        if !permissions.may_read() {
+            return Err(RawReadAuditAccessError::ReadUnauthorized);
+        }
+        if !permissions.may_export() {
+            return Err(RawReadAuditAccessError::ExportUnauthorized);
+        }
+        let state = self.lock_state().map_err(RawReadAuditAccessError::Audit)?;
+        if state.poisoned {
+            return Err(RawReadAuditAccessError::Audit(
+                RawReadAuditError::WriterPoisoned,
+            ));
+        }
+        let scan = scan_wal(&self.layout).map_err(RawReadAuditAccessError::Audit)?;
+        if scan.head != state.head {
+            return Err(RawReadAuditAccessError::Audit(
+                RawReadAuditError::RecoveryRequired,
+            ));
+        }
+        Ok(snapshot_from_scan(&self.layout, scan))
     }
 
     /// Appends one attempt and returns only after both prepare and commit marker syncs succeed.
@@ -618,21 +728,29 @@ fn scan_wal(layout: &DatabaseLayout) -> Result<AuditScan, RawReadAuditError> {
 fn scan_wal_allow_incomplete_tail(layout: &DatabaseLayout) -> Result<AuditScan, RawReadAuditError> {
     let directory = canonical_regular_directory(&layout.audit_wal_directory())?;
     let path = directory.join(AUDIT_WAL_FILE);
-    let bytes = match read_wal_file(&path, &directory)? {
-        Some(bytes) => bytes,
-        None => {
-            return Ok(AuditScan {
-                head: RawReadAuditHead {
-                    sequence: AuditSequence::new(0),
-                    commit_hash: ZERO_COMMIT_HASH,
-                },
-                attempts: Vec::new(),
-                file_bytes: Vec::new(),
-                committed_length: 0,
-                incomplete_tail: false,
-            });
-        }
-    };
+    let bytes = read_wal_file(&path, &directory)?.unwrap_or_default();
+    scan_wal_bytes(bytes)
+}
+
+fn scan_wal_bytes(bytes: Vec<u8>) -> Result<AuditScan, RawReadAuditError> {
+    if bytes.len() > MAX_AUDIT_WAL_BYTES {
+        return Err(RawReadAuditError::WALTooLarge {
+            limit: MAX_AUDIT_WAL_BYTES,
+            actual: bytes.len(),
+        });
+    }
+    if bytes.is_empty() {
+        return Ok(AuditScan {
+            head: RawReadAuditHead {
+                sequence: AuditSequence::new(0),
+                commit_hash: ZERO_COMMIT_HASH,
+            },
+            attempts: Vec::new(),
+            file_bytes: Vec::new(),
+            committed_length: 0,
+            incomplete_tail: false,
+        });
+    }
     let mut attempts = Vec::new();
     let mut operation_ids = BTreeSet::new();
     let mut record_ids = BTreeSet::new();
@@ -749,6 +867,14 @@ fn scan_wal_allow_incomplete_tail(layout: &DatabaseLayout) -> Result<AuditScan, 
         committed_length,
         incomplete_tail: false,
     })
+}
+
+fn snapshot_from_scan(layout: &DatabaseLayout, scan: AuditScan) -> RawReadAuditSnapshot {
+    RawReadAuditSnapshot {
+        database_id: layout.database_id(),
+        head: scan.head,
+        bytes: scan.file_bytes,
+    }
 }
 
 fn recover_tail_locked(
