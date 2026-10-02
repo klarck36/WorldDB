@@ -1,6 +1,6 @@
 //! Reference-model evaluation for assertion masks.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::assertions::{Assertion, Polarity, Subject};
@@ -186,11 +186,49 @@ where
         active.push(mask);
     }
 
+    // Exact-ID Masks dominate large retained histories because they are cheap
+    // to serialize and unambiguous. Group those selectors by target once so a
+    // point query does not compare every candidate with every unrelated Mask.
+    // Keep original ordinals and merge with general selectors per candidate;
+    // this preserves the reference path's first-matching-mask trace behavior.
+    let mut exact_by_assertion = BTreeMap::new();
+    let mut general_masks = Vec::new();
+    for (ordinal, mask) in active.into_iter().enumerate() {
+        match mask.selector() {
+            MaskSelector::ExactAssertion(assertion_id) => exact_by_assertion
+                .entry(*assertion_id)
+                .or_insert_with(Vec::new)
+                .push((ordinal, mask)),
+            MaskSelector::Proposition(_) | MaskSelector::Slot(_) => {
+                general_masks.push((ordinal, mask));
+            }
+        }
+    }
+
     let mut visible = Vec::with_capacity(candidates.len());
     let mut applied_mask_ids = BTreeSet::new();
     'candidate: for candidate in candidates {
         let assertion = candidate.assertion();
-        for mask in &active {
+        let mut general = general_masks.iter().copied().peekable();
+        let mut exact = exact_by_assertion
+            .get(&assertion.id())
+            .into_iter()
+            .flatten()
+            .copied()
+            .peekable();
+        loop {
+            let next = match (general.peek(), exact.peek()) {
+                (Some(general_mask), Some(exact_mask)) if general_mask.0 <= exact_mask.0 => {
+                    general.next()
+                }
+                (Some(_), Some(_)) => exact.next(),
+                (Some(_), None) => general.next(),
+                (None, Some(_)) => exact.next(),
+                (None, None) => break,
+            };
+            let Some((_, mask)) = next else {
+                break;
+            };
             if !candidate
                 .selected_layer_ids()
                 .contains(&mask.context().layer_id())

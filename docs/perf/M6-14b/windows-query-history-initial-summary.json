@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "probe": "m6-14b-windows-query-history-v1",
+  "generated_at_utc": "2026-10-02T07:04:58Z",
+  "host": {
+    "os_caption": "Microsoft Windows 11 Home",
+    "os_version": "10.0.26200",
+    "os_build": "26200",
+    "cpu_models": "Intel(R) Core(TM) i5-14600K",
+    "cpu_packages": 1,
+    "physical_cores": 14,
+    "logical_processors": 20,
+    "total_memory_bytes": 68448346112,
+    "drive_letter": "C:",
+    "file_system": "NTFS",
+    "drive_type": "Fixed",
+    "storage_model": "Samsung SSD 970 EVO Plus 1TB",
+    "storage_bus": "NVMe",
+    "storage_media": "",
+    "storage_size_bytes": 1000204886016,
+    "volume_free_bytes": 241409564672,
+    "output_location": "LOCALAPPDATA, outside the repository and OneDrive path"
+  },
+  "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+  "corpus_version": "m6-14a-v1",
+  "corpus_seed": "0x574f524c44444232",
+  "corpus_dataset_sha256": "a8f623e9f82329e5b626ca21a6ada1b1af1e765184e278a9a711549066d962e5",
+  "assertions_loaded": 1000000,
+  "selected_history_space": 100,
+  "revision_mapping": "source base revision i*1000 maps to compact published revision i-1; each space's assertions publish at i",
+  "point_cold_cache_note": "Cold label denotes eviction of CPU cache with a touched 64 MiB buffer; the OS/file cache was not evicted.",
+  "history_cold_cache_note": "Each page sample starts after CPU-cache eviction; corpus and source index remain resident and Windows file cache is untouched.",
+  "peak_rss_sampling": "Windows PROCESS_MEMORY_COUNTERS_EX.PeakWorkingSetSize on the benchmark test process",
+  "peak_working_set_bytes": 1238839296,
+  "summary": {
+    "history_page_cold_cpu_cache": {
+      "samples": 32670,
+      "pages": 1089,
+      "result_count_min": 21,
+      "result_count_max": 64,
+      "latency_ns": {
+        "p50": 52700,
+        "p95": 67700,
+        "p99": 108800,
+        "minimum": 29000,
+        "maximum": 509700
+      },
+      "peak_working_set_bytes": 1238839296,
+      "cache_state": "CPU cache evicted with a 64 MiB memory-resident buffer; file/OS cache left intact"
+    },
+    "history_page_warm": {
+      "samples": 32670,
+      "pages": 1089,
+      "result_count_min": 21,
+      "result_count_max": 64,
+      "latency_ns": {
+        "p50": 36600,
+        "p95": 43900,
+        "p99": 70800,
+        "minimum": 20100,
+        "maximum": 254400
+      },
+      "peak_working_set_bytes": 1238839296,
+      "cache_state": "warm process and memory-resident corpus"
+    },
+    "point_resolution_cold_cpu_cache": {
+      "samples": 30,
+      "pages": null,
+      "result_count_min": 1,
+      "result_count_max": 1,
+      "latency_ns": {
+        "p50": 350355800,
+        "p95": 353002500,
+        "p99": 353049500,
+        "minimum": 345079600,
+        "maximum": 353049500
+      },
+      "peak_working_set_bytes": 1238839296,
+      "cache_state": "CPU cache evicted with a 64 MiB memory-resident buffer; file/OS cache left intact"
+    },
+    "point_resolution_warm": {
+      "samples": 30,
+      "pages": null,
+      "result_count_min": 1,
+      "result_count_max": 1,
+      "latency_ns": {
+        "p50": 348090300,
+        "p95": 353117200,
+        "p99": 354074700,
+        "minimum": 344842300,
+        "maximum": 354074700
+      },
+      "peak_working_set_bytes": 1238839296,
+      "cache_state": "warm process and memory-resident corpus"
+    }
+  },
+  "raw_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-run1\\windows-query-history.csv",
+  "per_page_csv": "C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-run1\\windows-query-history-page-summary.csv",
+  "rust_output": "running 1 test\ntest m6_14b_windows_full_corpus_query_and_history_probe ... assertions=1000000 selected_history_rows=69653 page_size=64 pages=1089 repeats=30 raw_csv=C:\\Users\\wedde\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\WorldDB\\benchmarks\\m6-14b-query-20261002-run1\\windows-query-history-probe.csv\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 146.30s",
+  "platform_scope": "Windows only; Linux/macOS deferred by user instruction"
+}

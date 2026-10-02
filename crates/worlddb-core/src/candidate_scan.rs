@@ -3,8 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::archive::ArchiveTargetRef;
+use crate::archive::{ArchiveState, ArchiveTargetRef};
 use crate::archive_projection::{ArchiveHistoryReferenceModel, ArchiveProjectionError};
+use crate::assertion_point_index::{
+    AssertionIndexHit, AssertionPointHistoryIndex, AssertionPointIndexError,
+};
 use crate::assertion_projection::{AssertionLifecycleProjection, AssertionProjectionError};
 use crate::assertions::{Assertion, AssertionRetraction, AssertionValidityClosure};
 use crate::context::{ContextError, ContextKey, EpistemicMode, PerspectiveScope};
@@ -89,36 +92,22 @@ pub struct AssertionCandidate {
     pub(crate) precedence: ContextPrecedence,
 }
 
-/// Point filter for the authorized scan path. Indexed IDs are optional; the
-/// subject/Predicate pair is always applied before semantic candidates exist.
+/// Coordinates for one authorized subject/Predicate point lookup, shared by the
+/// indexed path and its full-scan fallback.
 #[derive(Clone, Copy)]
-pub(crate) struct AssertionPointCandidateFilter<'a> {
+pub(crate) struct AssertionPointCandidateFilter {
     subject: crate::assertions::Subject,
     predicate_id: crate::ids::PredicateId,
-    indexed_assertion_ids: Option<&'a BTreeSet<AssertionId>>,
 }
 
-impl<'a> AssertionPointCandidateFilter<'a> {
-    pub(crate) const fn full_scan(
+impl AssertionPointCandidateFilter {
+    pub(crate) const fn new(
         subject: crate::assertions::Subject,
         predicate_id: crate::ids::PredicateId,
     ) -> Self {
         Self {
             subject,
             predicate_id,
-            indexed_assertion_ids: None,
-        }
-    }
-
-    pub(crate) const fn indexed(
-        subject: crate::assertions::Subject,
-        predicate_id: crate::ids::PredicateId,
-        indexed_assertion_ids: &'a BTreeSet<AssertionId>,
-    ) -> Self {
-        Self {
-            subject,
-            predicate_id,
-            indexed_assertion_ids: Some(indexed_assertion_ids),
         }
     }
 }
@@ -224,7 +213,7 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
     security: AssertionCandidateSecurityContext<'_>,
-    point_filter: AssertionPointCandidateFilter<'_>,
+    point_filter: AssertionPointCandidateFilter,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let AssertionCandidateSecurityContext { policy, context } = security;
     validate_authorized_query_context(query, context, layers)?;
@@ -246,18 +235,19 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
     )
 }
 
-/// Completes a point-index candidate set against retained lifecycle/archive history.
+/// Completes a point-index hit set with authorized archive and lifecycle state.
 ///
-/// The point index only narrows immutable Assertion identities. Authorization still
-/// runs before candidate construction, and the same lifecycle, archive, validity,
-/// branch-precedence, and canonical-order checks as the full-scan path are applied.
+/// Authorization still runs before candidate construction, and the same lifecycle,
+/// archive, validity, branch-precedence, and canonical-order checks as the full-scan
+/// path are applied.
 pub(crate) fn indexed_authorized_assertion_candidates(
-    history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
     archive: &ArchiveHistoryReferenceModel,
+    index: &AssertionPointHistoryIndex,
+    hits: &[AssertionIndexHit<'_>],
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
     security: AssertionCandidateSecurityContext<'_>,
-    point_filter: AssertionPointCandidateFilter<'_>,
+    point_filter: AssertionPointCandidateFilter,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let AssertionCandidateSecurityContext { policy, context } = security;
     validate_authorized_query_context(query, context, layers)?;
@@ -269,14 +259,118 @@ pub(crate) fn indexed_authorized_assertion_candidates(
     {
         return Ok(Vec::new());
     }
-    full_scan_assertion_candidates_with_security(
-        history,
-        archive,
-        query,
-        layers,
-        Some((policy, context.security().principal_id())),
-        Some(point_filter),
-    )
+
+    let selected_layer_ids = layers
+        .resolve(&query.layer_selection)?
+        .as_slice()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut seen_assertions = BTreeSet::new();
+    let mut candidates = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let assertion = hit.assertion();
+        let owner_history_space_id = hit.owner_history_space_id();
+        if hit.recorded_revision() != assertion.created_revision() {
+            return Err(CandidateScanError::RecordRevisionMismatch {
+                owner_history_space_id,
+                stored_revision: hit.recorded_revision(),
+                record_revision: assertion.created_revision(),
+            });
+        }
+        if assertion.context().history_space_id() != owner_history_space_id {
+            return Err(CandidateScanError::ContextHistorySpaceMismatch {
+                assertion_id: assertion.id(),
+                owner_history_space_id,
+                context_history_space_id: assertion.context().history_space_id(),
+            });
+        }
+        if assertion.subject() != point_filter.subject
+            || assertion.predicate_id() != point_filter.predicate_id
+        {
+            return Err(CandidateScanError::Index(
+                AssertionPointIndexError::IndexHitMismatch,
+            ));
+        }
+        if !seen_assertions.insert(assertion.id()) {
+            return Err(CandidateScanError::Index(
+                AssertionPointIndexError::DuplicateAssertionId(assertion.id()),
+            ));
+        }
+        if !assertion_candidate_is_authorized(
+            policy,
+            context.security().principal_id(),
+            owner_history_space_id,
+            assertion,
+        ) {
+            continue;
+        }
+        let record_context = assertion.context();
+        if record_context.perspective_scope() != query.perspective_scope
+            || record_context.epistemic_mode() != query.epistemic_mode
+            || !selected_layer_ids.contains(&record_context.layer_id())
+        {
+            return Err(CandidateScanError::Index(
+                AssertionPointIndexError::IndexHitMismatch,
+            ));
+        }
+        let archive_target = ArchiveTargetRef::Assertion(assertion.id());
+        let archive_record = archive.target_record(archive_target).ok_or(
+            CandidateScanError::MissingArchiveInventoryTarget {
+                assertion_id: assertion.id(),
+            },
+        )?;
+        if archive_record.created_revision() != assertion.created_revision() {
+            return Err(CandidateScanError::ArchiveTargetRevisionMismatch {
+                assertion_id: assertion.id(),
+                assertion_revision: assertion.created_revision(),
+                archive_target_revision: archive_record.created_revision(),
+            });
+        }
+        if archive.state_at(archive_target, query.recorded_as_of)? != ArchiveState::Unarchived {
+            continue;
+        }
+        let precedence = ContextPrecedence::for_context(
+            query.history_space_id,
+            owner_history_space_id,
+            record_context.layer_id(),
+            index.catalog(),
+            layers,
+        )?;
+        candidates.push(AssertionCandidate {
+            assertion: assertion.clone(),
+            source_history_space_id: owner_history_space_id,
+            query_history_space_id: query.history_space_id,
+            selected_layer_ids: selected_layer_ids.clone(),
+            precedence,
+        });
+    }
+
+    let assertion_ids = candidates
+        .iter()
+        .map(|candidate| candidate.assertion.id())
+        .collect::<BTreeSet<_>>();
+    let (closures, retractions) = index.lifecycle_for_assertions(
+        query.history_space_id,
+        query.recorded_as_of.revision(),
+        &assertion_ids,
+    )?;
+    let lifecycle = AssertionLifecycleProjection::new(
+        candidates
+            .iter()
+            .map(|candidate| candidate.assertion.clone())
+            .collect(),
+        closures,
+        retractions,
+    )?;
+    let active_ids = lifecycle
+        .candidates(query.recorded_as_of, query.world_time)?
+        .into_iter()
+        .map(Assertion::id)
+        .collect::<BTreeSet<_>>();
+    candidates.retain(|candidate| active_ids.contains(&candidate.assertion.id()));
+    candidates.sort_by_key(|candidate| candidate.assertion.id());
+    Ok(candidates)
 }
 
 fn validate_authorized_query_context(
@@ -304,7 +398,7 @@ fn full_scan_assertion_candidates_with_security(
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
     security: Option<(&SecurityPolicySnapshot, PrincipalId)>,
-    point_filter: Option<AssertionPointCandidateFilter<'_>>,
+    point_filter: Option<AssertionPointCandidateFilter>,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let selected_layers = layers.resolve(&query.layer_selection)?;
     let query_layer = *selected_layers
@@ -332,13 +426,6 @@ fn full_scan_assertion_candidates_with_security(
     {
         match record {
             AssertionHistoryRecord::Assertion(assertion) => {
-                if point_filter.is_some_and(|filter| {
-                    filter
-                        .indexed_assertion_ids
-                        .is_some_and(|ids| !ids.contains(&assertion.id()))
-                }) {
-                    continue;
-                }
                 if let Some((policy, principal_id)) = security {
                     if !assertion_candidate_is_authorized(
                         policy,
@@ -404,19 +491,23 @@ fn full_scan_assertion_candidates_with_security(
     }
 
     let lifecycle = AssertionLifecycleProjection::new(assertions, closures, retractions)?;
-    let ordinary_targets = archive
-        .ordinary_targets_at(query.recorded_as_of)?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    let ordinary_targets = if point_filter.is_none() {
+        Some(
+            archive
+                .ordinary_targets_at(query.recorded_as_of)?
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        )
+    } else {
+        None
+    };
     for assertion in lifecycle.assertions() {
         let target = ArchiveTargetRef::Assertion(assertion.id());
-        let archive_record = archive
-            .targets()
-            .iter()
-            .find(|record| record.target() == target)
-            .ok_or(CandidateScanError::MissingArchiveInventoryTarget {
+        let archive_record = archive.target_record(target).ok_or(
+            CandidateScanError::MissingArchiveInventoryTarget {
                 assertion_id: assertion.id(),
-            })?;
+            },
+        )?;
         if archive_record.created_revision() != assertion.created_revision() {
             return Err(CandidateScanError::ArchiveTargetRevisionMismatch {
                 assertion_id: assertion.id(),
@@ -429,10 +520,15 @@ fn full_scan_assertion_candidates_with_security(
     let mut candidates = Vec::new();
     for assertion in lifecycle.candidates(query.recorded_as_of, query.world_time)? {
         let context = assertion.context();
+        let target = ArchiveTargetRef::Assertion(assertion.id());
+        let is_ordinary = match &ordinary_targets {
+            Some(targets) => targets.contains(&target),
+            None => archive.state_at(target, query.recorded_as_of)? == ArchiveState::Unarchived,
+        };
         if context.perspective_scope() != query.perspective_scope
             || context.epistemic_mode() != query.epistemic_mode
             || !selected_layers.contains(&context.layer_id())
-            || !ordinary_targets.contains(&ArchiveTargetRef::Assertion(assertion.id()))
+            || !is_ordinary
         {
             continue;
         }
@@ -532,6 +628,8 @@ pub enum CandidateScanError {
     EmptyLayerSelection,
     /// Query arguments disagree with one or more validated QueryContext pins.
     QueryContextMismatch,
+    /// The typed point index reported an invalid or inconsistent result.
+    Index(AssertionPointIndexError),
     /// The HistorySpace record owner and assertion context disagree.
     ContextHistorySpaceMismatch {
         assertion_id: AssertionId,
@@ -572,6 +670,11 @@ impl From<ContextError> for CandidateScanError {
         Self::Context(error)
     }
 }
+impl From<AssertionPointIndexError> for CandidateScanError {
+    fn from(error: AssertionPointIndexError) -> Self {
+        Self::Index(error)
+    }
+}
 impl From<HistorySpaceModelError> for CandidateScanError {
     fn from(error: HistorySpaceModelError) -> Self {
         Self::History(error)
@@ -605,6 +708,7 @@ impl fmt::Display for CandidateScanError {
             Self::QueryContextMismatch => {
                 formatter.write_str("candidate request differs from its query context")
             }
+            Self::Index(error) => write!(formatter, "candidate point index failed: {error}"),
             Self::ContextHistorySpaceMismatch {
                 assertion_id,
                 owner_history_space_id,

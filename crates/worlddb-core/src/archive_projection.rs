@@ -132,15 +132,12 @@ impl ArchiveHistoryReferenceModel {
         target: ArchiveTargetRef,
         recorded_as_of: RecordedAsOf,
     ) -> Result<ArchiveState, ArchiveProjectionError> {
-        let target_record = self
-            .targets
-            .binary_search_by_key(&target, |record| record.target())
-            .ok()
-            .and_then(|index| self.targets.get(index))
-            .ok_or(ArchiveProjectionError::UnknownTarget {
-                transition_id: None,
-                target,
-            })?;
+        let target_record =
+            self.target_record(target)
+                .ok_or(ArchiveProjectionError::UnknownTarget {
+                    transition_id: None,
+                    target,
+                })?;
         let revision = recorded_as_of.revision();
         if target_record.created_revision() > revision {
             return Err(ArchiveProjectionError::TargetNotYetCreated {
@@ -150,19 +147,36 @@ impl ArchiveHistoryReferenceModel {
             });
         }
         let mut state = ArchiveState::Unarchived;
-        for transition in self.transitions.iter().filter(|transition| {
-            transition.target() == target && transition.created_revision() <= revision
-        }) {
-            state = state.transition(transition.action()).map_err(|error| {
-                ArchiveProjectionError::InvalidStateTransition {
-                    transition_id: transition.id(),
-                    prior_state: state,
-                    action: transition.action(),
-                    error,
-                }
-            })?;
+        let transition_start = self
+            .transitions
+            .partition_point(|transition| transition.target() < target);
+        for transition in self
+            .transitions
+            .iter()
+            .skip(transition_start)
+            .take_while(|transition| transition.target() == target)
+        {
+            if transition.created_revision() <= revision {
+                state = state.transition(transition.action()).map_err(|error| {
+                    ArchiveProjectionError::InvalidStateTransition {
+                        transition_id: transition.id(),
+                        prior_state: state,
+                        action: transition.action(),
+                        error,
+                    }
+                })?;
+            }
         }
         Ok(state)
+    }
+
+    /// Looks up one immutable archive target in the canonical sorted inventory.
+    #[must_use]
+    pub fn target_record(&self, target: ArchiveTargetRef) -> Option<ArchiveTargetRecord> {
+        self.targets
+            .binary_search_by_key(&target, |record| record.target())
+            .ok()
+            .and_then(|index| self.targets.get(index).copied())
     }
 
     /// Returns all raw-history targets that existed by this revision, archived or not.

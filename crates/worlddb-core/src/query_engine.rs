@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::archive_projection::ArchiveHistoryReferenceModel;
 use crate::assertion_point_index::{
-    AssertionPointHistoryIndex, AssertionPointIndexError, AssertionPointQuery,
+    AssertionIndexHit, AssertionPointHistoryIndex, AssertionPointIndexError, AssertionPointQuery,
 };
 use crate::candidate_scan::{
     AssertionCandidate, AssertionCandidateQuery, AssertionCandidateSecurityContext,
@@ -742,19 +742,16 @@ where
             let Some(index) = point_index.index else {
                 return Err(QueryEngineError::IndexPayloadUnavailable);
             };
-            match collect_point_index_ids(index, context, slot) {
-                Ok(indexed_ids) => (
+            match collect_point_index_hits(index, context, slot) {
+                Ok(hits) => (
                     indexed_authorized_assertion_candidates(
-                        history,
                         archive,
+                        index,
+                        &hits,
                         &query,
                         layers,
                         AssertionCandidateSecurityContext::new(security.snapshot(), context),
-                        AssertionPointCandidateFilter::indexed(
-                            slot.subject(),
-                            slot.predicate_id(),
-                            &indexed_ids,
-                        ),
+                        AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
                     )?,
                     QueryExecutionPath::Indexed { generation_id },
                 ),
@@ -780,10 +777,7 @@ where
                             &query,
                             layers,
                             AssertionCandidateSecurityContext::new(security.snapshot(), context),
-                            AssertionPointCandidateFilter::full_scan(
-                                slot.subject(),
-                                slot.predicate_id(),
-                            ),
+                            AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
                         )?,
                         QueryExecutionPath::IndexFallback {
                             reason: fallback_reason,
@@ -799,7 +793,7 @@ where
                 &query,
                 layers,
                 AssertionCandidateSecurityContext::new(security.snapshot(), context),
-                AssertionPointCandidateFilter::full_scan(slot.subject(), slot.predicate_id()),
+                AssertionPointCandidateFilter::new(slot.subject(), slot.predicate_id()),
             )?,
             QueryExecutionPath::IndexFallback { reason },
         ),
@@ -943,12 +937,12 @@ fn point_requirement(context: &QueryContext) -> Result<IndexQueryRequirement, Qu
     ))
 }
 
-fn collect_point_index_ids(
-    index: &AssertionPointHistoryIndex,
+fn collect_point_index_hits<'a>(
+    index: &'a AssertionPointHistoryIndex,
     context: &QueryContext,
     slot: MultiValueSlot,
-) -> Result<BTreeSet<AssertionId>, AssertionPointIndexError> {
-    let mut assertion_ids = BTreeSet::new();
+) -> Result<Vec<AssertionIndexHit<'a>>, AssertionPointIndexError> {
+    let mut hits = Vec::new();
     for layer_id in context.layers().resolved().as_slice() {
         let query_context = ContextKey::new(
             context.history_space(),
@@ -963,14 +957,9 @@ fn collect_point_index_ids(
             slot.predicate_id(),
             context.recorded_as_of().revision(),
         );
-        assertion_ids.extend(
-            index
-                .point(query)?
-                .into_iter()
-                .map(|hit| hit.assertion().id()),
-        );
+        hits.extend(index.point(query)?);
     }
-    Ok(assertion_ids)
+    Ok(hits)
 }
 
 fn candidate_ids(candidates: &[AssertionCandidate]) -> Vec<AssertionId> {

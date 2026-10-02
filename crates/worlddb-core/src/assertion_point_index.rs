@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::assertions::{Assertion, Subject};
+use crate::assertions::{Assertion, AssertionRetraction, AssertionValidityClosure, Subject};
 use crate::candidate_scan::AssertionHistoryRecord;
 use crate::context::{ContextKey, EpistemicMode, PerspectiveScope};
 use crate::history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
@@ -76,6 +76,12 @@ struct AssertionPosting {
     assertion: Assertion,
     owner_history_space_id: HistorySpaceId,
     recorded_revision: Revision,
+}
+
+#[derive(Clone, Debug)]
+enum IndexedAssertionLifecycleRecord {
+    ValidityClosure(AssertionValidityClosure),
+    Retraction(AssertionRetraction),
 }
 
 /// One index hit with the immutable Assertion and its original commit coordinates.
@@ -184,6 +190,8 @@ pub struct AssertionPointHistoryIndex {
     point: BTreeMap<PointKey, Vec<usize>>,
     entity_history: BTreeMap<EntityHistoryKey, Vec<usize>>,
     predicate_history: BTreeMap<PredicateHistoryKey, Vec<usize>>,
+    lifecycle:
+        BTreeMap<(HistorySpaceId, AssertionId), Vec<(Revision, IndexedAssertionLifecycleRecord)>>,
 }
 
 impl AssertionPointHistoryIndex {
@@ -200,6 +208,7 @@ impl AssertionPointHistoryIndex {
             point: BTreeMap::new(),
             entity_history: BTreeMap::new(),
             predicate_history: BTreeMap::new(),
+            lifecycle: BTreeMap::new(),
         };
         let mut assertion_ids = BTreeSet::new();
 
@@ -214,76 +223,111 @@ impl AssertionPointHistoryIndex {
                 if visible_owner != owner_history_space_id {
                     continue;
                 }
-                let AssertionHistoryRecord::Assertion(assertion) = record else {
-                    continue;
-                };
-                let assertion = (**assertion).clone();
-                let record_revision = assertion.created_revision();
-                if stored_revision != record_revision {
-                    return Err(AssertionPointIndexError::StoredRevisionMismatch {
-                        owner_history_space_id,
-                        stored_revision,
-                        record_revision,
-                    });
-                }
-                if assertion.context().history_space_id() != owner_history_space_id {
-                    return Err(AssertionPointIndexError::ContextHistorySpaceMismatch {
-                        assertion_id: assertion.id(),
-                        owner_history_space_id,
-                        context_history_space_id: assertion.context().history_space_id(),
-                    });
-                }
-                if !assertion_ids.insert(assertion.id()) {
-                    return Err(AssertionPointIndexError::DuplicateAssertionId(
-                        assertion.id(),
-                    ));
-                }
+                match record {
+                    AssertionHistoryRecord::Assertion(assertion) => {
+                        let assertion = (**assertion).clone();
+                        let record_revision = assertion.created_revision();
+                        if stored_revision != record_revision {
+                            return Err(AssertionPointIndexError::StoredRevisionMismatch {
+                                owner_history_space_id,
+                                stored_revision,
+                                record_revision,
+                            });
+                        }
+                        if assertion.context().history_space_id() != owner_history_space_id {
+                            return Err(AssertionPointIndexError::ContextHistorySpaceMismatch {
+                                assertion_id: assertion.id(),
+                                owner_history_space_id,
+                                context_history_space_id: assertion.context().history_space_id(),
+                            });
+                        }
+                        if !assertion_ids.insert(assertion.id()) {
+                            return Err(AssertionPointIndexError::DuplicateAssertionId(
+                                assertion.id(),
+                            ));
+                        }
 
-                let context = assertion.context();
-                let subject = assertion.subject();
-                let predicate_id = assertion.predicate_id();
-                let position = index.postings.len();
-                index.postings.push(AssertionPosting {
-                    assertion,
-                    owner_history_space_id,
-                    recorded_revision: stored_revision,
-                });
-                let perspective = IndexPerspective::from(context.perspective_scope());
-                let epistemic_mode = IndexEpistemicMode::from(context.epistemic_mode());
-                index
-                    .point
-                    .entry(PointKey {
-                        owner_history_space_id,
-                        layer_id: context.layer_id(),
-                        perspective,
-                        epistemic_mode,
-                        subject,
-                        predicate_id,
-                    })
-                    .or_default()
-                    .push(position);
-                index
-                    .entity_history
-                    .entry(EntityHistoryKey {
-                        owner_history_space_id,
-                        layer_id: context.layer_id(),
-                        perspective,
-                        epistemic_mode,
-                        subject,
-                    })
-                    .or_default()
-                    .push(position);
-                index
-                    .predicate_history
-                    .entry(PredicateHistoryKey {
-                        owner_history_space_id,
-                        layer_id: context.layer_id(),
-                        perspective,
-                        epistemic_mode,
-                        predicate_id,
-                    })
-                    .or_default()
-                    .push(position);
+                        let context = assertion.context();
+                        let subject = assertion.subject();
+                        let predicate_id = assertion.predicate_id();
+                        let position = index.postings.len();
+                        index.postings.push(AssertionPosting {
+                            assertion,
+                            owner_history_space_id,
+                            recorded_revision: stored_revision,
+                        });
+                        let perspective = IndexPerspective::from(context.perspective_scope());
+                        let epistemic_mode = IndexEpistemicMode::from(context.epistemic_mode());
+                        index
+                            .point
+                            .entry(PointKey {
+                                owner_history_space_id,
+                                layer_id: context.layer_id(),
+                                perspective,
+                                epistemic_mode,
+                                subject,
+                                predicate_id,
+                            })
+                            .or_default()
+                            .push(position);
+                        index
+                            .entity_history
+                            .entry(EntityHistoryKey {
+                                owner_history_space_id,
+                                layer_id: context.layer_id(),
+                                perspective,
+                                epistemic_mode,
+                                subject,
+                            })
+                            .or_default()
+                            .push(position);
+                        index
+                            .predicate_history
+                            .entry(PredicateHistoryKey {
+                                owner_history_space_id,
+                                layer_id: context.layer_id(),
+                                perspective,
+                                epistemic_mode,
+                                predicate_id,
+                            })
+                            .or_default()
+                            .push(position);
+                    }
+                    AssertionHistoryRecord::ValidityClosure(closure) => {
+                        if stored_revision != closure.created_revision() {
+                            return Err(AssertionPointIndexError::StoredRevisionMismatch {
+                                owner_history_space_id,
+                                stored_revision,
+                                record_revision: closure.created_revision(),
+                            });
+                        }
+                        index
+                            .lifecycle
+                            .entry((owner_history_space_id, closure.assertion_id()))
+                            .or_default()
+                            .push((
+                                stored_revision,
+                                IndexedAssertionLifecycleRecord::ValidityClosure(*closure),
+                            ));
+                    }
+                    AssertionHistoryRecord::Retraction(retraction) => {
+                        if stored_revision != retraction.created_revision() {
+                            return Err(AssertionPointIndexError::StoredRevisionMismatch {
+                                owner_history_space_id,
+                                stored_revision,
+                                record_revision: retraction.created_revision(),
+                            });
+                        }
+                        index
+                            .lifecycle
+                            .entry((owner_history_space_id, retraction.assertion_id()))
+                            .or_default()
+                            .push((
+                                stored_revision,
+                                IndexedAssertionLifecycleRecord::Retraction(retraction.clone()),
+                            ));
+                    }
+                }
             }
         }
         Ok(index)
@@ -293,6 +337,12 @@ impl AssertionPointHistoryIndex {
     #[must_use]
     pub const fn indexed_through(&self) -> Revision {
         self.indexed_through
+    }
+
+    /// Returns the immutable HistorySpace catalog pinned into this generation.
+    #[must_use]
+    pub(crate) fn catalog(&self) -> &crate::catalog::HistorySpaceCatalog {
+        &self.catalog
     }
 
     /// Finds all Assertions at one exact Entity/Predicate point through `as_of`.
@@ -363,6 +413,40 @@ impl AssertionPointHistoryIndex {
             },
         );
         Ok(hits)
+    }
+
+    pub(crate) fn lifecycle_for_assertions(
+        &self,
+        history_space_id: HistorySpaceId,
+        as_of: Revision,
+        assertion_ids: &BTreeSet<AssertionId>,
+    ) -> Result<(Vec<AssertionValidityClosure>, Vec<AssertionRetraction>), AssertionPointIndexError>
+    {
+        let visible_spaces = self.visible_spaces(history_space_id, as_of)?;
+        let mut closures = Vec::new();
+        let mut retractions = Vec::new();
+        for (owner_history_space_id, cutoff) in visible_spaces {
+            for assertion_id in assertion_ids {
+                let Some(records) = self.lifecycle.get(&(owner_history_space_id, *assertion_id))
+                else {
+                    continue;
+                };
+                for (stored_revision, record) in records {
+                    if *stored_revision > cutoff || *stored_revision > as_of {
+                        continue;
+                    }
+                    match record {
+                        IndexedAssertionLifecycleRecord::ValidityClosure(closure) => {
+                            closures.push(*closure);
+                        }
+                        IndexedAssertionLifecycleRecord::Retraction(retraction) => {
+                            retractions.push(retraction.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok((closures, retractions))
     }
 
     fn visible_spaces(
@@ -440,6 +524,8 @@ where
 pub enum AssertionPointIndexError {
     /// A retained Assertion ID appeared more than once in the source history.
     DuplicateAssertionId(AssertionId),
+    /// A point-index result does not match the coordinates used to request it.
+    IndexHitMismatch,
     /// The source log revision differs from the immutable Assertion record.
     StoredRevisionMismatch {
         owner_history_space_id: HistorySpaceId,
@@ -478,6 +564,9 @@ impl fmt::Display for AssertionPointIndexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateAssertionId(id) => write!(formatter, "duplicate AssertionId {id}"),
+            Self::IndexHitMismatch => {
+                formatter.write_str("Assertion point index returned a hit outside its query")
+            }
             Self::StoredRevisionMismatch {
                 owner_history_space_id,
                 stored_revision,
