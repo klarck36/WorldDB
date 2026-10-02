@@ -373,6 +373,33 @@ impl CompactionManager {
         Ok((pins, durable))
     }
 
+    /// Pins every segment in one current logical-export snapshot, including a
+    /// durable cross-process lease consumed by reclamation.
+    pub(crate) fn pin_export_snapshot(
+        &self,
+        writer_lock: &WriterLock,
+        references: &[ManifestSegmentReference],
+    ) -> Result<(Vec<SegmentPin>, DurableBackupPin), CompactionError> {
+        self.require_write_lock(writer_lock)?;
+        let current = ManifestStore::new(self.layout.clone())
+            .read_current()
+            .map_err(CompactionError::Manifest)?;
+        if current.as_ref().map_or(&[][..], Manifest::segments) != references {
+            return Err(CompactionError::SegmentNotCurrent);
+        }
+        let mut pins = Vec::new();
+        pins.try_reserve_exact(references.len())
+            .map_err(|_| CompactionError::PinCountOverflow)?;
+        for reference in references {
+            pins.push(self.pin_current_segment(*reference, SegmentPinKind::Export)?);
+        }
+        // Backup and logical export leases share the same durable inventory
+        // format and reclamation scan; the lease's consumer does not affect
+        // which immutable History segments it protects.
+        let durable = create_durable_backup_pin(&self.layout, references)?;
+        Ok((pins, durable))
+    }
+
     /// Rewrites the current History segments when the result uses fewer files.
     ///
     /// This is a storage maintenance commit: it advances the durable revision

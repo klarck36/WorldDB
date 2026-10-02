@@ -29,7 +29,7 @@ mod schema;
 const MAX_RECORD_NESTING_DEPTH: usize = 7;
 
 /// Stable top-level frame kind assignments for the WorldDB record stream.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u32)]
 pub enum RecordKind {
     /// Immutable HistorySpace ancestry metadata.
@@ -107,10 +107,95 @@ pub enum RecordKind {
 }
 
 impl RecordKind {
+    /// Every record kind in canonical numeric order.
+    pub const ALL: [Self; 36] = [
+        Self::HistorySpaceDefinition,
+        Self::Entity,
+        Self::EntityRetirement,
+        Self::PerspectiveDefinitionRevision,
+        Self::PerspectiveRetirement,
+        Self::LayerDefinition,
+        Self::LayerSchemaSnapshot,
+        Self::EntityTypeDefinition,
+        Self::PredicateDefinition,
+        Self::EventKindDefinition,
+        Self::MigrationPlan,
+        Self::MigrationRun,
+        Self::MigrationStepCommitIdentity,
+        Self::Assertion,
+        Self::AssertionValidityClosure,
+        Self::AssertionRetraction,
+        Self::Mask,
+        Self::MaskValidityClosure,
+        Self::MaskRetraction,
+        Self::ReplacementBoundary,
+        Self::ReplacementBoundaryValidityClosure,
+        Self::ReplacementBoundaryRetraction,
+        Self::ArchiveTransition,
+        Self::Event,
+        Self::EventMask,
+        Self::EventSpanClosure,
+        Self::EventRetraction,
+        Self::EventMaskRetraction,
+        Self::EventRelation,
+        Self::EventRelationRetraction,
+        Self::Source,
+        Self::Evidence,
+        Self::Provenance,
+        Self::EvidenceRetraction,
+        Self::ProvenanceRetraction,
+        Self::TransferLineage,
+    ];
+
     /// Returns the stable frame-kind number.
     #[must_use]
     pub const fn number(self) -> u32 {
         self as u32
+    }
+
+    /// Returns the frame kind for one closed typed record.
+    #[must_use]
+    pub const fn of(record: &Record) -> Self {
+        match record {
+            Record::HistorySpaceDefinition(_) => Self::HistorySpaceDefinition,
+            Record::Entity(_) => Self::Entity,
+            Record::EntityRetirement(_) => Self::EntityRetirement,
+            Record::PerspectiveDefinitionRevision(_) => Self::PerspectiveDefinitionRevision,
+            Record::PerspectiveRetirement(_) => Self::PerspectiveRetirement,
+            Record::LayerDefinition(_) => Self::LayerDefinition,
+            Record::LayerSchemaSnapshot(_) => Self::LayerSchemaSnapshot,
+            Record::EntityTypeDefinition(_) => Self::EntityTypeDefinition,
+            Record::PredicateDefinition(_) => Self::PredicateDefinition,
+            Record::EventKindDefinition(_) => Self::EventKindDefinition,
+            Record::MigrationPlan(_) => Self::MigrationPlan,
+            Record::MigrationRun(_) => Self::MigrationRun,
+            Record::MigrationStepCommitIdentity(_) => Self::MigrationStepCommitIdentity,
+            Record::Assertion(_) => Self::Assertion,
+            Record::AssertionValidityClosure(_) => Self::AssertionValidityClosure,
+            Record::AssertionRetraction(_) => Self::AssertionRetraction,
+            Record::Mask(_) => Self::Mask,
+            Record::MaskValidityClosure(_) => Self::MaskValidityClosure,
+            Record::MaskRetraction(_) => Self::MaskRetraction,
+            Record::ReplacementBoundary(_) => Self::ReplacementBoundary,
+            Record::ReplacementBoundaryValidityClosure(_) => {
+                Self::ReplacementBoundaryValidityClosure
+            }
+            Record::ReplacementBoundaryRetraction(_) => Self::ReplacementBoundaryRetraction,
+            Record::ArchiveTransition(_) => Self::ArchiveTransition,
+            Record::Event(_) => Self::Event,
+            Record::EventMask(_) => Self::EventMask,
+            Record::EventSpanClosure(_) => Self::EventSpanClosure,
+            Record::EventRetraction(_) => Self::EventRetraction,
+            Record::EventMaskRetraction(_) => Self::EventMaskRetraction,
+            Record::EventRelation(_) => Self::EventRelation,
+            Record::EventRelationRetraction(_) => Self::EventRelationRetraction,
+            Record::Source(_) => Self::Source,
+            Record::Evidence(_) => Self::Evidence,
+            Record::Provenance(_) => Self::Provenance,
+            Record::EvidenceRetraction(_) => Self::EvidenceRetraction,
+            Record::ProvenanceRetraction(_) => Self::ProvenanceRetraction,
+            Record::TransferLineage(_) => Self::TransferLineage,
+        }
     }
 
     fn from_number(number: u32) -> Option<Self> {

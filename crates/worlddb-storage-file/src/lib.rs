@@ -9,6 +9,7 @@ mod format;
 mod index_generation;
 mod index_rebuild;
 mod layout;
+mod logical_export;
 mod manifest;
 mod migration_run_journal;
 mod recovery;
@@ -52,6 +53,11 @@ pub use index_rebuild::{
     IndexRebuildReceipt, IndexRebuildSource, PinnedIndexSnapshot, StoredIndexGeneration,
 };
 pub use layout::{DatabaseLayout, StorageFileError};
+pub use logical_export::{
+    LogicalExport, LogicalExportClassSummary, LogicalExportEntry, LogicalExportError,
+    LogicalExportHistorySpace, LogicalExportInclusion, LogicalExportManager, LogicalExportManifest,
+    LogicalExportScope, LogicalExportStorageClass,
+};
 pub use manifest::{
     Manifest, ManifestError, ManifestReceipt, ManifestSegmentKind, ManifestSegmentReference,
     ManifestSnapshot, ManifestStore,
