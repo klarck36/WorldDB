@@ -2574,6 +2574,54 @@ mod tests {
     }
 
     #[test]
+    fn resume_rejects_changed_source_fingerprint_before_another_commit() -> Result<(), String> {
+        let (plan, step_ids) = two_step_plan(MigrationCategory::Additive, 10)?;
+        let run_id = run_id()?;
+        let mut backend = InMemoryRevisionBackend::<Record>::new();
+        let mut journal = MemoryJournalStore::failing_after_first_commit();
+        let interrupted = execute_or_resume_compatible_migration(
+            &mut backend,
+            &mut journal,
+            MigrationExecutionContext::new(&plan, run_id, [0x11; 32], transformer()?),
+            prepared_steps(step_ids)?,
+            |_, _, _, _| Ok::<(), String>(()),
+        );
+        assert!(interrupted.is_err());
+        assert_eq!(backend.latest_published(), Revision::FIRST_COMMIT);
+
+        let failure = match execute_or_resume_compatible_migration(
+            &mut backend,
+            &mut journal,
+            MigrationExecutionContext::new(&plan, run_id, [0x99; 32], transformer()?),
+            prepared_steps(step_ids)?,
+            |_, _, _, _| Ok::<(), String>(()),
+        ) {
+            Ok(_) => {
+                return Err(String::from(
+                    "changed source fingerprint must fail on resume",
+                ));
+            }
+            Err(failure) => failure,
+        };
+        assert!(matches!(
+            failure.error(),
+            MigrationResumeError::Execution(MigrationExecutionError::Plan(
+                crate::MigrationPlanError::SourceSchemaPreconditionMismatch
+            ))
+        ));
+        assert_eq!(backend.latest_published(), Revision::FIRST_COMMIT);
+        assert_eq!(
+            backend
+                .read_at(backend.latest_published())
+                .map_err(|error| error.to_string())?
+                .filter(|(_, record)| matches!(record, Record::MigrationStepCommitIdentity(_)))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
     fn status_query_rejects_duplicate_operation_markers() -> Result<(), String> {
         let mut backend = InMemoryRevisionBackend::<Record>::new();
         let identity = crate::MigrationStepCommitIdentity::new(

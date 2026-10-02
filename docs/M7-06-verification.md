@@ -17,10 +17,10 @@
 
 - Drei Journal-Codec-/Übergangstests prüfen Roundtrip aller Zustände, Prüfsummen- und Reihenfolgefehler sowie monotone Übergänge und unveränderliche Eingaben.
 - `migration_execution::tests::resume_reconciles_commit_when_journal_update_fails_after_publication` simuliert den unbekannten Ausgang nach normativem Commit und bestätigt die Wiederaufnahme ohne Doppelcommit.
-- `migration_execution::tests::resume_rejects_changed_input_fingerprint_before_another_commit` sowie `migration_execution::tests::start_rejects_source_and_transformer_version_mismatch_before_journaling` prüfen fail-closed Eingabe-, Source- und Versionsbindung vor dem nächsten Commit bzw. vor Journalanlage.
+- `migration_execution::tests::resume_rejects_changed_input_fingerprint_before_another_commit` sowie `migration_execution::tests::start_rejects_source_and_transformer_version_mismatch_before_journaling` und `migration_execution::tests::resume_rejects_changed_source_fingerprint_before_another_commit` prüfen fail-closed Eingabe-, Source- und Versionsbindung vor dem nächsten Commit bzw. vor Journalanlage.
 - `migration_execution::tests::status_query_rejects_duplicate_operation_markers` lehnt mehrdeutige normative Marker ab. `migration_execution::tests::compensation_is_a_new_migration_appended_after_the_committed_prefix` belegt neue Migrationsidentität, zusätzlichen Run und unveränderten ursprünglichen Prefix.
 - Zwei File-Store-Tests prüfen persistentes Wiederöffnen monotoner Sidecars sowie die Ablehnung einer Statusumkehr.
-- `cargo test --locked --workspace`: **PASS** (497 Core-Unit-Tests; alle übrigen Workspace- und Rustdoc-Suites bestanden; ein vorhandener manueller Langlauf blieb ignoriert).
+- `cargo test --locked --workspace`: **PASS** (498 Core-Unit-Tests; alle übrigen Workspace- und Rustdoc-Suites bestanden; ein vorhandener manueller Langlauf blieb ignoriert).
 - `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, Workspace-Check, Plancheck, Sourcecheck und `git diff --check`: **PASS**.
 - `cargo xtask verify`: **38 PASS, 1 erwarteter M0-14-`ci-matrix`-SKIP, 0 FAIL**.
 
