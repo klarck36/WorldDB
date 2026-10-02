@@ -17,17 +17,19 @@ use crate::{
     EventRelationInputKind, EventRelationRetraction, EventRetraction, EventRoleDefinition,
     EventSpanClosure, EventTimeConstraint, EventTimeForm, Evidence, EvidenceRelation,
     EvidenceRetraction, EvidenceTargetRef, FrameHeader, HistorySpaceContentRef,
-    HistorySpaceDefinition, Int, LayerDefinition, LayerSchemaSnapshot, Lifecycle, Mask,
+    HistorySpaceDefinition, Int, JobBudget, LayerDefinition, LayerSchemaSnapshot, Lifecycle, Mask,
     MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure, MigrationCategory,
-    MigrationPlan, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
-    PerspectiveDefinitionRevision, PerspectiveRetirement, PerspectiveScope, Polarity,
-    PredicateDefinition, PredicateDefinitionSpec, PropositionKey, ProvenanceEdge,
-    ProvenanceEndpointRef, ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef,
-    ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
-    ResolutionPolicy, Revision, RoleCardinality, SchemaRevision, Source, SourceContentDigest,
-    SourceLocator, SourceMetadata, SourceMetadataEntry, Subject, Symbol, Time, TimeInterval,
-    Timeline, TimelineId, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint,
-    ValueKind, WorldTime, encode_frame, encode_id,
+    MigrationPlan, MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
+    MigrationTargetSchema, MigrationTransformerVersion, PerspectiveDefinitionRevision,
+    PerspectiveRetirement, PerspectiveScope, Polarity, PredicateDefinition,
+    PredicateDefinitionSpec, PropositionKey, ProvenanceEdge, ProvenanceEndpointRef,
+    ProvenanceRelation, ProvenanceRetraction, RecordCodecError, RecordRef, ReplacementBoundary,
+    ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, ResolutionPolicy, Revision,
+    RoleCardinality, SchemaDefinitionId, SchemaIdentityTransition, SchemaRevision, Source,
+    SourceContentDigest, SourceLocator, SourceMetadata, SourceMetadataEntry,
+    SourceSchemaPrecondition, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId,
+    TlvDecoder, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint, ValueKind,
+    WorldTime, decode_frame, encode_frame, encode_id,
 };
 
 fn id<T: DomainId>(tail: u8) -> Option<T> {
@@ -40,6 +42,31 @@ fn id<T: DomainId>(tail: u8) -> Option<T> {
 
 fn symbol(text: &str) -> Option<Symbol> {
     Symbol::new(text).ok()
+}
+
+fn migration_plan_frame_with_field_replaced(field_tag: u32, value: &[u8]) -> Option<Vec<u8>> {
+    let record = fixtures()?
+        .into_iter()
+        .find(|(name, _)| *name == "migration_plan")?
+        .1;
+    let encoded = encode_record(&record).ok()?;
+    let frame = decode_frame(&encoded).ok()?;
+    let mut decoder = TlvDecoder::new(frame.payload());
+    let mut encoder = TlvEncoder::new();
+    let mut replaced = false;
+    while let Some(field) = decoder.next_field().ok()? {
+        let field_value = if field.tag() == field_tag {
+            replaced = true;
+            value
+        } else {
+            field.value()
+        };
+        encoder.push(field.tag(), field_value).ok()?;
+    }
+    if !replaced {
+        return None;
+    }
+    encode_frame(frame.header(), &encoder.finish()).ok()
 }
 
 fn fixtures() -> Option<Vec<(&'static str, Record)>> {
@@ -126,8 +153,26 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
         revision,
     )
     .ok()?;
-    let migration_plan =
-        MigrationPlan::new(migration_id, MigrationCategory::Additive, vec![step_id]).ok()?;
+    let schema_change = SchemaIdentityTransition::new(
+        None,
+        Some(SchemaDefinitionId::Predicate(predicate_id)),
+        MigrationCategory::Additive,
+    )
+    .ok()?;
+    let migration_plan = MigrationPlan::new(MigrationPlanSpec {
+        migration_id,
+        category: MigrationCategory::Additive,
+        source_schema: SourceSchemaPrecondition::new(schema_revision, [0x11; 32]),
+        target_schema: MigrationTargetSchema::new(
+            SchemaRevision::from_published_revision(Revision::FIRST_COMMIT),
+            [0x22; 32],
+        ),
+        steps: vec![step_id],
+        schema_changes: vec![schema_change],
+        transformer_version: MigrationTransformerVersion::new(1).ok()?,
+        budget: JobBudget::new(1_000, 1024 * 1024).ok()?,
+    })
+    .ok()?;
     let perspective_definition = PerspectiveDefinitionRevision::new(
         perspective_id,
         Some(String::from("Research")),
@@ -1394,6 +1439,78 @@ fn source_decoder_rejects_noncanonical_metadata_and_empty_optional_values() {
             Err(RecordCodecError::InvalidFieldValue {
                 kind: 0x1301,
                 field: 4
+            })
+        ));
+    }
+}
+
+#[test]
+fn migration_plan_decoder_reports_precise_invalid_fields() {
+    let invalid_category = migration_plan_frame_with_field_replaced(2, &[6]);
+    assert!(invalid_category.is_some());
+    if let Some(frame) = invalid_category {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 2
+            })
+        ));
+    }
+
+    let misclassified_category = migration_plan_frame_with_field_replaced(2, &[5]);
+    assert!(misclassified_category.is_some());
+    if let Some(frame) = misclassified_category {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 2
+            })
+        ));
+    }
+
+    let zero_work_budget = migration_plan_frame_with_field_replaced(9, &[0]);
+    assert!(zero_work_budget.is_some());
+    if let Some(frame) = zero_work_budget {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 9
+            })
+        ));
+    }
+
+    let zero_memory_budget = migration_plan_frame_with_field_replaced(10, &[0]);
+    assert!(zero_memory_budget.is_some());
+    if let Some(frame) = zero_memory_budget {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 10
+            })
+        ));
+    }
+
+    let nested_invalid_category = super::encode_fields(
+        RecordKind::MigrationPlan,
+        vec![(1, vec![0]), (2, vec![0]), (3, vec![6])],
+    );
+    assert!(nested_invalid_category.is_ok());
+    let Some(nested_invalid_category) = nested_invalid_category.ok() else {
+        return;
+    };
+    let schema_changes = super::encode_array(&[nested_invalid_category]);
+    let invalid_nested_category = migration_plan_frame_with_field_replaced(12, &schema_changes);
+    assert!(invalid_nested_category.is_some());
+    if let Some(frame) = invalid_nested_category {
+        assert!(matches!(
+            decode_record(&frame),
+            Err(RecordCodecError::InvalidFieldValue {
+                kind: 0x100b,
+                field: 3
             })
         ));
     }

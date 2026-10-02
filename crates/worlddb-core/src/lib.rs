@@ -829,8 +829,10 @@ pub use masks::{
     ReplacementBoundaryValidityClosure,
 };
 pub use migration::{
-    MigrationCategory, MigrationPlan, MigrationPlanError, MigrationRun, MigrationRunState,
-    MigrationStepCommitIdentity,
+    MigrationCategory, MigrationPlan, MigrationPlanError, MigrationPlanFingerprint,
+    MigrationPlanSpec, MigrationRun, MigrationRunState, MigrationStepCommitIdentity,
+    MigrationTargetSchema, MigrationTransformerVersion, SchemaChangeImpact, SchemaDefinitionId,
+    SchemaIdentityTransition, SchemaIdentityTransitionError, SourceSchemaPrecondition,
 };
 pub use multi_value_resolution::{
     MultiValueConflict, MultiValueEntry, MultiValueOutcome, MultiValueReplaceContext,

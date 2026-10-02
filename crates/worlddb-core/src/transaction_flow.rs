@@ -256,7 +256,11 @@ mod tests {
     };
     use crate::revision_history::{HistoricalRead, RevisionLogError};
     use crate::transaction::TransactionState;
-    use crate::{DomainId, MigrationCategory, MigrationId, MigrationPlan, MigrationStepId, Record};
+    use crate::{
+        DomainId, JobBudget, MigrationCategory, MigrationId, MigrationPlan, MigrationPlanSpec,
+        MigrationStepId, MigrationTargetSchema, MigrationTransformerVersion, Record,
+        SchemaDefinitionId, SchemaIdentityTransition, SourceSchemaPrecondition,
+    };
 
     use super::{
         CancellableCommitError, MixedRecordCommitError, OpenTransaction, TransactionBeginError,
@@ -269,6 +273,37 @@ mod tests {
         bytes[8] = 0x80;
         bytes[15] = tail;
         T::try_from_bytes(bytes)
+    }
+
+    fn migration_plan(
+        migration_id: MigrationId,
+        step_id: MigrationStepId,
+        predicate_id: crate::PredicateId,
+    ) -> Result<MigrationPlan, String> {
+        let schema_change = SchemaIdentityTransition::new(
+            None,
+            Some(SchemaDefinitionId::Predicate(predicate_id)),
+            MigrationCategory::Additive,
+        )
+        .map_err(|error| error.to_string())?;
+        MigrationPlan::new(MigrationPlanSpec {
+            migration_id,
+            category: MigrationCategory::Additive,
+            source_schema: SourceSchemaPrecondition::new(
+                crate::SchemaRevision::from_published_revision(Revision::GENESIS),
+                [1; 32],
+            ),
+            target_schema: MigrationTargetSchema::new(
+                crate::SchemaRevision::from_published_revision(Revision::FIRST_COMMIT),
+                [2; 32],
+            ),
+            steps: vec![step_id],
+            schema_changes: vec![schema_change],
+            transformer_version: MigrationTransformerVersion::new(1)
+                .map_err(|error| error.to_string())?,
+            budget: JobBudget::new(1_000, 1024 * 1024).map_err(|error| error.to_string())?,
+        })
+        .map_err(|error| error.to_string())
     }
 
     struct GatedBackend {
@@ -490,22 +525,16 @@ mod tests {
 
     #[test]
     fn cancellable_mixed_record_batch_aborts_without_publishing_any_record() -> Result<(), String> {
-        let first = Record::MigrationPlan(
-            MigrationPlan::new(
-                id::<MigrationId>(1).map_err(|error| error.to_string())?,
-                MigrationCategory::MetadataOnly,
-                vec![id::<MigrationStepId>(2).map_err(|error| error.to_string())?],
-            )
-            .map_err(|error| error.to_string())?,
-        );
-        let second = Record::MigrationPlan(
-            MigrationPlan::new(
-                id::<MigrationId>(3).map_err(|error| error.to_string())?,
-                MigrationCategory::MetadataOnly,
-                vec![id::<MigrationStepId>(4).map_err(|error| error.to_string())?],
-            )
-            .map_err(|error| error.to_string())?,
-        );
+        let first = Record::MigrationPlan(migration_plan(
+            id::<MigrationId>(1).map_err(|error| error.to_string())?,
+            id::<MigrationStepId>(2).map_err(|error| error.to_string())?,
+            id::<crate::PredicateId>(5).map_err(|error| error.to_string())?,
+        )?);
+        let second = Record::MigrationPlan(migration_plan(
+            id::<MigrationId>(3).map_err(|error| error.to_string())?,
+            id::<MigrationStepId>(4).map_err(|error| error.to_string())?,
+            id::<crate::PredicateId>(6).map_err(|error| error.to_string())?,
+        )?);
         let mut backend = InMemoryRevisionBackend::new();
         let mut transaction = OpenTransaction::begin(&mut backend, Revision::GENESIS)
             .map_err(|error| error.to_string())?;

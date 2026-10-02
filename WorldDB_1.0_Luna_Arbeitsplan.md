@@ -222,7 +222,7 @@ Die Reihenfolge folgt dem Master-Implementierungsplan M0–M10. **Die Zeilenfolg
 
 ### M7 – Migration, Backup, Restore, Export und Purge
 
-- [ ] **M7-01 – Migrationskategorien und Plan.** MetadataOnly, Additive, CompatibleConstraintChange, Restrictive, Breaking sowie immutable Plan mit Source-Precondition, Target, Steps, Transformer-Version, kanonischem Fingerprint und Budget bauen. **Fertig wenn** Bedeutungsbruch neue Schema-ID verlangt. (`WDB-MIG-006–009`, `WDB-SCH-014/015`)
+- [x] **M7-01 – Migrationskategorien und Plan.** MetadataOnly, Additive, CompatibleConstraintChange, Restrictive, Breaking sowie immutable Plan mit Source-Precondition, Target, Steps, Transformer-Version, kanonischem Fingerprint und Budget bauen. **Fertig wenn** Bedeutungsbruch neue Schema-ID verlangt. (`WDB-MIG-006–009`, `WDB-SCH-014/015`). Abnahme: `docs/M7-01-verification.md`; M7-06 integriert die Source-Precondition in Start/Resume.
 - [ ] **M7-02 – Deterministischen Transformer.** An die im Plan festgehaltene Version gebundene Transformation ohne Uhr, Zufall, Locale, Netzwerk oder AI im Commitpfad bauen. **Fertig wenn** gleiche Inputs/Version bytegleiches logisches Resultat ergeben und Versionsabweichung Start/Resume sperrt. (`WDB-MIG-010–012`)
 - [ ] **M7-03 – Dry Run.** Denselben Transformer mit Prüfsink für Counts, Platz, Warnings, Unresolved und Fehler nutzen. **Fertig wenn** Restrictive/Breaking vor Ausführung vollständig vorprüfbar sind.
 - [ ] **M7-04 – Unresolved-/Adminentscheidungen.** Jedes nicht eindeutig transformierbare Item einzeln dokumentieren und explizite validierte Entscheidung verlangen. **Fertig wenn** Restrictive/Breaking mit ungeklärtem Item nicht committen. (`WDB-MIG-013/014`)
