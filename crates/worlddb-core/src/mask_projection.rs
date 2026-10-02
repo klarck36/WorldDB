@@ -66,6 +66,28 @@ pub struct AuthorizedAssertionMaskHistory<'a> {
     archive_visible_masks: &'a BTreeSet<MaskId>,
 }
 
+/// Visible candidates after one authorized mask pass, with masks that removed
+/// at least one candidate for an Explain trace.
+#[derive(Clone, Debug)]
+pub struct AssertionMaskProjection {
+    candidates: Vec<AssertionCandidate>,
+    applied_mask_ids: Vec<MaskId>,
+}
+
+impl AssertionMaskProjection {
+    /// Candidates that survived the mask pass, in canonical AssertionId order.
+    #[must_use]
+    pub fn candidates(&self) -> &[AssertionCandidate] {
+        &self.candidates
+    }
+
+    /// Masks that actually removed one or more candidates, in canonical ID order.
+    #[must_use]
+    pub fn applied_mask_ids(&self) -> &[MaskId] {
+        &self.applied_mask_ids
+    }
+}
+
 impl<'a> AuthorizedAssertionMaskHistory<'a> {
     /// Binds Mask lifecycle and archive visibility inputs as one history view.
     #[must_use]
@@ -98,8 +120,32 @@ pub fn apply_assertion_masks<F>(
     retractions: &[MaskRetraction],
     archive_visible_masks: &BTreeSet<MaskId>,
     context: AssertionMaskContext<'_>,
-    mut temporal_value_equal: F,
+    temporal_value_equal: F,
 ) -> Result<Vec<AssertionCandidate>, MaskProjectionError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
+    Ok(apply_assertion_masks_with_trace(
+        candidates,
+        masks,
+        validity_closures,
+        retractions,
+        archive_visible_masks,
+        context,
+        temporal_value_equal,
+    )?
+    .candidates)
+}
+
+fn apply_assertion_masks_with_trace<F>(
+    candidates: &[AssertionCandidate],
+    masks: &[Mask],
+    validity_closures: &[MaskValidityClosure],
+    retractions: &[MaskRetraction],
+    archive_visible_masks: &BTreeSet<MaskId>,
+    context: AssertionMaskContext<'_>,
+    mut temporal_value_equal: F,
+) -> Result<AssertionMaskProjection, MaskProjectionError>
 where
     F: FnMut(&Value, &Value) -> Result<bool, ()>,
 {
@@ -141,6 +187,7 @@ where
     }
 
     let mut visible = Vec::with_capacity(candidates.len());
+    let mut applied_mask_ids = BTreeSet::new();
     'candidate: for candidate in candidates {
         let assertion = candidate.assertion();
         for mask in &active {
@@ -168,12 +215,16 @@ where
                 continue;
             }
             if selector_matches(mask.selector(), assertion, &mut temporal_value_equal)? {
+                applied_mask_ids.insert(mask.id());
                 continue 'candidate;
             }
         }
         visible.push(candidate.clone());
     }
-    Ok(visible)
+    Ok(AssertionMaskProjection {
+        candidates: visible,
+        applied_mask_ids: applied_mask_ids.into_iter().collect(),
+    })
 }
 
 /// Applies only authorized Masks to candidates already filtered by the same
@@ -187,6 +238,30 @@ pub fn apply_authorized_assertion_masks<F>(
     query_context: &QueryContext,
     temporal_value_equal: F,
 ) -> Result<Vec<AssertionCandidate>, MaskProjectionError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
+    Ok(apply_authorized_assertion_masks_with_trace(
+        candidates,
+        history,
+        context,
+        policy,
+        query_context,
+        temporal_value_equal,
+    )?
+    .candidates)
+}
+
+/// Applies security-filtered Masks and records the exact Masks that removed
+/// candidates, for a visibility-checked Explain result.
+pub fn apply_authorized_assertion_masks_with_trace<F>(
+    candidates: &[AssertionCandidate],
+    history: AuthorizedAssertionMaskHistory<'_>,
+    context: AssertionMaskContext<'_>,
+    policy: &SecurityPolicySnapshot,
+    query_context: &QueryContext,
+    temporal_value_equal: F,
+) -> Result<AssertionMaskProjection, MaskProjectionError>
 where
     F: FnMut(&Value, &Value) -> Result<bool, ()>,
 {
@@ -220,7 +295,7 @@ where
         .filter(|retraction| visible_ids.contains(&retraction.mask_id()))
         .cloned()
         .collect::<Vec<_>>();
-    apply_assertion_masks(
+    apply_assertion_masks_with_trace(
         candidates,
         &visible_masks,
         &visible_closures,

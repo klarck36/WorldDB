@@ -158,15 +158,49 @@ pub fn full_scan_authorized_raw_history<T: Clone>(
         .filter_map(|(revision, owner, value)| {
             let record = record_ref(value);
             let target = PolicyTarget::new(Some(owner), None, Some(record), None, None);
-            [Capability::HistorySpaceRead, Capability::RawHistoryRead]
-                .into_iter()
-                .all(|capability| {
-                    policy.authorize(principal, capability, target) == AuthorizationDecision::Allow
-                })
-                .then(|| RawHistoryRow::new(revision, owner, record, value.clone()))
+            [
+                Capability::HistorySpaceRead,
+                Capability::RawHistoryRead,
+                raw_record_read_capability(record),
+            ]
+            .into_iter()
+            .all(|capability| {
+                policy.authorize(principal, capability, target) == AuthorizationDecision::Allow
+            })
+            .then(|| RawHistoryRow::new(revision, owner, record, value.clone()))
         })
         .collect::<Vec<_>>();
     canonicalize_raw_history_rows(rows)
+}
+
+fn raw_record_read_capability(record_ref: RecordRef) -> Capability {
+    match record_ref {
+        RecordRef::Assertion(_) => Capability::AssertionRead,
+        RecordRef::Mask(_) => Capability::MaskRead,
+        RecordRef::ReplacementBoundary(_) => Capability::ReplacementBoundaryRead,
+        RecordRef::Event(_) => Capability::EventRead,
+        RecordRef::EventMask(_) => Capability::EventMaskRead,
+        RecordRef::EventRelation(_) => Capability::RelationshipRead,
+        RecordRef::Source(_) => Capability::SourceRead,
+        RecordRef::Evidence(_) => Capability::EvidenceRead,
+        RecordRef::Provenance(_) => Capability::ProvenanceRead,
+        RecordRef::AssertionValidityClosure(_)
+        | RecordRef::AssertionRetraction(_)
+        | RecordRef::MaskValidityClosure(_)
+        | RecordRef::MaskRetraction(_)
+        | RecordRef::ReplacementBoundaryValidityClosure(_)
+        | RecordRef::ReplacementBoundaryRetraction(_)
+        | RecordRef::EventSpanClosure(_)
+        | RecordRef::EventRetraction(_)
+        | RecordRef::EventMaskRetraction(_)
+        | RecordRef::EventRelationRetraction(_)
+        | RecordRef::EvidenceRetraction(_)
+        | RecordRef::ProvenanceRetraction(_)
+        | RecordRef::EntityRetirement(_)
+        | RecordRef::PerspectiveRetirement(_)
+        | RecordRef::ArchiveTransition(_) => Capability::LifecycleRead,
+        RecordRef::TransferLineage(_) => Capability::HistorySpaceTransfer,
+    }
 }
 
 /// Sorts owned raw rows by typed key and rejects repeated record identities.

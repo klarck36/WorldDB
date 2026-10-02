@@ -916,19 +916,23 @@ mod tests {
 
         let context = QueryContext::new(input()?)?;
         let principal = context.security().principal_id();
-        let rights = [Capability::HistorySpaceRead, Capability::RawHistoryRead]
-            .into_iter()
-            .enumerate()
-            .map(|(index, capability)| {
-                let rule_id = id::<crate::ids::PolicyRuleId>((40 + index) as u8)?;
-                Ok(CapabilityRule::new(
-                    rule_id,
-                    PolicySubject::Principal(principal),
-                    CapabilityGrant::new(capability, GrantEffect::Allow),
-                    PolicyScope::project(),
-                ))
-            })
-            .collect::<Result<Vec<_>, IdValidationError>>()?;
+        let rights = [
+            Capability::HistorySpaceRead,
+            Capability::RawHistoryRead,
+            Capability::AssertionRead,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, capability)| {
+            let rule_id = id::<crate::ids::PolicyRuleId>((40 + index) as u8)?;
+            Ok(CapabilityRule::new(
+                rule_id,
+                PolicySubject::Principal(principal),
+                CapabilityGrant::new(capability, GrantEffect::Allow),
+                PolicyScope::project(),
+            ))
+        })
+        .collect::<Result<Vec<_>, IdValidationError>>()?;
         let policy =
             SecurityPolicySnapshot::new(vec![Principal::new(principal)], vec![], vec![], rights)?;
         let versions = vec![

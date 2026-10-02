@@ -68,6 +68,35 @@ pub struct ReplacementBoundaryHistory<'a> {
     archive_visible_boundaries: &'a BTreeSet<ReplacementBoundaryId>,
 }
 
+/// MultiValueReplace result plus the surviving candidate and cutoff identities
+/// needed to construct a visibility-checked Explain trace.
+#[derive(Clone, Debug)]
+pub struct MultiValueReplaceTrace {
+    outcome: MultiValueOutcome,
+    surviving_assertion_ids: Vec<AssertionId>,
+    applied_boundary_ids: Vec<ReplacementBoundaryId>,
+}
+
+impl MultiValueReplaceTrace {
+    /// Resolved multi-value outcome.
+    #[must_use]
+    pub fn outcome(&self) -> &MultiValueOutcome {
+        &self.outcome
+    }
+
+    /// Candidate assertions that remained after the highest active cutoff.
+    #[must_use]
+    pub fn surviving_assertion_ids(&self) -> &[AssertionId] {
+        &self.surviving_assertion_ids
+    }
+
+    /// Active highest-precedence boundaries that defined the cutoff.
+    #[must_use]
+    pub fn applied_boundary_ids(&self) -> &[ReplacementBoundaryId] {
+        &self.applied_boundary_ids
+    }
+}
+
 impl<'a> ReplacementBoundaryHistory<'a> {
     /// Groups retained boundary history with the IDs visible at the query's RecordedAsOf.
     #[must_use]
@@ -303,6 +332,30 @@ pub fn resolve_multi_value_replace<F>(
 where
     F: FnMut(&Value, &Value) -> Result<bool, ()>,
 {
+    Ok(resolve_multi_value_replace_with_trace(
+        candidates,
+        boundary_history,
+        slot,
+        predicate,
+        context,
+        temporal_value_equal,
+    )?
+    .outcome)
+}
+
+/// Resolves MultiValueReplace and returns the exact boundary/candidate transition
+/// alongside the outcome for Explain construction.
+pub fn resolve_multi_value_replace_with_trace<F>(
+    candidates: &[AssertionCandidate],
+    boundary_history: ReplacementBoundaryHistory<'_>,
+    slot: MultiValueSlot,
+    predicate: &PredicateDefinition,
+    context: MultiValueReplaceContext<'_>,
+    temporal_value_equal: F,
+) -> Result<MultiValueReplaceTrace, MultiValueResolutionError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
     if predicate.predicate_id() != slot.predicate_id {
         return Err(MultiValueResolutionError::SchemaPredicateMismatch {
             expected: slot.predicate_id,
@@ -390,6 +443,13 @@ where
         .iter()
         .map(|(_, precedence)| *precedence)
         .max();
+    let applied_boundary_ids = active_boundaries
+        .iter()
+        .filter(|(_, precedence)| Some(*precedence) == cutoff)
+        .map(|(boundary, _)| boundary.id())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
     let mut surviving = Vec::new();
     for candidate in candidates.iter().filter(|candidate| {
         candidate.assertion().subject() == slot.subject
@@ -416,11 +476,21 @@ where
         ResolutionPolicy::MultiValueReplace,
         temporal_value_equal,
     )?;
-    if cutoff.is_some() && matches!(outcome, MultiValueOutcome::Unknown) {
-        Ok(MultiValueOutcome::Known { values: Vec::new() })
+    let outcome = if cutoff.is_some() && matches!(outcome, MultiValueOutcome::Unknown) {
+        MultiValueOutcome::Known { values: Vec::new() }
     } else {
-        Ok(outcome)
-    }
+        outcome
+    };
+    let mut surviving_assertion_ids = surviving
+        .iter()
+        .map(|candidate| candidate.assertion().id())
+        .collect::<Vec<_>>();
+    surviving_assertion_ids.sort_unstable();
+    Ok(MultiValueReplaceTrace {
+        outcome,
+        surviving_assertion_ids,
+        applied_boundary_ids,
+    })
 }
 
 fn resolve_multi_value_set<F>(

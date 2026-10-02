@@ -89,6 +89,53 @@ pub struct AssertionCandidate {
     pub(crate) precedence: ContextPrecedence,
 }
 
+/// Point filter for the authorized scan path. Indexed IDs are optional; the
+/// subject/Predicate pair is always applied before semantic candidates exist.
+#[derive(Clone, Copy)]
+pub(crate) struct AssertionPointCandidateFilter<'a> {
+    subject: crate::assertions::Subject,
+    predicate_id: crate::ids::PredicateId,
+    indexed_assertion_ids: Option<&'a BTreeSet<AssertionId>>,
+}
+
+impl<'a> AssertionPointCandidateFilter<'a> {
+    pub(crate) const fn full_scan(
+        subject: crate::assertions::Subject,
+        predicate_id: crate::ids::PredicateId,
+    ) -> Self {
+        Self {
+            subject,
+            predicate_id,
+            indexed_assertion_ids: None,
+        }
+    }
+
+    pub(crate) const fn indexed(
+        subject: crate::assertions::Subject,
+        predicate_id: crate::ids::PredicateId,
+        indexed_assertion_ids: &'a BTreeSet<AssertionId>,
+    ) -> Self {
+        Self {
+            subject,
+            predicate_id,
+            indexed_assertion_ids: Some(indexed_assertion_ids),
+        }
+    }
+}
+
+/// Principal and immutable policy snapshot used by an authorized point scan.
+#[derive(Clone, Copy)]
+pub(crate) struct AssertionCandidateSecurityContext<'a> {
+    policy: &'a SecurityPolicySnapshot,
+    context: &'a QueryContext,
+}
+
+impl<'a> AssertionCandidateSecurityContext<'a> {
+    pub(crate) const fn new(policy: &'a SecurityPolicySnapshot, context: &'a QueryContext) -> Self {
+        Self { policy, context }
+    }
+}
+
 impl AssertionCandidate {
     /// Returns the immutable candidate record.
     #[must_use]
@@ -126,7 +173,7 @@ pub fn full_scan_assertion_candidates(
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
-    full_scan_assertion_candidates_with_security(history, archive, query, layers, None)
+    full_scan_assertion_candidates_with_security(history, archive, query, layers, None, None)
 }
 
 /// Full assertion scan with policy filtering before candidate construction.
@@ -164,7 +211,91 @@ pub fn full_scan_authorized_assertion_candidates(
         query,
         layers,
         Some((policy, context.security().principal_id())),
+        None,
     )
+}
+
+/// Full-scan point query with the same pre-candidate authorization filter as the
+/// indexed path. Only the selected subject/Predicate slot reaches lifecycle and
+/// resolution projection.
+pub(crate) fn full_scan_authorized_point_assertion_candidates(
+    history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
+    archive: &ArchiveHistoryReferenceModel,
+    query: &AssertionCandidateQuery,
+    layers: &LayerSchemaSnapshot,
+    security: AssertionCandidateSecurityContext<'_>,
+    point_filter: AssertionPointCandidateFilter<'_>,
+) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
+    let AssertionCandidateSecurityContext { policy, context } = security;
+    validate_authorized_query_context(query, context, layers)?;
+    if policy.authorize(
+        context.security().principal_id(),
+        Capability::QueryResolve,
+        PolicyTarget::default(),
+    ) != AuthorizationDecision::Allow
+    {
+        return Ok(Vec::new());
+    }
+    full_scan_assertion_candidates_with_security(
+        history,
+        archive,
+        query,
+        layers,
+        Some((policy, context.security().principal_id())),
+        Some(point_filter),
+    )
+}
+
+/// Completes a point-index candidate set against retained lifecycle/archive history.
+///
+/// The point index only narrows immutable Assertion identities. Authorization still
+/// runs before candidate construction, and the same lifecycle, archive, validity,
+/// branch-precedence, and canonical-order checks as the full-scan path are applied.
+pub(crate) fn indexed_authorized_assertion_candidates(
+    history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
+    archive: &ArchiveHistoryReferenceModel,
+    query: &AssertionCandidateQuery,
+    layers: &LayerSchemaSnapshot,
+    security: AssertionCandidateSecurityContext<'_>,
+    point_filter: AssertionPointCandidateFilter<'_>,
+) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
+    let AssertionCandidateSecurityContext { policy, context } = security;
+    validate_authorized_query_context(query, context, layers)?;
+    if policy.authorize(
+        context.security().principal_id(),
+        Capability::QueryResolve,
+        PolicyTarget::default(),
+    ) != AuthorizationDecision::Allow
+    {
+        return Ok(Vec::new());
+    }
+    full_scan_assertion_candidates_with_security(
+        history,
+        archive,
+        query,
+        layers,
+        Some((policy, context.security().principal_id())),
+        Some(point_filter),
+    )
+}
+
+fn validate_authorized_query_context(
+    query: &AssertionCandidateQuery,
+    context: &QueryContext,
+    layers: &LayerSchemaSnapshot,
+) -> Result<(), CandidateScanError> {
+    if context.history_space() != query.history_space_id
+        || context.recorded_as_of() != query.recorded_as_of
+        || context.layers().requested() != &query.layer_selection
+        || context.layers().schema_revision() != layers.revision()
+        || context.perspective() != query.perspective_scope
+        || context.epistemic_mode() != query.epistemic_mode
+        || context.world_time() != WorldTimeSelector::At(query.world_time)
+    {
+        Err(CandidateScanError::QueryContextMismatch)
+    } else {
+        Ok(())
+    }
 }
 
 fn full_scan_assertion_candidates_with_security(
@@ -173,6 +304,7 @@ fn full_scan_assertion_candidates_with_security(
     query: &AssertionCandidateQuery,
     layers: &LayerSchemaSnapshot,
     security: Option<(&SecurityPolicySnapshot, PrincipalId)>,
+    point_filter: Option<AssertionPointCandidateFilter<'_>>,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let selected_layers = layers.resolve(&query.layer_selection)?;
     let query_layer = *selected_layers
@@ -200,6 +332,13 @@ fn full_scan_assertion_candidates_with_security(
     {
         match record {
             AssertionHistoryRecord::Assertion(assertion) => {
+                if point_filter.is_some_and(|filter| {
+                    filter
+                        .indexed_assertion_ids
+                        .is_some_and(|ids| !ids.contains(&assertion.id()))
+                }) {
+                    continue;
+                }
                 if let Some((policy, principal_id)) = security {
                     if !assertion_candidate_is_authorized(
                         policy,
@@ -209,6 +348,12 @@ fn full_scan_assertion_candidates_with_security(
                     ) {
                         continue;
                     }
+                }
+                if point_filter.is_some_and(|filter| {
+                    assertion.subject() != filter.subject
+                        || assertion.predicate_id() != filter.predicate_id
+                }) {
+                    continue;
                 }
                 let record_revision = record.created_revision();
                 if stored_revision != record_revision {

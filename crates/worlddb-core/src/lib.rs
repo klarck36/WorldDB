@@ -603,6 +603,7 @@ mod project_metadata_transaction;
 mod provenance_graph;
 mod query_aggregate;
 mod query_context;
+mod query_engine;
 mod query_graph;
 mod query_ports;
 mod query_search;
@@ -812,8 +813,9 @@ pub use jobs::{
 };
 pub use layers::{LayerDefinition, LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
 pub use mask_projection::{
-    AssertionMaskContext, AuthorizedAssertionMaskHistory, MaskProjectionError,
-    apply_assertion_masks, apply_authorized_assertion_masks,
+    AssertionMaskContext, AssertionMaskProjection, AuthorizedAssertionMaskHistory,
+    MaskProjectionError, apply_assertion_masks, apply_authorized_assertion_masks,
+    apply_authorized_assertion_masks_with_trace,
 };
 pub use mask_time_indexes::{
     AssertionValidityIndex, ContextPrecedenceIndex, MaskSelectorIndex, MaskSelectorIndexError,
@@ -830,8 +832,9 @@ pub use migration::{
 };
 pub use multi_value_resolution::{
     MultiValueConflict, MultiValueEntry, MultiValueOutcome, MultiValueReplaceContext,
-    MultiValueResolutionError, MultiValueSlot, ReplacementBoundaryHistory,
+    MultiValueReplaceTrace, MultiValueResolutionError, MultiValueSlot, ReplacementBoundaryHistory,
     resolve_multi_value_overlay, resolve_multi_value_replace,
+    resolve_multi_value_replace_with_trace,
 };
 
 pub use temporal::{
@@ -899,6 +902,11 @@ pub use query_context::{
     AuthorizationMode, BudgetDimension, CancellationToken, QueryBudget, QueryBudgetError,
     QueryBudgetLimits, QueryContext, QueryContextBinding, QueryContextError, QueryContextInput,
     SecurityContext, SnapshotSelector, ValidatedLayerSelection, WorldTimeSelector,
+};
+pub use query_engine::{
+    AssertionPointIndexAccess, AssertionPointRequest, AssertionQueryStore, ProductiveQueryEngine,
+    QueryEngineError, QueryEngineOutput, QueryExecutionPath, ReplacementBoundarySource,
+    ResolutionFailure,
 };
 pub use query_graph::{
     GraphCandidateSet, GraphCyclePolicy, GraphDirection, GraphEdge, GraphError, GraphNode,
