@@ -275,7 +275,7 @@ impl RecordRef {
 ///
 /// These are the base records addressed by the concrete Closure and Retraction
 /// records. Lifecycle records do not target other lifecycle records.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum LifecycleTargetRef {
     /// An Assertion record.
     Assertion(AssertionId),
@@ -305,7 +305,7 @@ pub enum EventRelationProvenanceRef {
 }
 
 /// Closed reference family for project schema and catalog records.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SchemaRecordRef {
     /// A Layer definition.
     Layer(LayerId),

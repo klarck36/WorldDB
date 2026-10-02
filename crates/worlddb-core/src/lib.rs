@@ -611,6 +611,7 @@ mod query_search;
     )
 )]
 mod query_stream;
+mod record_indexes;
 mod record_refs;
 mod reference_query;
 #[cfg_attr(
@@ -896,6 +897,11 @@ pub use query_ports::{
 pub use query_search::{
     QuerySearchError, SearchDocument, SearchHit, SearchMatch, SearchSpec, SearchTextField,
     SearchToken, full_scan_token_search,
+};
+pub use record_indexes::{
+    LifecycleIndex, LifecycleIndexEntry, LookupIndexError, OperationIdIndex, OperationIdIndexEntry,
+    OperationIndexStatus, RecordIdIndex, RecordIdIndexEntry, SchemaIdRevisionIndex,
+    SchemaIdRevisionIndexEntry,
 };
 pub use record_refs::{
     AuditRecordRef, DatabaseBoundRef, DatabaseReference, EventRelationProvenanceRef, JobRef,
