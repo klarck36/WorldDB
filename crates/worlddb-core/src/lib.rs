@@ -588,6 +588,7 @@ mod job_supervisor;
 mod jobs;
 mod layers;
 mod mask_projection;
+mod mask_time_indexes;
 mod masks;
 mod migration;
 mod multi_value_resolution;
@@ -808,6 +809,10 @@ pub use layers::{LayerDefinition, LayerSchemaError, LayerSchemaSnapshot, LayerSe
 pub use mask_projection::{
     AssertionMaskContext, AuthorizedAssertionMaskHistory, MaskProjectionError,
     apply_assertion_masks, apply_authorized_assertion_masks,
+};
+pub use mask_time_indexes::{
+    AssertionValidityIndex, ContextPrecedenceIndex, MaskSelectorIndex, MaskSelectorIndexError,
+    ReplacementBoundaryIndex, ReplacementBoundaryIndexError, ValidityIndexError, ValidityTarget,
 };
 pub use masks::{
     Mask, MaskRecordError, MaskRetraction, MaskSelector, MaskSlotSelector, MaskValidityClosure,
