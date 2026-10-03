@@ -1,0 +1,25 @@
+[package]
+name = "worlddb-ode-desktop-shell"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+build = "build.rs"
+
+[features]
+default = ["in-process"]
+in-process = []
+sidecar = []
+
+[build-dependencies]
+tauri-build = "=2.6.3"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+getrandom = "=0.3.4"
+tauri = { version = "=2.11.5" }
+worlddb-ode-engine = { path = "../ode-engine" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }

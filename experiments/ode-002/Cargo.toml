@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/ode-engine", "crates/desktop-shell"]
+resolver = "3"

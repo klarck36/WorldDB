@@ -22,7 +22,7 @@ AuditComplete creation needs a current host-authenticated policy view granting `
 
 The storage contract does not expose same-identity disaster recovery because it cannot guarantee exclusive control over the original. The CLI documents this limitation and does not advertise a destructive overwrite mode. Restore remains clone-only once trusted host authorization is integrated.
 
-These policy-dependent CLI operations remain open for integration with the trusted host context planned in M8-09. M8-04 remains `RUNNING` until they are wired and verified; the currently available profile verification is not counted as completion of the whole task.
+These policy-dependent CLI operations remain open for integration with the trusted host context from M8-09 and per-project Principal binding from M8-10. M8-04 depends on M8-10 and remains `PLANNED` until both are complete; the currently available profile verification is not counted as completion of the whole task. The task order is intentionally changed because accepting a caller-selected Principal, synthesizing one, or treating GitHub authentication as a WorldDB identity would violate the trusted-host boundary.
 
 ## Windows evidence scope
 

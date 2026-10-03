@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WorldDB ODE-002 Spike",
+  "version": "0.0.1",
+  "identifier": "org.worlddb.ode002.spike",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; connect-src ipc: http://ipc.localhost"
+    },
+    "windows": [
+      {
+        "label": "primary",
+        "title": "WorldDB ODE-002 Primary",
+        "url": "index.html?role=primary",
+        "width": 720,
+        "height": 480,
+        "visible": false
+      },
+      {
+        "label": "secondary",
+        "title": "WorldDB ODE-002 Secondary",
+        "url": "index.html?role=secondary",
+        "width": 480,
+        "height": 320,
+        "visible": false
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

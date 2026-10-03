@@ -1,0 +1,20 @@
+[package]
+name = "worlddb-ode-engine"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "worlddb_ode_engine"
+
+[[bin]]
+name = "worlddb_ode_engine"
+path = "src/main.rs"
+
+[dependencies]
+blake3 = "=1.8.7"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+worlddb-storage-file = { path = "../../../../crates/worlddb-storage-file" }

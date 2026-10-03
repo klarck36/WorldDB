@@ -1,6 +1,6 @@
 # M8-04 – Interim Windows verification
 
-**Task status: RUNNING.** This is an interim checkpoint, not M8-04 acceptance. Independent Exact and AuditComplete backup verification are wired into the versioned CLI. All backup creation requires the current `BackupCreate` capability; AuditComplete also needs `AuditRead` and `AuditExport`. Clone restore requires `BackupRestore` (and the audit capabilities for AuditComplete). The standalone CLI lacks a trusted host-authenticated policy context, so all creation and restore requests fail closed. Same-identity disaster recovery is not exposed by the storage contract.
+**Task status: PLANNED pending M8-09 and M8-10.** This is an interim checkpoint, not M8-04 acceptance. Independent Exact and AuditComplete backup verification are wired into the versioned CLI. All backup creation requires the current `BackupCreate` capability; AuditComplete also needs `AuditRead` and `AuditExport`. Clone restore requires `BackupRestore` (and the audit capabilities for AuditComplete). The standalone CLI lacks a trusted host-authenticated policy context, so all creation and restore requests fail closed. GitHub authentication does not establish a WorldDB Principal. M8-09 will provide authenticated host sessions and M8-10 will bind them to a project Principal; M8-04 now depends on M8-10. Same-identity disaster recovery is not exposed by the storage contract.
 
 ## Implemented surface
 
@@ -19,4 +19,4 @@
 - `cargo fmt --all -- --check`: PASS.
 - `git diff --check`: PASS.
 
-The Exact and AuditComplete CLI backup-verification JSONL results were both parsed successfully. The final `cargo xtask verify` passed on Windows with 39 PASS, 1 expected M0-14 `ci-matrix` SKIP, and 0 FAIL after both profile cases were present. The task remains `RUNNING`; do not treat the above as full CLI Backup/Restore acceptance. Linux/macOS runs remain deferred to M9-07.
+The Exact and AuditComplete CLI backup-verification JSONL results were both parsed successfully. The final `cargo xtask verify` passed on Windows with 39 PASS, 1 expected M0-14 `ci-matrix` SKIP, and 0 FAIL after both profile cases were present. The task remains planned until trusted host and per-project Principal binding are available; do not treat the above as full CLI Backup/Restore acceptance. Linux/macOS runs remain deferred to M9-07.

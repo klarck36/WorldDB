@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Native windows with no Tauri plugin permissions; WorldDB access is available through versioned host commands only.",
+  "windows": ["primary", "secondary"],
+  "permissions": []
+}
