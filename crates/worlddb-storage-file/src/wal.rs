@@ -19,7 +19,8 @@ use crate::recovery::{RecoveryCorruptionKind, RecoveryFinding};
 use crate::replay_payload::{SnapshotCommitError, encode_replay_payload};
 use crate::required_audit::{
     CommittedRequiredAuditRecord, RequiredAuditError, encode_required_audit_payload,
-    latest_sequence, records_for_log, validate_commit_binding, validate_sequence_after,
+    encode_required_audit_payload_with_replay, latest_sequence, records_for_log,
+    validate_commit_binding, validate_sequence_after,
 };
 use crate::security_segment::SecurityPolicyHistoryStore;
 use crate::segment::HistorySegmentStore;
@@ -495,6 +496,15 @@ impl WalCommitReceipt {
     pub const fn marker_length(self) -> u64 {
         self.marker_length
     }
+}
+
+/// Fully validated and opened WAL commit marker, ready for its one append/sync step.
+pub(crate) struct PreparedWalCommit {
+    file: File,
+    marker_frame: Vec<u8>,
+    receipt: WalCommitReceipt,
+    operation_id: OperationId,
+    payload_hash: [u8; 32],
 }
 
 /// Persistent operation status reconstructed from the complete WAL view.
@@ -1066,6 +1076,64 @@ impl WalPrepareLog {
         })
     }
 
+    /// Reconciles an in-process unknown marker result after storage recovery has completed.
+    ///
+    /// Unlike `operation_status`, this deliberately scans the durable WAL even when this
+    /// process has an in-memory indeterminate marker. A verified committed marker is synced
+    /// again and re-read before the process-local guard is cleared. `NotCommitted` is only
+    /// returned once the caller has successfully completed `RecoveryManager::recover`.
+    pub(crate) fn reconcile_operation_after_recovery(
+        &self,
+        lock: &WriterLock,
+        operation_id: OperationId,
+    ) -> Result<WalOperationStatus, WalError> {
+        self.require_lock(lock)?;
+        let operations = self.scan_operation_index(lock)?;
+        let status = match operations.get(&operation_id).map(|entry| entry.status) {
+            Some(IndexedWalOperationStatus::Committed(receipt)) => {
+                let sequence = receipt.reference().segment_sequence();
+                let path = self.segment_path(sequence);
+                self.validate_segment_path(sequence, &path)?;
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .map_err(|source| WalError::Io {
+                        operation: "open reconciled WAL segment for sync",
+                        source,
+                    })?;
+                file.sync_all().map_err(|source| WalError::Io {
+                    operation: "sync reconciled WAL commit marker",
+                    source,
+                })?;
+
+                let confirmed = self.scan_operation_index(lock)?;
+                match confirmed.get(&operation_id).map(|entry| entry.status) {
+                    Some(IndexedWalOperationStatus::Committed(confirmed_receipt))
+                        if confirmed_receipt == receipt =>
+                    {
+                        WalOperationStatus::Committed(receipt)
+                    }
+                    Some(IndexedWalOperationStatus::Indeterminate)
+                    | None
+                    | Some(IndexedWalOperationStatus::Committed(_)) => {
+                        WalOperationStatus::Indeterminate
+                    }
+                }
+            }
+            Some(IndexedWalOperationStatus::Indeterminate) => WalOperationStatus::Indeterminate,
+            None => WalOperationStatus::NotCommitted,
+        };
+
+        if !matches!(status, WalOperationStatus::Indeterminate) {
+            indeterminate_commit_ids()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&(self.root.clone(), operation_id));
+        }
+        Ok(status)
+    }
+
     /// Commits a new OperationId or replays its original committed receipt.
     ///
     /// A matching committed payload returns the same receipt without appending
@@ -1142,6 +1210,33 @@ impl WalPrepareLog {
             .map_err(SnapshotCommitError::RequiredAudit)
     }
 
+    /// Prepares a manifest snapshot whose Required Audit action payload is
+    /// distinct from the replay data needed to materialize the snapshot.
+    ///
+    /// The returned prepare is synced but unpublished. A caller that owns a
+    /// cancellation boundary may enter its commitpoint and then call
+    /// [`Self::commit_prepared`].
+    pub(crate) fn prepare_audited_manifest_snapshot_with_action(
+        &self,
+        lock: &WriterLock,
+        operation_id: OperationId,
+        segments: Vec<ManifestSegmentReference>,
+        staged_segments: &[ManifestSegmentReference],
+        canonical_action_payload: &[u8],
+        audit_record: &AuditRecord,
+    ) -> Result<WalPrepareReference, SnapshotCommitError> {
+        let replay_payload =
+            self.encode_manifest_snapshot_payload(lock, operation_id, segments, staged_segments)?;
+        self.prepare_required_audit_payload_with_replay(
+            lock,
+            operation_id,
+            canonical_action_payload,
+            &replay_payload,
+            audit_record,
+        )
+        .map_err(SnapshotCommitError::RequiredAudit)
+    }
+
     /// Commits a non-empty canonical domain-action payload and Required Audit Record as one
     /// prepare/commit-marker durability unit.
     pub fn commit_required_audit(
@@ -1172,6 +1267,49 @@ impl WalPrepareLog {
         }
         let payload = encode_required_audit_payload(canonical_action_payload, audit_record)?;
         self.commit_operation(lock, operation_id, &payload)
+            .map_err(RequiredAuditError::Wal)
+    }
+
+    fn prepare_required_audit_payload_with_replay(
+        &self,
+        lock: &WriterLock,
+        operation_id: OperationId,
+        canonical_action_payload: &[u8],
+        replay_payload: &[u8],
+        audit_record: &AuditRecord,
+    ) -> Result<WalPrepareReference, RequiredAuditError> {
+        self.require_lock(lock).map_err(RequiredAuditError::Wal)?;
+        if !lock.require_write_access() {
+            return Err(RequiredAuditError::Wal(WalError::RecoveryRequired));
+        }
+        let target_revision = match self
+            .operation_status(lock, operation_id)
+            .map_err(RequiredAuditError::Wal)?
+        {
+            WalOperationStatus::NotCommitted => self
+                .commit_head(lock)
+                .and_then(|head| head.revision.next_commit().map_err(WalError::Revision))
+                .map_err(RequiredAuditError::Wal)?,
+            WalOperationStatus::Committed(_) => {
+                return Err(RequiredAuditError::Wal(
+                    WalError::OperationAlreadyCommitted { operation_id },
+                ));
+            }
+            WalOperationStatus::Indeterminate => {
+                return Err(RequiredAuditError::Wal(WalError::OperationIndeterminate {
+                    operation_id,
+                }));
+            }
+        };
+        validate_commit_binding(audit_record, target_revision, operation_id)?;
+        let committed = records_for_log(self, lock)?;
+        validate_sequence_after(audit_record, latest_sequence(&committed))?;
+        let payload = encode_required_audit_payload_with_replay(
+            canonical_action_payload,
+            replay_payload,
+            audit_record,
+        )?;
+        self.append_prepare(lock, operation_id, &payload)
             .map_err(RequiredAuditError::Wal)
     }
 
@@ -1375,6 +1513,17 @@ impl WalPrepareLog {
         reference: WalPrepareReference,
         sync: impl FnOnce(&File) -> io::Result<()>,
     ) -> Result<WalCommitReceipt, WalError> {
+        let prepared = self.prepare_commit_marker(lock, reference)?;
+        self.publish_prepared_commit_with_sync(prepared, sync)
+    }
+
+    /// Completes every reversible WAL check and opens the active segment before
+    /// a caller enters its cancellation commitpoint.
+    pub(crate) fn prepare_commit_marker(
+        &self,
+        lock: &WriterLock,
+        reference: WalPrepareReference,
+    ) -> Result<PreparedWalCommit, WalError> {
         self.require_lock(lock)?;
         if !lock.require_write_access() {
             return Err(WalError::RecoveryRequired);
@@ -1426,7 +1575,7 @@ impl WalPrepareLog {
                 actual: usize::MAX,
             })?;
 
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .append(true)
             .read(true)
             .open(&path)
@@ -1445,25 +1594,52 @@ impl WalPrepareLog {
         if marker_offset != expected_marker_offset {
             return Err(WalError::PrepareNotAppendTail);
         }
-        if let Err(error) =
-            append_commit_marker_and_sync(&mut file, &marker_frame, reference.operation_id, sync)
-        {
+        Ok(PreparedWalCommit {
+            file,
+            marker_frame,
+            receipt: WalCommitReceipt {
+                reference,
+                revision: next_revision,
+                payload_hash,
+                previous_commit_hash: head.commit_hash,
+                commit_hash: WalCommitHash(commit_hash),
+                marker_offset,
+                marker_length,
+            },
+            operation_id: reference.operation_id,
+            payload_hash,
+        })
+    }
+
+    /// Appends and syncs a prepared marker; no fallible preparation remains.
+    pub(crate) fn publish_prepared_commit(
+        &self,
+        prepared: PreparedWalCommit,
+    ) -> Result<WalCommitReceipt, WalError> {
+        self.publish_prepared_commit_with_sync(prepared, File::sync_all)
+    }
+
+    fn publish_prepared_commit_with_sync(
+        &self,
+        mut prepared: PreparedWalCommit,
+        sync: impl FnOnce(&File) -> io::Result<()>,
+    ) -> Result<WalCommitReceipt, WalError> {
+        if let Err(error) = append_commit_marker_and_sync(
+            &mut prepared.file,
+            &prepared.marker_frame,
+            prepared.operation_id,
+            sync,
+        ) {
             if matches!(&error, WalError::UnknownCommitOutcome { .. }) {
-                self.mark_operation_indeterminate_in_process(reference.operation_id, payload_hash);
+                self.mark_operation_indeterminate_in_process(
+                    prepared.operation_id,
+                    prepared.payload_hash,
+                );
             }
             return Err(error);
         }
-        drop(file);
-
-        Ok(WalCommitReceipt {
-            reference,
-            revision: next_revision,
-            payload_hash,
-            previous_commit_hash: head.commit_hash,
-            commit_hash: WalCommitHash(commit_hash),
-            marker_offset,
-            marker_length,
-        })
+        drop(prepared.file);
+        Ok(prepared.receipt)
     }
 
     fn scan_commit_head(&self) -> Result<WalCommitHead, WalError> {
@@ -2578,6 +2754,79 @@ mod tests {
                 operation_id: mismatch_id,
             }) if mismatch_id == operation_id
         ));
+
+        RecoveryManager::new(reopened_layout.clone())
+            .recover(&lock)
+            .map_err(|error| format!("recover committed unknown outcome: {error}"))?;
+        let reconciled = reopened_log
+            .reconcile_operation_after_recovery(&lock, operation_id)
+            .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            reconciled,
+            WalOperationStatus::Committed(receipt) if receipt.revision().value() == 1
+        ));
+        assert_eq!(
+            reopened_log
+                .operation_status(&lock, operation_id)
+                .map_err(|error| error.to_string())?,
+            reconciled
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recovered_unknown_outcome_without_marker_is_proven_not_committed() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let log = WalPrepareLog::new(&layout);
+        let operation_id = operation_id_with_tail(0x4d).map_err(|error| error.to_string())?;
+        let reference = log
+            .append_prepare(&lock, operation_id, b"unknown-marker-not-durable")
+            .map_err(|error| error.to_string())?;
+
+        let result = log.commit_prepared_with_sync(&lock, reference, |_| {
+            Err(io::Error::other(
+                "injected unknown commit result without marker",
+            ))
+        });
+        assert!(matches!(
+            result,
+            Err(WalError::UnknownCommitOutcome {
+                operation_id: failed_operation,
+                ..
+            }) if failed_operation == operation_id
+        ));
+        let wal_segment = log.segment_path(reference.segment_sequence());
+        let repaired_after_unknown = fs::OpenOptions::new()
+            .write(true)
+            .open(wal_segment)
+            .map_err(|error| error.to_string())?;
+        repaired_after_unknown
+            .set_len(reference.byte_offset() + reference.frame_length())
+            .and_then(|()| repaired_after_unknown.sync_all())
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            log.operation_status(&lock, operation_id)
+                .map_err(|error| error.to_string())?,
+            WalOperationStatus::Indeterminate
+        );
+
+        RecoveryManager::new(layout.clone())
+            .recover(&lock)
+            .map_err(|error| format!("recover missing unknown marker: {error}"))?;
+        assert_eq!(
+            log.reconcile_operation_after_recovery(&lock, operation_id)
+                .map_err(|error| error.to_string())?,
+            WalOperationStatus::NotCommitted
+        );
+        assert_eq!(
+            log.operation_status(&lock, operation_id)
+                .map_err(|error| error.to_string())?,
+            WalOperationStatus::NotCommitted
+        );
         Ok(())
     }
 

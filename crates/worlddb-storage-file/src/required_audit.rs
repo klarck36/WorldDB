@@ -11,13 +11,17 @@ use crate::wal::{WalCommittedFrame, WalError, WalPrepareLog};
 use crate::writer_lock::WriterLock;
 
 const REQUIRED_AUDIT_MAGIC: [u8; 8] = *b"WDBAUD\0\x01";
+const REQUIRED_AUDIT_REPLAY_MAGIC: [u8; 8] = *b"WDBAUD\0\x02";
+const MIGRATION_ACTION_PREFIX: &[u8] = b"WorldDB.RequiredAudit.Migration.v1\0";
 const HEADER_BYTES: usize = REQUIRED_AUDIT_MAGIC.len() + 8;
+const REPLAY_HEADER_BYTES: usize = REQUIRED_AUDIT_REPLAY_MAGIC.len() + 12;
 
 /// A required audit entry that has reached the same verified commit marker as its action.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedRequiredAuditRecord {
     revision: Revision,
     operation_id: OperationId,
+    migration_action_payload: Option<Vec<u8>>,
     record: AuditRecord,
 }
 
@@ -32,6 +36,12 @@ impl CommittedRequiredAuditRecord {
     #[must_use]
     pub const fn operation_id(&self) -> OperationId {
         self.operation_id
+    }
+
+    /// Canonical guarded-migration action, when this audit record belongs to one.
+    #[must_use]
+    pub fn migration_action_payload(&self) -> Option<&[u8]> {
+        self.migration_action_payload.as_deref()
     }
 
     /// Safe audit facts committed with the action.
@@ -109,6 +119,7 @@ impl std::error::Error for RequiredAuditError {
 /// Borrowed action bytes and the decoded Required Audit Record from one WAL prepare.
 pub(crate) struct DecodedRequiredAuditPayload<'a> {
     pub(crate) action_payload: &'a [u8],
+    pub(crate) replay_payload: Option<&'a [u8]>,
     pub(crate) record: AuditRecord,
 }
 
@@ -141,12 +152,55 @@ pub(crate) fn encode_required_audit_payload(
     Ok(bytes)
 }
 
+/// Encodes a required audit envelope with a distinct replay snapshot.
+///
+/// Migration actions need their canonical action bytes to remain the audited
+/// payload while recovery still needs a manifest snapshot to materialize the
+/// committed data. Both payloads and the audit record live in one WAL prepare.
+pub(crate) fn encode_required_audit_payload_with_replay(
+    action_payload: &[u8],
+    replay_payload: &[u8],
+    record: &AuditRecord,
+) -> Result<Vec<u8>, RequiredAuditError> {
+    if action_payload.is_empty() || replay_payload.is_empty() {
+        return Err(RequiredAuditError::EmptyActionPayload);
+    }
+    let audit_bytes = encode_audit_record(record).map_err(RequiredAuditError::AuditCodec)?;
+    let action_length =
+        u32::try_from(action_payload.len()).map_err(|_| RequiredAuditError::PayloadTooLarge)?;
+    let replay_length =
+        u32::try_from(replay_payload.len()).map_err(|_| RequiredAuditError::PayloadTooLarge)?;
+    let audit_length =
+        u32::try_from(audit_bytes.len()).map_err(|_| RequiredAuditError::PayloadTooLarge)?;
+    let capacity = REPLAY_HEADER_BYTES
+        .checked_add(action_payload.len())
+        .and_then(|value| value.checked_add(replay_payload.len()))
+        .and_then(|value| value.checked_add(audit_bytes.len()))
+        .ok_or(RequiredAuditError::PayloadTooLarge)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| RequiredAuditError::PayloadTooLarge)?;
+    bytes.extend_from_slice(&REQUIRED_AUDIT_REPLAY_MAGIC);
+    bytes.extend_from_slice(&action_length.to_le_bytes());
+    bytes.extend_from_slice(&replay_length.to_le_bytes());
+    bytes.extend_from_slice(&audit_length.to_le_bytes());
+    bytes.extend_from_slice(action_payload);
+    bytes.extend_from_slice(replay_payload);
+    bytes.extend_from_slice(&audit_bytes);
+    Ok(bytes)
+}
+
 /// Decodes and checks the commit binding of an audited operation payload.
 pub(crate) fn decode_required_audit_payload(
     payload: &[u8],
     revision: Revision,
     operation_id: OperationId,
 ) -> Result<Option<DecodedRequiredAuditPayload<'_>>, RequiredAuditError> {
+    if payload.get(..REQUIRED_AUDIT_MAGIC.len()) == Some(REQUIRED_AUDIT_REPLAY_MAGIC.as_slice()) {
+        return decode_required_audit_payload_with_replay(payload, revision, operation_id)
+            .map(Some);
+    }
     if payload.get(..REQUIRED_AUDIT_MAGIC.len()) != Some(REQUIRED_AUDIT_MAGIC.as_slice()) {
         return Ok(None);
     }
@@ -189,8 +243,70 @@ pub(crate) fn decode_required_audit_payload(
         action_payload: payload
             .get(action_start..audit_start)
             .ok_or(RequiredAuditError::MalformedEnvelope)?,
+        replay_payload: None,
         record,
     }))
+}
+
+fn decode_required_audit_payload_with_replay(
+    payload: &[u8],
+    revision: Revision,
+    operation_id: OperationId,
+) -> Result<DecodedRequiredAuditPayload<'_>, RequiredAuditError> {
+    if payload.len() < REPLAY_HEADER_BYTES {
+        return Err(RequiredAuditError::MalformedEnvelope);
+    }
+    let mut lengths = payload
+        .get(REQUIRED_AUDIT_REPLAY_MAGIC.len()..REPLAY_HEADER_BYTES)
+        .ok_or(RequiredAuditError::MalformedEnvelope)?
+        .chunks_exact(4);
+    let action_length = read_length(lengths.next())?;
+    let replay_length = read_length(lengths.next())?;
+    let audit_length = read_length(lengths.next())?;
+    if !lengths.remainder().is_empty()
+        || action_length == 0
+        || replay_length == 0
+        || audit_length == 0
+    {
+        return Err(RequiredAuditError::MalformedEnvelope);
+    }
+    let action_start = REPLAY_HEADER_BYTES;
+    let replay_start = action_start
+        .checked_add(action_length)
+        .ok_or(RequiredAuditError::MalformedEnvelope)?;
+    let audit_start = replay_start
+        .checked_add(replay_length)
+        .ok_or(RequiredAuditError::MalformedEnvelope)?;
+    let end = audit_start
+        .checked_add(audit_length)
+        .ok_or(RequiredAuditError::MalformedEnvelope)?;
+    if end != payload.len() {
+        return Err(RequiredAuditError::MalformedEnvelope);
+    }
+    let audit_bytes = payload
+        .get(audit_start..end)
+        .ok_or(RequiredAuditError::MalformedEnvelope)?;
+    let record = decode_audit_record(audit_bytes).map_err(RequiredAuditError::AuditCodec)?;
+    validate_commit_binding(&record, revision, operation_id)?;
+    Ok(DecodedRequiredAuditPayload {
+        action_payload: payload
+            .get(action_start..replay_start)
+            .ok_or(RequiredAuditError::MalformedEnvelope)?,
+        replay_payload: Some(
+            payload
+                .get(replay_start..audit_start)
+                .ok_or(RequiredAuditError::MalformedEnvelope)?,
+        ),
+        record,
+    })
+}
+
+fn read_length(bytes: Option<&[u8]>) -> Result<usize, RequiredAuditError> {
+    let raw: [u8; 4] = bytes
+        .ok_or(RequiredAuditError::MalformedEnvelope)?
+        .try_into()
+        .map_err(|_| RequiredAuditError::MalformedEnvelope)?;
+    usize::try_from(u32::from_le_bytes(raw)).map_err(|_| RequiredAuditError::MalformedEnvelope)
 }
 
 pub(crate) fn validate_commit_binding(
@@ -241,6 +357,10 @@ pub(crate) fn collect_committed_required_audits(
         records.push(CommittedRequiredAuditRecord {
             revision: receipt.revision(),
             operation_id,
+            migration_action_payload: decoded
+                .action_payload
+                .starts_with(MIGRATION_ACTION_PREFIX)
+                .then(|| decoded.action_payload.to_vec()),
             record: decoded.record,
         });
     }

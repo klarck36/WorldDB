@@ -38,6 +38,8 @@ pub trait RevisionBackend<T> {
     /// `cancellation.begin_commitpoint()` immediately before the irreversible
     /// publication step. Once that succeeds, they must finish the atomic batch
     /// and report its complete result; they must not poll cancellation again.
+    /// A backend that cannot resolve a durable commit-marker outcome reports
+    /// `OutcomeUnknown` so the caller can reconcile by operation identity.
     fn publish_cancellable(
         &mut self,
         entries: Vec<T>,
@@ -48,13 +50,16 @@ pub trait RevisionBackend<T> {
     fn read_at(&self, revision: Revision) -> Result<Self::Read<'_>, RevisionLogError>;
 }
 
-/// Cancellation or atomic publication failure for one backend commit attempt.
+/// Cancellation or atomic publication result for one backend commit attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CancellablePublishError {
     /// Cancellation or an invalid control state prevented the commitpoint.
     Commitpoint(CommitpointError),
     /// The backend rejected the batch without publishing any entries.
     Publish(RevisionLogError),
+    /// The commitpoint was entered but durable publication could not be resolved.
+    /// Reopen and reconcile by this operation identity before retrying.
+    OutcomeUnknown(crate::OperationId),
 }
 
 impl fmt::Display for CancellablePublishError {
@@ -62,6 +67,10 @@ impl fmt::Display for CancellablePublishError {
         match self {
             Self::Commitpoint(error) => write!(formatter, "commitpoint unavailable: {error}"),
             Self::Publish(error) => write!(formatter, "commit publication failed: {error}"),
+            Self::OutcomeUnknown(operation_id) => write!(
+                formatter,
+                "commit outcome for OperationId {operation_id} is unknown and requires reconciliation"
+            ),
         }
     }
 }
@@ -71,6 +80,7 @@ impl std::error::Error for CancellablePublishError {
         match self {
             Self::Commitpoint(error) => Some(error),
             Self::Publish(error) => Some(error),
+            Self::OutcomeUnknown(_) => None,
         }
     }
 }

@@ -409,9 +409,10 @@ impl MigrationAuditCommit {
 
 /// Backend port whose migration action and Required Audit record share one commitpoint.
 ///
-/// Implementations must validate `expected_base_revision`, store the migration batch and the
-/// canonical audit action/record atomically, and return an error only when neither side became
-/// visible. A successful revision must equal `audit_commit.commit_revision()`.
+/// Implementations must validate `expected_base_revision` and store the migration batch,
+/// canonical audit action, and audit record atomically. A definite publication error means
+/// neither side became visible; `OutcomeUnknown` requires reconciliation by OperationId. A
+/// successful revision must equal `audit_commit.commit_revision()`.
 pub trait MigrationCommitBackend: RevisionBackend<Record> {
     /// Atomically publishes one plan-bound migration step and its Required Audit record.
     fn publish_migration_step_with_required_audit(

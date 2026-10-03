@@ -12,6 +12,7 @@ mod layout;
 mod logical_export;
 mod logical_import;
 mod manifest;
+mod migration_commit;
 mod migration_run_journal;
 mod purge;
 mod purge_rewrite;
@@ -70,6 +71,9 @@ pub use logical_import::{
 pub use manifest::{
     Manifest, ManifestError, ManifestReceipt, ManifestSegmentKind, ManifestSegmentReference,
     ManifestSnapshot, ManifestStore,
+};
+pub use migration_commit::{
+    FileMigrationBackendError, FileMigrationCommitBackend, FileMigrationHistoryRead,
 };
 pub use migration_run_journal::{MigrationRunJournalFileStore, MigrationRunJournalFileStoreError};
 pub use purge::{

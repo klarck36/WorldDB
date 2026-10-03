@@ -165,7 +165,7 @@ pub(crate) fn decode_replay_payload(
     let audited = decode_required_audit_payload(payload, revision, operation_id)
         .map_err(ReplayPayloadError::RequiredAudit)?;
     let payload = match audited {
-        Some(decoded) => decoded.action_payload,
+        Some(decoded) => decoded.replay_payload.unwrap_or(decoded.action_payload),
         None => payload,
     };
     if payload.get(..REPLAY_MAGIC.len()) != Some(&REPLAY_MAGIC) {
