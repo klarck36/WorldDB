@@ -1,4 +1,4 @@
-//! Authorized HistorySpace and Layer catalog views backed by ordinary WAL commits.
+//! Authorized project metadata catalog views backed by ordinary WAL commits.
 
 use std::fmt;
 
@@ -7,10 +7,10 @@ use worlddb_core::{
     AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuthorizationDecision, Bytes, Capability,
     EntityCatalogSnapshot, HistorySpaceCatalog, HistorySpaceDefinition, HistorySpaceId,
     LayerDefinition, LayerId, LayerSchemaSnapshot, Lifecycle, OperationId,
-    PerspectiveCatalogSnapshot, PerspectiveDefinitionRevision, PerspectiveRetirement, PolicyTarget,
-    ProjectMetadataCandidate, ProjectMetadataSnapshot, ProjectMetadataValidationError, Record,
-    Revision, SchemaDefinition, SchemaMode, SchemaRevision, SchemaSnapshot, SecurityPolicyVersion,
-    Symbol,
+    PerspectiveCatalogSnapshot, PerspectiveDefinitionRevision, PerspectiveId,
+    PerspectiveRetirement, PerspectiveRetirementId, PolicyTarget, ProjectMetadataCandidate,
+    ProjectMetadataSnapshot, ProjectMetadataValidationError, Record, RecordRef, Revision,
+    SchemaDefinition, SchemaMode, SchemaRevision, SchemaSnapshot, SecurityPolicyVersion, Symbol,
 };
 
 use crate::{
@@ -30,6 +30,8 @@ pub struct MetadataPublicationReceipt {
     revision: Revision,
     history_space_id: Option<HistorySpaceId>,
     layer_id: Option<LayerId>,
+    perspective_id: Option<PerspectiveId>,
+    perspective_retirement_id: Option<PerspectiveRetirementId>,
 }
 
 impl MetadataPublicationReceipt {
@@ -56,9 +58,21 @@ impl MetadataPublicationReceipt {
     pub const fn layer_id(self) -> Option<LayerId> {
         self.layer_id
     }
+
+    /// Created or revised Perspective, for Perspective catalog operations.
+    #[must_use]
+    pub const fn perspective_id(self) -> Option<PerspectiveId> {
+        self.perspective_id
+    }
+
+    /// Created retirement record, for Perspective retirement operations.
+    #[must_use]
+    pub const fn perspective_retirement_id(self) -> Option<PerspectiveRetirementId> {
+        self.perspective_retirement_id
+    }
 }
 
-/// Durable file-backed manager for HistorySpace and Layer metadata.
+/// Durable file-backed manager for project-wide catalog metadata.
 ///
 /// Catalog projections are rebuilt from immutable history records at the
 /// requested shared revision. Mutations use the project metadata validator,
@@ -99,6 +113,240 @@ impl<'a> FileProjectMetadataManager<'a> {
             .schema_at(mode, recorded_as_of)
             .map_err(schema_error)?;
         self.snapshot_for_revision(requested, schema)
+    }
+
+    /// Returns only the authorized Perspective catalog at a shared revision.
+    pub fn perspectives_at(
+        &self,
+        mode: SchemaMode,
+        recorded_as_of: Revision,
+    ) -> Result<PerspectiveCatalogSnapshot, LayerManagementError> {
+        self.authorize(Capability::PerspectiveRead, PolicyTarget::default())?;
+        let requested = requested_revision(mode, recorded_as_of, self.revision())?;
+        let schema = self
+            .schema
+            .schema_at(mode, recorded_as_of)
+            .map_err(schema_error)?;
+        Ok(self
+            .snapshot_for_revision(requested, schema)?
+            .perspectives()
+            .clone())
+    }
+
+    /// Validates an explicit active Perspective selection under current use/read policy.
+    pub fn validate_perspective_use(
+        &self,
+        perspective_id: PerspectiveId,
+    ) -> Result<PerspectiveDefinitionRevision, LayerManagementError> {
+        self.authorize(Capability::PerspectiveUse, PolicyTarget::default())?;
+        self.authorize(Capability::PerspectiveRead, PolicyTarget::default())?;
+        let current = self.current_snapshot()?;
+        if current.perspectives().is_retired(perspective_id) {
+            return Err(LayerManagementError::InvalidCandidate(
+                "the selected Perspective is unavailable",
+            ));
+        }
+        current
+            .perspectives()
+            .latest_definition(perspective_id)
+            .cloned()
+            .ok_or(LayerManagementError::InvalidCandidate(
+                "the selected Perspective is unavailable",
+            ))
+    }
+
+    /// Creates the first immutable definition revision for a host-generated Perspective ID.
+    pub fn create_perspective(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        perspective_id: PerspectiveId,
+        display_name: Option<String>,
+        description: Option<String>,
+    ) -> Result<MetadataPublicationReceipt, LayerManagementError> {
+        self.authorize(Capability::PerspectiveCreate, PolicyTarget::default())?;
+        validate_perspective_text(&display_name, &description)?;
+        if expected_base != self.revision() {
+            return Err(LayerManagementError::Conflict);
+        }
+        let base = self.current_snapshot()?;
+        if base
+            .perspectives()
+            .latest_definition(perspective_id)
+            .is_some()
+        {
+            return Err(LayerManagementError::InvalidCandidate(
+                "the generated Perspective identity is unavailable",
+            ));
+        }
+        let target_revision = self.next_revision()?;
+        let definition = PerspectiveDefinitionRevision::new(
+            perspective_id,
+            display_name,
+            description,
+            target_revision,
+        )
+        .map_err(|_| LayerManagementError::InvalidCandidate("Perspective metadata is invalid"))?;
+        let mut definitions = base.perspectives().definitions().to_vec();
+        definitions.push(definition.clone());
+        let perspectives = base
+            .perspectives()
+            .revise(
+                target_revision,
+                definitions,
+                base.perspectives().retirements().to_vec(),
+            )
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
+        let schema = self.schema_at_target(target_revision)?;
+        let candidate = candidate_from_parts(
+            &base,
+            base.history_spaces().clone(),
+            schema,
+            target_revision,
+            Some(perspectives),
+        )?;
+        self.publish(
+            expected_base,
+            operation_id,
+            &base,
+            candidate,
+            vec![Record::PerspectiveDefinitionRevision(definition)],
+            MetadataPublicationIdentity {
+                perspective_id: Some(perspective_id),
+                ..MetadataPublicationIdentity::default()
+            },
+        )
+    }
+
+    /// Appends optional display metadata under the same immutable Perspective ID.
+    pub fn update_perspective(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        perspective_id: PerspectiveId,
+        display_name: Option<String>,
+        description: Option<String>,
+    ) -> Result<MetadataPublicationReceipt, LayerManagementError> {
+        self.authorize(Capability::PerspectiveUpdate, PolicyTarget::default())?;
+        validate_perspective_text(&display_name, &description)?;
+        if expected_base != self.revision() {
+            return Err(LayerManagementError::Conflict);
+        }
+        let base = self.current_snapshot()?;
+        if base.perspectives().is_retired(perspective_id)
+            || base
+                .perspectives()
+                .latest_definition(perspective_id)
+                .is_none()
+        {
+            return Err(LayerManagementError::InvalidCandidate(
+                "the selected Perspective is unavailable",
+            ));
+        }
+        let target_revision = self.next_revision()?;
+        let definition = PerspectiveDefinitionRevision::new(
+            perspective_id,
+            display_name,
+            description,
+            target_revision,
+        )
+        .map_err(|_| LayerManagementError::InvalidCandidate("Perspective metadata is invalid"))?;
+        let mut definitions = base.perspectives().definitions().to_vec();
+        definitions.push(definition.clone());
+        let perspectives = base
+            .perspectives()
+            .revise(
+                target_revision,
+                definitions,
+                base.perspectives().retirements().to_vec(),
+            )
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
+        let schema = self.schema_at_target(target_revision)?;
+        let candidate = candidate_from_parts(
+            &base,
+            base.history_spaces().clone(),
+            schema,
+            target_revision,
+            Some(perspectives),
+        )?;
+        self.publish(
+            expected_base,
+            operation_id,
+            &base,
+            candidate,
+            vec![Record::PerspectiveDefinitionRevision(definition)],
+            MetadataPublicationIdentity {
+                perspective_id: Some(perspective_id),
+                ..MetadataPublicationIdentity::default()
+            },
+        )
+    }
+
+    /// Appends one irreversible terminal retirement for an active Perspective.
+    pub fn retire_perspective(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        retirement_id: PerspectiveRetirementId,
+        perspective_id: PerspectiveId,
+    ) -> Result<MetadataPublicationReceipt, LayerManagementError> {
+        self.authorize(Capability::PerspectiveRead, PolicyTarget::default())?;
+        self.authorize(
+            Capability::PerspectiveRetire,
+            PolicyTarget::new(
+                None,
+                None,
+                Some(RecordRef::PerspectiveRetirement(retirement_id)),
+                None,
+                None,
+            ),
+        )?;
+        if expected_base != self.revision() {
+            return Err(LayerManagementError::Conflict);
+        }
+        let base = self.current_snapshot()?;
+        if base.perspectives().is_retired(perspective_id)
+            || base
+                .perspectives()
+                .latest_definition(perspective_id)
+                .is_none()
+        {
+            return Err(LayerManagementError::InvalidCandidate(
+                "the selected Perspective is unavailable",
+            ));
+        }
+        let target_revision = self.next_revision()?;
+        let retirement = PerspectiveRetirement::new(retirement_id, perspective_id, target_revision);
+        let mut retirements = base.perspectives().retirements().to_vec();
+        retirements.push(retirement);
+        let perspectives = base
+            .perspectives()
+            .revise(
+                target_revision,
+                base.perspectives().definitions().to_vec(),
+                retirements,
+            )
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
+        let schema = self.schema_at_target(target_revision)?;
+        let candidate = candidate_from_parts(
+            &base,
+            base.history_spaces().clone(),
+            schema,
+            target_revision,
+            Some(perspectives),
+        )?;
+        self.publish(
+            expected_base,
+            operation_id,
+            &base,
+            candidate,
+            vec![Record::PerspectiveRetirement(retirement)],
+            MetadataPublicationIdentity {
+                perspective_id: Some(perspective_id),
+                perspective_retirement_id: Some(retirement_id),
+                ..MetadataPublicationIdentity::default()
+            },
+        )
     }
 
     /// Creates one immutable child with the caller-selected parent cutoff.
@@ -155,7 +403,7 @@ impl<'a> FileProjectMetadataManager<'a> {
         let schema = schema_history
             .schema_at(SchemaMode::Current, target_revision)
             .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
-        let candidate = candidate_from_parts(&base, spaces, schema, target_revision)?;
+        let candidate = candidate_from_parts(&base, spaces, schema, target_revision, None)?;
         let records = vec![Record::HistorySpaceDefinition(definition)];
         self.publish(
             expected_base,
@@ -163,8 +411,10 @@ impl<'a> FileProjectMetadataManager<'a> {
             &base,
             candidate,
             records,
-            None,
-            Some(history_space_id),
+            MetadataPublicationIdentity {
+                history_space_id: Some(history_space_id),
+                ..MetadataPublicationIdentity::default()
+            },
         )
     }
 
@@ -222,6 +472,7 @@ impl<'a> FileProjectMetadataManager<'a> {
             base.history_spaces().clone(),
             schema,
             target_revision,
+            None,
         )?;
         let records = vec![
             Record::LayerDefinition(layer),
@@ -233,8 +484,10 @@ impl<'a> FileProjectMetadataManager<'a> {
             &base,
             candidate,
             records,
-            Some(layer_id),
-            None,
+            MetadataPublicationIdentity {
+                layer_id: Some(layer_id),
+                ..MetadataPublicationIdentity::default()
+            },
         )
     }
 
@@ -392,6 +645,7 @@ impl<'a> FileProjectMetadataManager<'a> {
             base.history_spaces().clone(),
             schema,
             target_revision,
+            None,
         )?;
         self.publish(
             expected_base,
@@ -399,9 +653,24 @@ impl<'a> FileProjectMetadataManager<'a> {
             &base,
             candidate,
             records,
-            Some(layer_id),
-            None,
+            MetadataPublicationIdentity {
+                layer_id: Some(layer_id),
+                ..MetadataPublicationIdentity::default()
+            },
         )
+    }
+
+    fn schema_at_target(
+        &self,
+        target_revision: Revision,
+    ) -> Result<SchemaSnapshot, LayerManagementError> {
+        let mut schema_history = self.schema_history()?;
+        schema_history
+            .advance_to(target_revision)
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
+        schema_history
+            .schema_at(SchemaMode::Current, target_revision)
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))
     }
 
     fn current_snapshot(&self) -> Result<ProjectMetadataSnapshot, LayerManagementError> {
@@ -571,7 +840,6 @@ impl<'a> FileProjectMetadataManager<'a> {
         }
     }
 
-    #[allow(clippy::too_many_arguments, reason = "WDB-EXC-0008")]
     fn publish(
         &mut self,
         expected_base: Revision,
@@ -579,8 +847,7 @@ impl<'a> FileProjectMetadataManager<'a> {
         base: &ProjectMetadataSnapshot,
         candidate: ProjectMetadataCandidate,
         records: Vec<Record>,
-        layer_id: Option<LayerId>,
-        history_space_id: Option<HistorySpaceId>,
+        publication: MetadataPublicationIdentity,
     ) -> Result<MetadataPublicationReceipt, LayerManagementError> {
         if records.is_empty()
             || expected_base != self.revision()
@@ -632,7 +899,7 @@ impl<'a> FileProjectMetadataManager<'a> {
         ))
         .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
         let action = AuditAction::SchemaManagement;
-        let object_class = if layer_id.is_some() {
+        let object_class = if publication.layer_id.is_some() {
             AuditObjectClass::SchemaDefinition
         } else {
             AuditObjectClass::Database
@@ -772,8 +1039,10 @@ impl<'a> FileProjectMetadataManager<'a> {
         Ok(MetadataPublicationReceipt {
             operation_id,
             revision: target_revision,
-            history_space_id,
-            layer_id,
+            history_space_id: publication.history_space_id,
+            layer_id: publication.layer_id,
+            perspective_id: publication.perspective_id,
+            perspective_retirement_id: publication.perspective_retirement_id,
         })
     }
 }
@@ -783,6 +1052,7 @@ fn candidate_from_parts(
     history_spaces: HistorySpaceCatalog,
     schema: SchemaSnapshot,
     revision: Revision,
+    perspectives_override: Option<PerspectiveCatalogSnapshot>,
 ) -> Result<ProjectMetadataCandidate, LayerManagementError> {
     let embedded_layers = schema
         .definitions()
@@ -816,14 +1086,17 @@ fn candidate_from_parts(
             base.entities().retirements().to_vec(),
         )
         .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
-    let perspectives = base
-        .perspectives()
-        .revise(
-            revision,
-            base.perspectives().definitions().to_vec(),
-            base.perspectives().retirements().to_vec(),
-        )
-        .map_err(|error| LayerManagementError::Storage(error.to_string()))?;
+    let perspectives = match perspectives_override {
+        Some(perspectives) => perspectives,
+        None => base
+            .perspectives()
+            .revise(
+                revision,
+                base.perspectives().definitions().to_vec(),
+                base.perspectives().retirements().to_vec(),
+            )
+            .map_err(|error| LayerManagementError::Storage(error.to_string()))?,
+    };
     ProjectMetadataCandidate::new(
         revision,
         history_spaces,
@@ -833,6 +1106,33 @@ fn candidate_from_parts(
         schema,
     )
     .map_err(metadata_error)
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct MetadataPublicationIdentity {
+    history_space_id: Option<HistorySpaceId>,
+    layer_id: Option<LayerId>,
+    perspective_id: Option<PerspectiveId>,
+    perspective_retirement_id: Option<PerspectiveRetirementId>,
+}
+
+fn validate_perspective_text(
+    display_name: &Option<String>,
+    description: &Option<String>,
+) -> Result<(), LayerManagementError> {
+    let maximum = worlddb_core::DecoderLimits::DEFAULT.max_string_or_bytes;
+    if display_name
+        .as_ref()
+        .is_some_and(|value| value.is_empty() || value.len() > maximum)
+        || description
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > maximum)
+    {
+        return Err(LayerManagementError::InvalidCandidate(
+            "Perspective metadata is empty or exceeds the shared field limit",
+        ));
+    }
+    Ok(())
 }
 
 fn requested_revision(

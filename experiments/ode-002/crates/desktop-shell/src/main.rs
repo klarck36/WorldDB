@@ -15,8 +15,8 @@ use worlddb_ode_engine::EngineHost;
 use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
-    HistorySpaceTransferCommand, HistorySpaceTransferResponse, Response, SchemaCommand,
-    SchemaResponse, StreamPlan,
+    HistorySpaceTransferCommand, HistorySpaceTransferResponse, PerspectiveCommand,
+    PerspectiveResponse, Response, SchemaCommand, SchemaResponse, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -171,7 +171,8 @@ fn run() -> Result<(), String> {
             manage_schema,
             manage_entities,
             manage_branch_layers,
-            manage_history_space_transfer
+            manage_history_space_transfer,
+            manage_perspectives
         ])
         .run(tauri::generate_context!())
         .map_err(|error| error.to_string())
@@ -287,6 +288,14 @@ struct HistorySpaceTransferRequestV1 {
     command: HistorySpaceTransferCommand,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PerspectiveRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: PerspectiveCommand,
+}
+
 #[derive(Serialize)]
 struct BranchLayerResponseV1 {
     protocol_version: u16,
@@ -303,6 +312,12 @@ struct HistorySpaceTransferResponseV1 {
 struct EntityResponseV1 {
     protocol_version: u16,
     result: EntityResponse,
+}
+
+#[derive(Serialize)]
+struct PerspectiveResponseV1 {
+    protocol_version: u16,
+    result: PerspectiveResponse,
 }
 
 #[derive(Serialize)]
@@ -619,6 +634,43 @@ fn manage_history_space_transfer(
     }
 }
 
+#[tauri::command]
+fn manage_perspectives(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: PerspectiveRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<PerspectiveResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let operation = perspective_smoke_operation(&request.command);
+    match backend.perspectives(request.command) {
+        Ok(result) => {
+            record_perspective_smoke(window.label(), operation, true, Some(&result))?;
+            if matches!(result, PerspectiveResponse::Published(_)) {
+                let _ = app.emit("project-state-changed", ());
+            }
+            Ok(PerspectiveResponseV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                result,
+            })
+        }
+        Err(_) => {
+            record_perspective_smoke(window.label(), operation, false, None)?;
+            Err(IpcErrorV1::new("perspective_rejected"))
+        }
+    }
+}
+
 async fn pick_project_parent(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -775,6 +827,24 @@ fn history_space_transfer_smoke_operation(command: &HistorySpaceTransferCommand)
         HistorySpaceTransferCommand::List { .. } => "list",
         HistorySpaceTransferCommand::Preview { .. } => "preview",
         HistorySpaceTransferCommand::Commit { .. } => "commit",
+    }
+}
+
+fn perspective_smoke_operation(command: &PerspectiveCommand) -> &'static str {
+    match command {
+        PerspectiveCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Current,
+        } => "snapshot_current",
+        PerspectiveCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Historical { .. },
+        } => "snapshot_historical",
+        PerspectiveCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Explicit { .. },
+        } => "snapshot_explicit",
+        PerspectiveCommand::Create { .. } => "create",
+        PerspectiveCommand::Update { .. } => "update",
+        PerspectiveCommand::Retire { .. } => "retire",
+        PerspectiveCommand::ValidateContext { .. } => "validate_context",
     }
 }
 
@@ -953,6 +1023,58 @@ fn record_history_space_transfer_smoke(
         "relation_count": relation_count,
         "copied_record_count": copied_records,
         "copied_relation_count": copied_relations,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+fn record_perspective_smoke(
+    window_label: &str,
+    operation: &str,
+    succeeded: bool,
+    result: Option<&PerspectiveResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-perspective-{window_label}.jsonl"));
+    let (revision, perspective_count, mode) =
+        result.map_or((None, None, None), |response| match response {
+            PerspectiveResponse::Snapshot(snapshot) => (
+                Some(snapshot.revision),
+                Some(snapshot.perspectives.len()),
+                None,
+            ),
+            PerspectiveResponse::Published(publication) => (Some(publication.revision), None, None),
+            PerspectiveResponse::ContextBound(context) => (
+                None,
+                None,
+                Some(format!("{:?}", context.epistemic_mode).to_ascii_lowercase()),
+            ),
+        });
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "succeeded": succeeded,
+        "revision": revision,
+        "perspective_count": perspective_count,
+        "epistemic_mode": mode,
     });
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -1484,6 +1606,10 @@ impl Backend {
         self.with_engine(|engine| engine.history_space_transfer(command))
     }
 
+    fn perspectives(&self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
+        self.with_engine(|engine| engine.perspectives(command))
+    }
+
     fn project_status_locked(
         &self,
         state: &mut BackendState,
@@ -1708,6 +1834,20 @@ impl EngineBackend {
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
                 .history_space_transfer(command),
+        }
+    }
+
+    fn perspectives(&self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .perspectives(command)
+                .map_err(|_| "engine rejected Perspective operation".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .perspectives(command),
         }
     }
 
@@ -2021,6 +2161,14 @@ impl Sidecar {
             Response::HistorySpaceTransfer { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected HistorySpace transfer".to_owned()),
             _ => Err("sidecar returned an unexpected transfer response".to_owned()),
+        }
+    }
+
+    fn perspectives(&mut self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
+        match self.request(Request::Perspectives { command })? {
+            Response::Perspectives { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected Perspective operation".to_owned()),
+            _ => Err("sidecar returned an unexpected Perspective response".to_owned()),
         }
     }
 

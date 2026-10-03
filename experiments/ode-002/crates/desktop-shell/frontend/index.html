@@ -43,6 +43,7 @@
       .schema-note { border-left: 3px solid color-mix(in srgb, Highlight 65%, transparent); padding-left: 12px; }
       #schema-status { min-height: 1.5em; }
       #branch-layer-status { min-height: 1.5em; }
+      #perspective-status { min-height: 1.5em; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
       label { display: block; font-weight: 600; margin-bottom: 7px; }
       input, button {
@@ -253,6 +254,72 @@
           <p id="entity-deprecated-warning" class="schema-note muted" hidden>Dieser EntityType ist veraltet. Die Anlage benötigt ausdrückliche Freigabe und eine zusätzliche Berechtigung.</p>
           <div class="actions"><button id="entity-create" type="button">Entität anlegen</button></div>
         </fieldset>
+      </section>
+      <section id="perspective-panel" class="card" aria-labelledby="perspective-heading" hidden>
+        <h2 id="perspective-heading">Perspektiven und Wissenskontexte</h2>
+        <p class="muted">Perspektiven beschreiben einen Wissensstand. Sie sind keine Benutzerrollen. Fehlendes Wissen ist Unbekannt, nicht falsch.</p>
+        <fieldset>
+          <legend>Perspektivenkatalog</legend>
+          <div class="grid">
+            <div>
+              <label for="perspective-view-mode">Katalogstand</label>
+              <select id="perspective-view-mode">
+                <option value="current">Aktueller Stand</option>
+                <option value="historical">Stand zu einer Datenrevision</option>
+                <option value="explicit">Genau diese Katalogrevision</option>
+              </select>
+            </div>
+            <div id="perspective-view-revision-wrap" hidden>
+              <label id="perspective-view-revision-label" for="perspective-view-revision">Revision</label>
+              <input id="perspective-view-revision" type="number" min="0" step="1" value="1" />
+            </div>
+          </div>
+          <div class="actions"><button id="perspective-refresh" type="button">Perspektiven anzeigen</button></div>
+          <p id="perspective-status" class="muted" role="status" aria-live="polite"></p>
+          <div id="perspective-list" aria-live="polite"></div>
+          <div class="grid">
+            <div><label for="perspective-select">Perspektive zum Bearbeiten</label><select id="perspective-select"></select></div>
+            <div><label for="perspective-name">Anzeigename</label><input id="perspective-name" autocomplete="off" /></div>
+          </div>
+          <label for="perspective-description">Beschreibung</label>
+          <textarea id="perspective-description" rows="3"></textarea>
+          <div class="actions">
+            <button id="perspective-create" type="button">Perspektive anlegen</button>
+            <button id="perspective-update" type="button">Änderung veröffentlichen</button>
+            <button id="perspective-retire" type="button">Perspektive stilllegen</button>
+          </div>
+        </fieldset>
+        <div class="grid">
+          <fieldset id="input-context-editor">
+            <legend>Eingabe-Kontext</legend>
+            <label for="input-context-mode">Aussageart</label>
+            <select id="input-context-mode">
+              <option value="world_state">WorldState · Weltzustand</option>
+              <option value="knows">Knows · weiß</option>
+              <option value="believes">Believes · glaubt</option>
+              <option value="claims">Claims · behauptet</option>
+            </select>
+            <label for="input-context-perspective">Perspektive</label>
+            <select id="input-context-perspective"></select>
+            <div class="actions"><button id="input-context-validate" type="button">Eingabe-Kontext prüfen</button></div>
+            <p id="input-context-status" class="muted" role="status" aria-live="polite"></p>
+          </fieldset>
+          <fieldset id="query-context-editor">
+            <legend>Abfrage-Kontext</legend>
+            <label for="query-context-mode">Aussageart</label>
+            <select id="query-context-mode">
+              <option value="world_state">WorldState · Weltzustand</option>
+              <option value="knows">Knows · weiß</option>
+              <option value="believes">Believes · glaubt</option>
+              <option value="claims">Claims · behauptet</option>
+            </select>
+            <label for="query-context-perspective">Perspektive</label>
+            <select id="query-context-perspective"></select>
+            <div class="actions"><button id="query-context-validate" type="button">Abfrage-Kontext prüfen</button></div>
+            <p id="query-context-status" class="muted" role="status" aria-live="polite"></p>
+          </fieldset>
+        </div>
+        <p class="schema-note muted">Diese Bereiche stellen den Kontext für spätere Eingabe- und Abfrageaktionen bereit. Sie erzeugen hier noch keine Aussagen oder Abfrageergebnisse.</p>
       </section>
       <section id="branch-layer-panel" class="card" aria-labelledby="branch-layer-heading" hidden>
         <h2 id="branch-layer-heading">Branches und Layer</h2>

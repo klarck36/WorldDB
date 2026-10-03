@@ -33,6 +33,8 @@ $secondaryEntityPath = Join-Path $testRoot 'ipc-entity-secondary.jsonl'
 $primaryBranchLayerPath = Join-Path $testRoot 'ipc-branch-layer-primary.jsonl'
 $secondaryBranchLayerPath = Join-Path $testRoot 'ipc-branch-layer-secondary.jsonl'
 $primaryTransferPath = Join-Path $testRoot 'ipc-transfer-primary.jsonl'
+$primaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-primary.jsonl'
+$secondaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-secondary.jsonl'
 $process = $null
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -135,6 +137,29 @@ function Wait-ForTransferOperations([System.Diagnostics.Process]$Process, [strin
     throw "Timed out waiting for the authenticated HistorySpace transfer catalog call. Primary: $primaryEvents"
 }
 
+function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
+            $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $creates = @($primary | Where-Object { $_.operation -eq 'create' -and $_.succeeded }).Count
+            $updates = @($primary | Where-Object { $_.operation -eq 'update' -and $_.succeeded }).Count
+            $retirements = @($primary | Where-Object { $_.operation -eq 'retire' -and $_.succeeded }).Count
+            $validContexts = @($primary | Where-Object { $_.operation -eq 'validate_context' -and $_.succeeded }).Count
+            $rejectedContexts = @($primary | Where-Object { $_.operation -eq 'validate_context' -and -not $_.succeeded }).Count
+            $secondaryReads = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' -and $_.succeeded }).Count
+            if ($creates -ge 1 -and $updates -ge 1 -and $retirements -ge 1 -and $validContexts -ge 2 -and $rejectedContexts -ge 3 -and $secondaryReads -ge 1) { return }
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $primaryEvents = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
+    $secondaryEvents = if (Test-Path -LiteralPath $SecondaryPath -PathType Leaf) { Get-Content -LiteralPath $SecondaryPath -Raw } else { '<missing>' }
+    throw "Timed out waiting for complete Perspective IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
+}
+
 try {
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
@@ -142,6 +167,7 @@ try {
     $env:WORLDDB_ODE_ENTITY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_TRANSFER_SMOKE_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
     $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
@@ -161,6 +187,7 @@ try {
     Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
     Wait-ForTransferOperations $process $primaryTransferPath
+    Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
@@ -173,6 +200,8 @@ try {
     $primaryBranchLayers = @(Get-Content -LiteralPath $primaryBranchLayerPath | ForEach-Object { $_ | ConvertFrom-Json })
     $secondaryBranchLayers = @(Get-Content -LiteralPath $secondaryBranchLayerPath | ForEach-Object { $_ | ConvertFrom-Json })
     $primaryTransfer = @(Get-Content -LiteralPath $primaryTransferPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $primaryPerspectives = @(Get-Content -LiteralPath $primaryPerspectivePath | ForEach-Object { $_ | ConvertFrom-Json })
+    $secondaryPerspectives = @(Get-Content -LiteralPath $secondaryPerspectivePath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
@@ -245,6 +274,23 @@ try {
     if ($transferCatalogReads.Count -eq 0) {
         throw 'The primary window did not read a typed HistorySpace transfer catalog.'
     }
+    if (@($primaryPerspectives | Where-Object { -not $_.succeeded -and $_.operation -ne 'validate_context' }).Count -gt 0) {
+        throw 'The primary window had an unexpected rejected Perspective IPC operation.'
+    }
+    $requiredPerspectiveOperations = @('snapshot_current', 'snapshot_historical', 'snapshot_explicit', 'create', 'update', 'retire', 'validate_context')
+    foreach ($operation in $requiredPerspectiveOperations) {
+        if (@($primaryPerspectives | Where-Object { $_.operation -eq $operation }).Count -eq 0) {
+            throw "The primary window did not complete Perspective IPC operation '$operation'."
+        }
+    }
+    $acceptedContexts = @($primaryPerspectives | Where-Object { $_.operation -eq 'validate_context' -and $_.succeeded }).Count
+    $rejectedContexts = @($primaryPerspectives | Where-Object { $_.operation -eq 'validate_context' -and -not $_.succeeded }).Count
+    if ($acceptedContexts -lt 2 -or $rejectedContexts -lt 3) {
+        throw 'Valid and invalid Perspective context bindings were not distinguished.'
+    }
+    if (@($secondaryPerspectives | Where-Object { $_.operation -eq 'snapshot_current' -and $_.succeeded }).Count -eq 0) {
+        throw 'The secondary window did not read the shared Perspective catalog.'
+    }
 
     $process.Refresh()
     $processIds = @([int]$process.Id)
@@ -280,6 +326,11 @@ try {
         stale_branch_write_rejected_without_publication = 'PASS'
         secondary_window_branch_layer_read = 'PASS'
         authenticated_history_space_transfer_catalog = 'PASS'
+        authenticated_perspective_catalog_and_contexts = 'PASS'
+        current_historical_and_explicit_perspective_reads = 'PASS'
+        world_state_and_epistemic_contexts_separate = 'PASS'
+        invalid_and_retired_perspectives_rejected = 'PASS'
+        secondary_window_perspective_read = 'PASS'
         shared_project_with_distinct_window_snapshots = 'PASS'
         versioned_ipc_protocol = 'PASS'
         invalid_session_rejected_in_both_windows = 'PASS'
@@ -291,7 +342,7 @@ try {
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {

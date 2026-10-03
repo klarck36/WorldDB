@@ -79,6 +79,28 @@ const entityDeprecatedOptIn = document.querySelector("#entity-deprecated-opt-in"
 const entityAcceptDeprecated = document.querySelector("#entity-accept-deprecated");
 const entityDeprecatedWarning = document.querySelector("#entity-deprecated-warning");
 const entityCreateButton = document.querySelector("#entity-create");
+const perspectivePanel = document.querySelector("#perspective-panel");
+const perspectiveViewMode = document.querySelector("#perspective-view-mode");
+const perspectiveViewRevision = document.querySelector("#perspective-view-revision");
+const perspectiveViewRevisionWrap = document.querySelector("#perspective-view-revision-wrap");
+const perspectiveViewRevisionLabel = document.querySelector("#perspective-view-revision-label");
+const perspectiveRefreshButton = document.querySelector("#perspective-refresh");
+const perspectiveStatus = document.querySelector("#perspective-status");
+const perspectiveList = document.querySelector("#perspective-list");
+const perspectiveSelect = document.querySelector("#perspective-select");
+const perspectiveName = document.querySelector("#perspective-name");
+const perspectiveDescription = document.querySelector("#perspective-description");
+const perspectiveCreateButton = document.querySelector("#perspective-create");
+const perspectiveUpdateButton = document.querySelector("#perspective-update");
+const perspectiveRetireButton = document.querySelector("#perspective-retire");
+const inputContextMode = document.querySelector("#input-context-mode");
+const inputContextPerspective = document.querySelector("#input-context-perspective");
+const inputContextValidate = document.querySelector("#input-context-validate");
+const inputContextStatus = document.querySelector("#input-context-status");
+const queryContextMode = document.querySelector("#query-context-mode");
+const queryContextPerspective = document.querySelector("#query-context-perspective");
+const queryContextValidate = document.querySelector("#query-context-validate");
+const queryContextStatus = document.querySelector("#query-context-status");
 const branchLayerPanel = document.querySelector("#branch-layer-panel");
 const branchLayerStatus = document.querySelector("#branch-layer-status");
 const branchTree = document.querySelector("#branch-tree");
@@ -134,6 +156,7 @@ const userMessages = {
   entity_rejected: "Die Entitätsaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
   branch_layer_rejected: "Die Branch- oder Layer-Aktion wurde abgelehnt. Prüfe Cutoff, Priorität, Berechtigung und aktuellen Projektstand.",
   history_space_transfer_rejected: "Die Übertragung wurde abgelehnt. Lade Quelle und Ziel neu und prüfe die Verweise sowie die Vorschau.",
+  perspective_rejected: "Die Perspektivenaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
 };
 
 let sessionId;
@@ -142,6 +165,7 @@ let projectRevision = null;
 let projectBusy = false;
 let schemaBusy = false;
 let entityBusy = false;
+let perspectiveBusy = false;
 let branchLayerBusy = false;
 let transferBusy = false;
 let schemaCurrentMode = true;
@@ -149,6 +173,8 @@ let entityCurrentMode = true;
 let selectedSchema = null;
 let currentSchema = null;
 let selectedEntities = null;
+let selectedPerspectives = null;
+let currentPerspectives = null;
 let selectedBranchLayers = null;
 let branchLayerCurrentMode = true;
 let transferCatalog = null;
@@ -168,12 +194,12 @@ function showError(error) {
 }
 
 function updateSchemaControls() {
-  const canRead = projectOpen && !schemaBusy && !projectBusy && !branchLayerBusy && !transferBusy;
+  const canRead = projectOpen && !schemaBusy && !projectBusy && !entityBusy && !perspectiveBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && schemaCurrentMode;
   schemaRefreshButton.disabled = !canRead;
   schemaCreateButton.disabled = !canMutate;
   for (const control of schemaEditor.querySelectorAll("input, select, textarea, button")) {
-    control.disabled = schemaBusy || projectBusy || branchLayerBusy || transferBusy;
+    control.disabled = schemaBusy || projectBusy || perspectiveBusy || branchLayerBusy || transferBusy;
   }
   schemaCreateButton.disabled = !canMutate;
   schemaLifecyclePublish.disabled = !canMutate || stagedLifecycleChanges.length === 0;
@@ -184,6 +210,7 @@ function updateSchemaControls() {
     button.disabled = schemaBusy || projectBusy;
   }
   updateEntityControls();
+  updatePerspectiveControls();
   updateBranchLayerControls();
   updateTransferControls();
   updateProjectControls();
@@ -191,11 +218,11 @@ function updateSchemaControls() {
 
 function updateEntityControls() {
   if (!entityPanel) return;
-  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !branchLayerBusy && !transferBusy;
+  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !perspectiveBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && entityCurrentMode;
   entityRefreshButton.disabled = !canRead;
   for (const control of entityEditor.querySelectorAll("input, select, button")) {
-    control.disabled = entityBusy || projectBusy || schemaBusy || branchLayerBusy || transferBusy;
+    control.disabled = entityBusy || projectBusy || schemaBusy || perspectiveBusy || branchLayerBusy || transferBusy;
   }
   entityCreateButton.disabled = !canMutate || !entityTypeSelect.value
     || (selectedEntityType()?.lifecycle === "deprecated" && !entityAcceptDeprecated.checked);
@@ -204,9 +231,34 @@ function updateEntityControls() {
   }
 }
 
+function updatePerspectiveControls() {
+  if (!perspectivePanel) return;
+  const blocked = perspectiveBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy;
+  const canRead = projectOpen && !blocked;
+  const canMutate = canRead && perspectiveViewMode.value === "current";
+  perspectiveRefreshButton.disabled = !canRead;
+  perspectiveViewMode.disabled = blocked;
+  perspectiveViewRevision.disabled = blocked;
+  perspectiveCreateButton.disabled = !canMutate;
+  const selected = currentPerspectives?.perspectives.find((item) => item.perspective_id === perspectiveSelect.value);
+  perspectiveSelect.disabled = !canMutate || !currentPerspectives?.perspectives.length;
+  perspectiveName.disabled = !canMutate;
+  perspectiveDescription.disabled = !canMutate;
+  perspectiveUpdateButton.disabled = !canMutate || !selected || selected.retired_revision != null;
+  perspectiveRetireButton.disabled = !canMutate || !selected || selected.retired_revision != null;
+  for (const [mode, select, button] of [
+    [inputContextMode, inputContextPerspective, inputContextValidate],
+    [queryContextMode, queryContextPerspective, queryContextValidate],
+  ]) {
+    mode.disabled = blocked;
+    select.disabled = blocked || mode.value === "world_state" || select.options.length < 2;
+    button.disabled = !canRead || (mode.value !== "world_state" && !select.value);
+  }
+}
+
 function updateBranchLayerControls() {
   if (!branchLayerPanel) return;
-  const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !transferBusy;
+  const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !perspectiveBusy && !transferBusy;
   const canMutate = canRead && branchLayerCurrentMode;
   branchLayerRefreshButton.disabled = !canRead;
   for (const editor of [branchCreateEditor, layerCreateEditor, layerEditEditor]) {
@@ -230,7 +282,7 @@ function updateBranchLayerControls() {
 
 function updateTransferControls() {
   if (!transferPanel) return;
-  const blocked = transferBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy;
+  const blocked = transferBusy || projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy;
   const canRead = projectOpen && !blocked;
   transferLoadButton.disabled = !canRead || !transferSource.value || !transferTarget.value
     || transferSource.value === transferTarget.value;
@@ -241,9 +293,9 @@ function updateTransferControls() {
 }
 
 function updateProjectControls() {
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || projectOpen;
-  openButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || projectOpen;
-  closeButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || !projectOpen;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || projectOpen;
+  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || projectOpen;
+  closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || !projectOpen;
 }
 
 function setBusy(busy) {
@@ -255,6 +307,7 @@ function renderProject(project) {
   projectOpen = Boolean(project.project_open);
   schemaPanel.hidden = !projectOpen;
   entityPanel.hidden = !projectOpen;
+  perspectivePanel.hidden = !projectOpen;
   branchLayerPanel.hidden = !projectOpen;
   transferPanel.hidden = !projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
@@ -284,6 +337,9 @@ async function refreshProject(activeSessionId) {
     await refreshEntities(activeSessionId).catch((error) => {
       entityStatus.textContent = showError(error);
     });
+    await refreshPerspectives(activeSessionId).catch((error) => {
+      perspectiveStatus.textContent = showError(error);
+    });
     await refreshBranchLayers(activeSessionId).catch((error) => {
       branchLayerStatus.textContent = showError(error);
     });
@@ -295,11 +351,14 @@ async function refreshProject(activeSessionId) {
     selectedSchema = null;
     currentSchema = null;
     selectedEntities = null;
+    selectedPerspectives = null;
+    currentPerspectives = null;
     selectedBranchLayers = null;
     transferCatalog = null;
     transferPreviewTicket = null;
     schemaDefinitions.replaceChildren();
     entityList.replaceChildren();
+    perspectiveList.replaceChildren();
     branchTree.replaceChildren();
     layerList.replaceChildren();
     transferContentList.replaceChildren();
@@ -933,6 +992,216 @@ function renderEntities(snapshot) {
   }
 }
 
+function perspectiveModeInput() {
+  if (perspectiveViewMode.value === "current") return { mode: "current" };
+  const revision = Number(perspectiveViewRevision.value);
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("invalid_request");
+  return perspectiveViewMode.value === "historical"
+    ? { mode: "historical", recorded_as_of: revision }
+    : { mode: "explicit", revision };
+}
+
+async function invokePerspectivesFor(activeSessionId, command) {
+  const response = await invoke("manage_perspectives", {
+    request: { protocol_version: 1, session_id: activeSessionId, command },
+  });
+  if (response.protocol_version !== 1 || !response.result?.kind) throw new Error("unsupported_protocol");
+  return response.result;
+}
+
+async function invokePerspectiveSnapshot(activeSessionId, mode) {
+  const result = await invokePerspectivesFor(activeSessionId, { command: "snapshot", mode });
+  if (result.kind !== "snapshot") throw new Error("unsupported_protocol");
+  return result;
+}
+
+function perspectiveNameFor(view) {
+  return view.display_name || `Unbenannte Perspektive · Revision ${view.created_revision}`;
+}
+
+function fillPerspectiveOptions(select, perspectives, previousValue) {
+  select.replaceChildren();
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "Keine Perspektive ausgewählt";
+  select.append(empty);
+  const active = perspectives.filter((item) => item.retired_revision == null);
+  for (const item of active) {
+    const option = document.createElement("option");
+    option.value = item.perspective_id;
+    option.textContent = perspectiveNameFor(item);
+    select.append(option);
+  }
+  if (active.some((item) => item.perspective_id === previousValue)) select.value = previousValue;
+  else select.value = "";
+}
+
+function renderPerspectiveSnapshot(snapshot) {
+  perspectiveStatus.textContent = `Katalogrevision ${snapshot.revision} · ${snapshot.perspectives.length} Perspektive(n)`;
+  perspectiveList.replaceChildren();
+  if (snapshot.perspectives.length === 0) {
+    appendText(perspectiveList, "p", "In diesem Stand sind noch keine Perspektiven vorhanden.", "muted");
+    return;
+  }
+  for (const item of snapshot.perspectives) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    appendText(card, "h3", perspectiveNameFor(item));
+    appendText(card, "p", item.retired_revision == null
+      ? `Aktiv · angelegt in Revision ${item.created_revision}`
+      : `Stillgelegt in Revision ${item.retired_revision} · angelegt in Revision ${item.created_revision}`);
+    if (item.description) appendText(card, "p", item.description, "muted");
+    if (item.metadata_history.length > 1) {
+      appendText(card, "p", "Metadatenverlauf", "muted");
+      for (const revision of item.metadata_history) {
+        const details = [
+          revision.display_name || "Unbenannte Perspektive",
+          revision.description,
+        ].filter(Boolean).join(" · ");
+        appendText(card, "p", `Revision ${revision.recorded_revision}: ${details}`, "muted");
+      }
+    }
+    perspectiveList.append(card);
+  }
+}
+
+function renderPerspectiveChoices() {
+  const previousEditorValue = perspectiveSelect.value;
+  const previousInputValue = inputContextPerspective.value;
+  const previousQueryValue = queryContextPerspective.value;
+  const active = currentPerspectives?.perspectives ?? [];
+  fillPerspectiveOptions(perspectiveSelect, active, previousEditorValue);
+  fillPerspectiveOptions(inputContextPerspective, active, previousInputValue);
+  fillPerspectiveOptions(queryContextPerspective, active, previousQueryValue);
+  inputContextStatus.textContent = "Kontext noch nicht geprüft.";
+  queryContextStatus.textContent = "Kontext noch nicht geprüft.";
+  const selected = active.find((item) => item.perspective_id === perspectiveSelect.value);
+  if (selected) {
+    perspectiveName.value = selected.display_name ?? "";
+    perspectiveDescription.value = selected.description ?? "";
+  } else if (!perspectiveBusy) {
+    perspectiveName.value = "";
+    perspectiveDescription.value = "";
+  }
+  updatePerspectiveControls();
+}
+
+async function refreshPerspectives(activeSessionId = sessionId) {
+  if (!projectOpen || !activeSessionId) return;
+  perspectiveStatus.textContent = "Perspektiven werden geladen …";
+  perspectiveRefreshButton.disabled = true;
+  try {
+    selectedPerspectives = await invokePerspectiveSnapshot(activeSessionId, perspectiveModeInput());
+    currentPerspectives = perspectiveViewMode.value === "current"
+      ? selectedPerspectives
+      : await invokePerspectiveSnapshot(activeSessionId, { mode: "current" });
+    renderPerspectiveSnapshot(selectedPerspectives);
+    renderPerspectiveChoices();
+  } catch (error) {
+    perspectiveStatus.textContent = showError(error);
+    perspectiveList.replaceChildren();
+    throw error;
+  } finally {
+    updatePerspectiveControls();
+  }
+}
+
+async function publishPerspectiveMutation(command, successText) {
+  if (!sessionId || !projectOpen || perspectiveBusy || perspectiveViewMode.value !== "current") return;
+  perspectiveBusy = true;
+  perspectiveStatus.textContent = "Perspektivenänderung wird geprüft und veröffentlicht …";
+  updateSchemaControls();
+  try {
+    const response = await invokePerspectivesFor(sessionId, command);
+    if (response.kind !== "published") throw new Error("unsupported_protocol");
+    perspectiveStatus.textContent = `${successText} Katalogrevision ${response.revision}.`;
+    await refreshPerspectives(sessionId);
+  } catch (error) {
+    perspectiveStatus.textContent = showError(error);
+  } finally {
+    perspectiveBusy = false;
+    updateSchemaControls();
+  }
+}
+
+async function createPerspective() {
+  if (!sessionId || !projectOpen || perspectiveBusy) return;
+  try {
+    const latest = await invokePerspectiveSnapshot(sessionId, { mode: "current" });
+    await publishPerspectiveMutation({
+      command: "create",
+      expected_base_revision: latest.revision,
+      display_name: perspectiveName.value.trim() || null,
+      description: perspectiveDescription.value.trim() || null,
+    }, "Perspektive angelegt.");
+  } catch (error) {
+    perspectiveStatus.textContent = showError(error);
+  }
+}
+
+async function updatePerspective() {
+  if (!sessionId || !projectOpen || perspectiveBusy || !perspectiveSelect.value) return;
+  try {
+    const latest = await invokePerspectiveSnapshot(sessionId, { mode: "current" });
+    const selected = latest.perspectives.find((item) => item.perspective_id === perspectiveSelect.value && item.retired_revision == null);
+    if (!selected) throw new Error("perspective_rejected");
+    await publishPerspectiveMutation({
+      command: "update",
+      expected_base_revision: latest.revision,
+      perspective_id: selected.perspective_id,
+      display_name: perspectiveName.value.trim() || null,
+      description: perspectiveDescription.value.trim() || null,
+    }, "Perspektivendaten aktualisiert.");
+  } catch (error) {
+    perspectiveStatus.textContent = showError(error);
+  }
+}
+
+async function retirePerspective() {
+  if (!sessionId || !projectOpen || perspectiveBusy || !perspectiveSelect.value) return;
+  try {
+    const latest = await invokePerspectiveSnapshot(sessionId, { mode: "current" });
+    const selected = latest.perspectives.find((item) => item.perspective_id === perspectiveSelect.value && item.retired_revision == null);
+    if (!selected) throw new Error("perspective_rejected");
+    await publishPerspectiveMutation({
+      command: "retire",
+      expected_base_revision: latest.revision,
+      perspective_id: selected.perspective_id,
+    }, "Perspektive stillgelegt.");
+  } catch (error) {
+    perspectiveStatus.textContent = showError(error);
+  }
+}
+
+async function validateContext(modeSelect, perspectiveControl, status, label) {
+  if (!sessionId || !projectOpen) return;
+  const epistemicMode = modeSelect.value;
+  const perspectiveId = epistemicMode === "world_state" ? null : perspectiveControl.value || null;
+  if (epistemicMode !== "world_state" && perspectiveId == null) {
+    status.textContent = "Wähle für Knows, Believes oder Claims ausdrücklich eine aktive Perspektive.";
+    updatePerspectiveControls();
+    return;
+  }
+  status.textContent = `${label} wird geprüft …`;
+  try {
+    const result = await invokePerspectivesFor(sessionId, {
+      command: "validate_context",
+      epistemic_mode: epistemicMode,
+      perspective_id: perspectiveId,
+    });
+    if (result.kind !== "context_bound") throw new Error("unsupported_protocol");
+    status.textContent = result.perspective_label
+      ? `${label} geprüft: ${epistemicModeLabel(epistemicMode)} · ${result.perspective_label}`
+      : `${label} geprüft: WorldState ohne Perspektive`;
+  } catch (error) {
+    status.textContent = showError(error);
+  }
+}
+
+function epistemicModeLabel(value) {
+  return ({ world_state: "WorldState", knows: "Knows", believes: "Believes", claims: "Claims" })[value] ?? value;
+}
+
 async function refreshSchema(activeSessionId = sessionId) {
   if (!projectOpen || !activeSessionId) return;
   schemaStatus.textContent = "Schema wird geladen …";
@@ -1195,6 +1464,110 @@ async function runBranchLayerSmoke(activeSessionId) {
     || !Number.isSafeInteger(transferCatalog.current_revision)) {
     throw new Error("HistorySpace transfer catalog did not return a pinned typed inventory");
   }
+}
+
+async function runPerspectiveSmoke(activeSessionId) {
+  const baseline = await invokePerspectiveSnapshot(activeSessionId, { mode: "current" });
+  const created = await invokePerspectivesFor(activeSessionId, {
+    command: "create",
+    expected_base_revision: baseline.revision,
+    display_name: "IPC-Prüfung Stadtwache",
+    description: "Temporäre Perspektive für die authentisierte Desktopprüfung.",
+  });
+  if (created.kind !== "published" || !created.perspective_id) {
+    throw new Error("Perspective creation did not publish its private identity");
+  }
+  const id = created.perspective_id;
+  const beforeCreation = await invokePerspectiveSnapshot(activeSessionId, {
+    mode: "historical", recorded_as_of: baseline.revision,
+  });
+  if (beforeCreation.perspectives.some((item) => item.perspective_id === id)) {
+    throw new Error("historical Perspective snapshot included a later definition");
+  }
+  const atCreation = await invokePerspectiveSnapshot(activeSessionId, {
+    mode: "explicit", revision: created.revision,
+  });
+  if (!atCreation.perspectives.some((item) => item.perspective_id === id)) {
+    throw new Error("explicit Perspective snapshot omitted the published definition");
+  }
+
+  const bound = await invokePerspectivesFor(activeSessionId, {
+    command: "validate_context",
+    epistemic_mode: "knows",
+    perspective_id: id,
+  });
+  if (bound.kind !== "context_bound" || !bound.perspective_label) {
+    throw new Error("active Perspective did not bind a Knows context");
+  }
+  const worldBound = await invokePerspectivesFor(activeSessionId, {
+    command: "validate_context",
+    epistemic_mode: "world_state",
+    perspective_id: null,
+  });
+  if (worldBound.kind !== "context_bound" || worldBound.perspective_label != null) {
+    throw new Error("WorldState context was not kept Perspective-free");
+  }
+  const invalidWorldState = await invokePerspectivesFor(activeSessionId, {
+    command: "validate_context",
+    epistemic_mode: "world_state",
+    perspective_id: id,
+  }).then(() => false, () => true);
+  const missingPerspective = await invokePerspectivesFor(activeSessionId, {
+    command: "validate_context",
+    epistemic_mode: "believes",
+    perspective_id: null,
+  }).then(() => false, () => true);
+  if (!invalidWorldState || !missingPerspective) {
+    throw new Error("invalid epistemic mode and Perspective pair was accepted");
+  }
+
+  inputContextMode.value = "knows";
+  inputContextPerspective.value = id;
+  queryContextMode.value = "world_state";
+  queryContextPerspective.value = "";
+  updatePerspectiveControls();
+  if (inputContextMode.value !== "knows"
+    || inputContextPerspective.value !== id
+    || queryContextMode.value !== "world_state"
+    || queryContextPerspective.value !== ""
+    || !queryContextPerspective.disabled) {
+    throw new Error("input and query context selections were not kept independent");
+  }
+
+  const updated = await invokePerspectivesFor(activeSessionId, {
+    command: "update",
+    expected_base_revision: created.revision,
+    perspective_id: id,
+    display_name: "IPC-Prüfung Wache",
+    description: "Aktualisierte temporäre Perspektive.",
+  });
+  if (updated.kind !== "published") throw new Error("Perspective metadata update did not publish");
+  const beforeUpdate = await invokePerspectiveSnapshot(activeSessionId, {
+    mode: "explicit", revision: created.revision,
+  });
+  if (beforeUpdate.perspectives.find((item) => item.perspective_id === id)?.display_name !== "IPC-Prüfung Stadtwache") {
+    throw new Error("Perspective update changed an earlier catalog revision");
+  }
+  const retired = await invokePerspectivesFor(activeSessionId, {
+    command: "retire",
+    expected_base_revision: updated.revision,
+    perspective_id: id,
+  });
+  if (retired.kind !== "published") throw new Error("Perspective retirement did not publish");
+  const retiredCannotBind = await invokePerspectivesFor(activeSessionId, {
+    command: "validate_context",
+    epistemic_mode: "claims",
+    perspective_id: id,
+  }).then(() => false, () => true);
+  if (!retiredCannotBind) throw new Error("retired Perspective remained available to a new context");
+  const atRetirement = await invokePerspectiveSnapshot(activeSessionId, {
+    mode: "explicit", revision: retired.revision,
+  });
+  if (atRetirement.perspectives.find((item) => item.perspective_id === id)?.retired_revision !== retired.revision) {
+    throw new Error("Perspective retirement was not retained in catalog history");
+  }
+  perspectiveViewMode.value = "current";
+  await refreshPerspectives(activeSessionId);
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
@@ -1770,6 +2143,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
+          if (!perspectiveBusy) refreshPerspectives(sessionId).catch((error) => {
+            perspectiveStatus.textContent = showError(error);
+          });
           if (!branchLayerBusy) refreshBranchLayers(sessionId).catch((error) => {
             branchLayerStatus.textContent = showError(error);
           });
@@ -1797,10 +2173,11 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
         await runProjectSmoke(sessionId);
         if (role === "primary") {
-          operationStatus.textContent = "Schema-, Entitäts-, Branch- und Layerprüfung läuft …";
+          operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Branch- und Layerprüfung läuft …";
           await runSchemaSmoke(sessionId);
           await runEntitySmoke(sessionId);
           await runBranchLayerSmoke(sessionId);
+          await runPerspectiveSmoke(sessionId);
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
@@ -1888,6 +2265,45 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   entityTypeSelect.addEventListener("change", updateEntityTypeSelectionState);
   entityAcceptDeprecated.addEventListener("change", updateEntityControls);
   entityCreateButton.addEventListener("click", createEntity);
+  perspectiveRefreshButton.addEventListener("click", () => refreshPerspectives().catch(() => {}));
+  perspectiveViewMode.addEventListener("change", () => {
+    perspectiveViewRevisionWrap.hidden = perspectiveViewMode.value === "current";
+    perspectiveViewRevisionLabel.textContent = perspectiveViewMode.value === "historical"
+      ? "Datenrevision (RecordedAsOf)"
+      : "Katalogrevision";
+    updatePerspectiveControls();
+    if (projectOpen) refreshPerspectives().catch(() => {});
+  });
+  perspectiveViewRevision.addEventListener("change", () => refreshPerspectives().catch(() => {}));
+  perspectiveSelect.addEventListener("change", () => {
+    const selected = currentPerspectives?.perspectives.find((item) => item.perspective_id === perspectiveSelect.value);
+    perspectiveName.value = selected?.display_name ?? "";
+    perspectiveDescription.value = selected?.description ?? "";
+    updatePerspectiveControls();
+  });
+  perspectiveCreateButton.addEventListener("click", createPerspective);
+  perspectiveUpdateButton.addEventListener("click", updatePerspective);
+  perspectiveRetireButton.addEventListener("click", retirePerspective);
+  for (const [mode, select, status] of [
+    [inputContextMode, inputContextPerspective, inputContextStatus],
+    [queryContextMode, queryContextPerspective, queryContextStatus],
+  ]) {
+    mode.addEventListener("change", () => {
+      if (mode.value === "world_state") select.value = "";
+      status.textContent = "Kontext noch nicht geprüft.";
+      updatePerspectiveControls();
+    });
+    select.addEventListener("change", () => {
+      status.textContent = "Kontext noch nicht geprüft.";
+      updatePerspectiveControls();
+    });
+  }
+  inputContextValidate.addEventListener("click", () => validateContext(
+    inputContextMode, inputContextPerspective, inputContextStatus, "Eingabe-Kontext",
+  ));
+  queryContextValidate.addEventListener("click", () => validateContext(
+    queryContextMode, queryContextPerspective, queryContextStatus, "Abfrage-Kontext",
+  ));
   branchLayerRefreshButton.addEventListener("click", () => refreshBranchLayers().catch(() => {}));
   transferLoadButton.addEventListener("click", reloadTransferContents);
   transferSource.addEventListener("change", reloadTransferContents);

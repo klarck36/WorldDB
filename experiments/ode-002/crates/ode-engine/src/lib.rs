@@ -19,6 +19,11 @@ pub use branch_layer::{
     BranchLayerCommand, BranchLayerPublicationView, BranchLayerResponse, BranchLayerSnapshotView,
     BranchView, LayerView,
 };
+mod perspective;
+pub use perspective::{
+    EpistemicModeInput, PerspectiveCommand, PerspectiveContextView, PerspectiveDefinitionView,
+    PerspectivePublicationView, PerspectiveResponse, PerspectiveSnapshotView, PerspectiveView,
+};
 mod history_space_transfer;
 pub use history_space_transfer::{
     ContentIdentityInput, ExternalReferencePolicyInput, HistorySpaceTransferCommand,
@@ -97,6 +102,9 @@ pub enum Request {
     Entities {
         command: EntityCommand,
     },
+    Perspectives {
+        command: PerspectiveCommand,
+    },
     HistorySpaceTransfer {
         command: HistorySpaceTransferCommand,
     },
@@ -137,6 +145,9 @@ pub enum Response {
     },
     Entities {
         result: EntityResponse,
+    },
+    Perspectives {
+        result: PerspectiveResponse,
     },
     HistorySpaceTransfer {
         result: HistorySpaceTransferResponse,
@@ -238,6 +249,7 @@ pub enum EngineError {
     Schema(String),
     Entity(String),
     BranchLayer(String),
+    Perspective(String),
     HistorySpaceTransfer(String),
 }
 
@@ -249,6 +261,7 @@ impl std::fmt::Display for EngineError {
             Self::Schema(message) => formatter.write_str(message),
             Self::Entity(message) => formatter.write_str(message),
             Self::BranchLayer(message) => formatter.write_str(message),
+            Self::Perspective(message) => formatter.write_str(message),
             Self::HistorySpaceTransfer(message) => formatter.write_str(message),
         }
     }

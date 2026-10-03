@@ -213,6 +213,20 @@ fn main() {
                     std::process::exit(74);
                 }
             }
+            Request::Perspectives { command } => {
+                let response = match engine.perspectives(command) {
+                    Ok(result) => Response::Perspectives { result },
+                    Err(worlddb_ode_engine::EngineError::Perspective(_)) => Response::Error {
+                        code: "perspective_rejected".to_owned(),
+                    },
+                    Err(_) => Response::Error {
+                        code: "engine_failed".to_owned(),
+                    },
+                };
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
             Request::Panic => engine.panic_for_spike(),
             Request::Shutdown => {
                 let _ = write_response(&Response::Shutdown);
