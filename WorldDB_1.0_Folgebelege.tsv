@@ -176,3 +176,35 @@ WDB-EVT-004	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_referenc
 WDB-EVT-005	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
 WDB-EVT-007	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
 WDB-SCH-010	M4-09	DONE	artifact:docs/M4-09-verification.md;test:schema_write_validation::tests::deprecated_opt_in_and_exact_scoped_capability_return_typed_warning	PASS	2026-10-01T12:19:07+02:00	Accepted deprecated-write warnings survive as typed CommitReceipt data; the same test rejects missing opt-in and denied scope.
+WDB-BKP-001	M7-16a	READY	-	-	-	Not started
+WDB-BKP-001	M7-16h	PLANNED	-	-	-	Not started
+WDB-BKP-002	M7-16a	READY	-	-	-	Not started
+WDB-SNP-003	M7-16a	READY	-	-	-	Not started
+WDB-SNP-003	M7-16f	PLANNED	-	-	-	Not started
+WDB-STO-006	M7-16a	READY	-	-	-	Not started
+WDB-STO-006	M7-16b	PLANNED	-	-	-	Not started
+WDB-BKP-003	M7-16b	PLANNED	-	-	-	Not started
+WDB-BKP-003	M7-16h	PLANNED	-	-	-	Not started
+WDB-AUD-013	M7-16b	PLANNED	-	-	-	Not started
+WDB-AUD-003	M7-16b	PLANNED	-	-	-	Not started
+WDB-AUD-003	M7-16c	PLANNED	-	-	-	Not started
+WDB-AUD-003	M7-16f	PLANNED	-	-	-	Not started
+WDB-AUD-003	M7-16g	PLANNED	-	-	-	Not started
+WDB-MIG-016	M7-16c	PLANNED	-	-	-	Not started
+WDB-MIG-003	M7-16d	PLANNED	-	-	-	Not started
+WDB-MIG-014	M7-16d	PLANNED	-	-	-	Not started
+WDB-MIG-001	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-004	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-009	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-017	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-018	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-020	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-021	M7-16e	PLANNED	-	-	-	Not started
+WDB-MIG-022	M7-16e	PLANNED	-	-	-	Not started
+WDB-EXP-001	M7-16f	PLANNED	-	-	-	Not started
+WDB-EXP-001	M7-16h	PLANNED	-	-	-	Not started
+WDB-HIS-003	M7-16g	PLANNED	-	-	-	Not started
+WDB-PRG-001	M7-16g	PLANNED	-	-	-	Not started
+WDB-PRG-002	M7-16g	PLANNED	-	-	-	Not started
+WDB-MIG-005	M7-16h	PLANNED	-	-	-	Not started
+WDB-MIG-023	M7-16h	PLANNED	-	-	-	Not started

@@ -38,6 +38,6 @@
   Format-, Workspace-, Clippy-, Vertrags-, Quellen-, Plan- und Windows-Storageprüfungen.
 - `git diff --check HEAD` – bestanden.
 
-`M7-16` ist als nächste Task freigegeben. Dort folgt die breitere Prozessabbruch-/Kompatibilitäts-
-Runde; dieses M7-15-Faultset deckt gezielt die Purge-Audit- und Verzeichnisveröffentlichungsgrenze
-ab.
+Die Bestandsaufnahme M7-16 ist abgeschlossen und hat die breitere Prozessabbruch-/Kompatibilitäts-
+Runde in M7-16a bis M7-16i geteilt. Als Nächstes folgt M7-16a für Backup-Prozessabbrüche; dieses
+M7-15-Faultset deckt gezielt die Purge-Audit- und Verzeichnisveröffentlichungsgrenze ab.
