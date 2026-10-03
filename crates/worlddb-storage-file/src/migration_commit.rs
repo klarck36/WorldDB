@@ -3,15 +3,16 @@
 use std::fmt;
 
 use worlddb_core::{
-    AuditCommitContext, AuditOutcome, AuditRecord, CancellablePublishError, CommitCancellation,
-    DomainId, MigrationAuditCommit, MigrationCommitBackend, OperationId, Record, Revision,
-    RevisionBackend, RevisionLogError,
+    AuditCommitContext, AuditOutcome, AuditRecord, AuditRetentionPolicy, CancellablePublishError,
+    CommitCancellation, DomainId, MigrationAuditCommit, MigrationCommitBackend, OperationId,
+    Record, Revision, RevisionBackend, RevisionLogError, SecurityPolicyVersion,
 };
 
 use crate::{
     CommittedRequiredAuditRecord, DatabaseLayout, HistorySegmentStore, Manifest, ManifestError,
     ManifestSegmentKind, ManifestSegmentReference, ManifestStore, RecoveryError, RecoveryManager,
-    RequiredAuditError, SegmentError, WalError, WalPrepareLog, WriterLock,
+    RequiredAuditError, SecurityPolicyHistoryStore, SecurityPolicyStorageError, SegmentError,
+    WalError, WalPrepareLog, WriterLock,
 };
 
 /// A validated view of persistent migration history could not be opened.
@@ -27,6 +28,8 @@ pub enum FileMigrationBackendError {
     HistorySegment(SegmentError),
     /// The required-audit stream could not be reconstructed.
     RequiredAudit(RequiredAuditError),
+    /// The committed policy projection could not be reconstructed or carried forward.
+    SecurityPolicy(SecurityPolicyStorageError),
     /// A non-genesis WAL head has no corresponding complete manifest snapshot.
     ManifestWalMismatch {
         /// Latest verified revision named by the WAL.
@@ -64,6 +67,12 @@ impl fmt::Display for FileMigrationBackendError {
                     "migration backend required audit is invalid: {error}"
                 )
             }
+            Self::SecurityPolicy(error) => {
+                write!(
+                    formatter,
+                    "migration backend policy history is invalid: {error}"
+                )
+            }
             Self::ManifestWalMismatch {
                 wal_revision,
                 manifest_revision,
@@ -96,6 +105,7 @@ impl std::error::Error for FileMigrationBackendError {
             Self::Manifest(error) => Some(error),
             Self::HistorySegment(error) => Some(error),
             Self::RequiredAudit(error) => Some(error),
+            Self::SecurityPolicy(error) => Some(error),
             Self::ManifestWalMismatch { .. }
             | Self::HistoryDigestMismatch
             | Self::MigrationAuditMismatch(_)
@@ -117,8 +127,20 @@ pub struct FileMigrationCommitBackend<'a> {
     latest: Revision,
     references: Vec<ManifestSegmentReference>,
     records: Vec<(Revision, Record)>,
+    security_policy_version: Option<SecurityPolicyVersion>,
+    security_audit_retention: Option<AuditRetentionPolicy>,
     writes_blocked: bool,
     last_failure: Option<String>,
+}
+
+struct MigrationCommitRecoveryExpectation<'a> {
+    operation_id: OperationId,
+    expected_base: Revision,
+    target_revision: Revision,
+    audit_record: &'a AuditRecord,
+    canonical_action_payload: &'a [u8],
+    history_reference: ManifestSegmentReference,
+    security_reference: Option<ManifestSegmentReference>,
 }
 
 impl<'a> FileMigrationCommitBackend<'a> {
@@ -152,6 +174,42 @@ impl<'a> FileMigrationCommitBackend<'a> {
             .as_ref()
             .map_or_else(Vec::new, |manifest| manifest.segments().to_vec());
         let records = load_current_records(&layout, writer_lock, wal_revision, &references, &wal)?;
+        let security_reference_ids = references
+            .iter()
+            .filter(|reference| reference.kind() == ManifestSegmentKind::SecurityPolicy)
+            .map(|reference| reference.id())
+            .collect::<Vec<_>>();
+        let (security_policy_version, security_audit_retention) =
+            if security_reference_ids.is_empty() {
+                (None, None)
+            } else {
+                match SecurityPolicyHistoryStore::new(layout.clone())
+                    .load_history(wal_revision, &security_reference_ids)
+                {
+                    Ok(history) => {
+                        let version = history.policy().versions().last().cloned().ok_or(
+                            FileMigrationBackendError::UnsupportedHistory(
+                                "security-policy history has no current version",
+                            ),
+                        )?;
+                        let retention = history.audit_retention_at(wal_revision).map_err(|_| {
+                            FileMigrationBackendError::UnsupportedHistory(
+                                "security-policy history has no current audit-retention version",
+                            )
+                        })?;
+                        (Some(version), retention)
+                    }
+                    Err(SecurityPolicyStorageError::History(
+                        worlddb_core::SecurityPolicyHistoryError::IncompleteThroughCommittedRevision
+                        | worlddb_core::SecurityPolicyHistoryError::IncompleteRevisionCoverage,
+                    )) => {
+                        // Legacy non-policy migrations can carry older snapshots without complete
+                        // coverage; the policy-gated CLI rejects those projects before this layer.
+                        (None, None)
+                    }
+                    Err(error) => return Err(FileMigrationBackendError::SecurityPolicy(error)),
+                }
+            };
 
         Ok(Self {
             layout,
@@ -160,6 +218,8 @@ impl<'a> FileMigrationCommitBackend<'a> {
             latest: wal_revision,
             references,
             records,
+            security_policy_version,
+            security_audit_retention,
             writes_blocked: false,
             last_failure: None,
         })
@@ -256,13 +316,17 @@ impl<'a> FileMigrationCommitBackend<'a> {
 
     fn reconcile_unknown_commit(
         &mut self,
-        operation_id: OperationId,
-        expected_base: Revision,
-        target_revision: Revision,
-        audit_record: &worlddb_core::AuditRecord,
-        canonical_action_payload: &[u8],
-        history_reference: ManifestSegmentReference,
+        expectation: MigrationCommitRecoveryExpectation<'_>,
     ) -> Result<bool, String> {
+        let MigrationCommitRecoveryExpectation {
+            operation_id,
+            expected_base,
+            target_revision,
+            audit_record,
+            canonical_action_payload,
+            history_reference,
+            security_reference,
+        } = expectation;
         RecoveryManager::new(self.layout.clone())
             .recover(self.writer_lock)
             .map_err(|error| error.to_string())?;
@@ -300,6 +364,8 @@ impl<'a> FileMigrationCommitBackend<'a> {
                 .ok_or_else(|| String::from("recovered migration manifest is missing"))?;
             if manifest.revision() != target_revision
                 || !manifest.segments().contains(&history_reference)
+                || security_reference
+                    .is_some_and(|reference| !manifest.segments().contains(&reference))
             {
                 return Err(String::from(
                     "committed audit and recovered migration manifest do not match",
@@ -323,10 +389,18 @@ impl<'a> FileMigrationCommitBackend<'a> {
         target_revision: Revision,
         entries: Vec<Record>,
         history_reference: ManifestSegmentReference,
+        security_reference: Option<ManifestSegmentReference>,
+        security_policy_version: Option<&SecurityPolicyVersion>,
     ) {
         self.records
             .extend(entries.into_iter().map(|record| (target_revision, record)));
         self.references.push(history_reference);
+        if let Some(reference) = security_reference {
+            self.references.push(reference);
+        }
+        if let Some(version) = security_policy_version {
+            self.security_policy_version = Some(version.clone());
+        }
         self.latest = target_revision;
     }
 }
@@ -447,7 +521,10 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
             ));
         }
         if self.records.try_reserve(entries.len()).is_err()
-            || self.references.try_reserve(1).is_err()
+            || self
+                .references
+                .try_reserve(1 + usize::from(self.security_policy_version.is_some()))
+                .is_err()
         {
             return Err(self.publish_failure("could not reserve migration history memory"));
         }
@@ -462,35 +539,104 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
             receipt.content_digest(),
             target_revision,
         );
+        let security_store = SecurityPolicyHistoryStore::new(self.layout.clone());
+        let (security_reference, next_security_version) =
+            if let Some(current_version) = self.security_policy_version.as_ref() {
+                let version = SecurityPolicyVersion::new(
+                    target_revision,
+                    current_version.epoch(),
+                    current_version.snapshot().clone(),
+                );
+                let receipt = match security_store.stage_version(
+                    self.writer_lock,
+                    &version,
+                    None,
+                    self.security_audit_retention,
+                ) {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        let cleanup = history.remove_staged_reference(history_reference);
+                        let message = match cleanup {
+                            Ok(()) => error.to_string(),
+                            Err(cleanup_error) => {
+                                format!("{error}; staged migration cleanup failed: {cleanup_error}")
+                            }
+                        };
+                        return Err(self.publish_failure(message));
+                    }
+                };
+                (
+                    Some(ManifestSegmentReference::new(
+                        ManifestSegmentKind::SecurityPolicy,
+                        receipt.id(),
+                        receipt.content_digest(),
+                        target_revision,
+                    )),
+                    Some(version),
+                )
+            } else {
+                (None, None)
+            };
         let mut next_references = Vec::new();
         if next_references
-            .try_reserve_exact(self.references.len().saturating_add(1))
+            .try_reserve_exact(
+                self.references
+                    .len()
+                    .saturating_add(1 + usize::from(security_reference.is_some())),
+            )
             .is_err()
         {
             let _ = history.remove_staged_reference(history_reference);
+            if let Some(reference) = security_reference {
+                let _ = security_store.remove_staged_reference(reference);
+            }
             return Err(self.publish_failure("could not reserve migration manifest references"));
         }
         next_references.extend_from_slice(&self.references);
         next_references.push(history_reference);
+        if let Some(reference) = security_reference {
+            next_references.push(reference);
+        }
+
+        let mut staged_references = Vec::new();
+        if staged_references
+            .try_reserve_exact(1 + usize::from(security_reference.is_some()))
+            .is_err()
+        {
+            let _ = history.remove_staged_reference(history_reference);
+            if let Some(reference) = security_reference {
+                let _ = security_store.remove_staged_reference(reference);
+            }
+            return Err(self.publish_failure("could not reserve migration staging references"));
+        }
+        staged_references.push(history_reference);
+        if let Some(reference) = security_reference {
+            staged_references.push(reference);
+        }
 
         let canonical_action_payload = audit_commit.canonical_action_payload();
         let prepare = match self.wal.prepare_audited_manifest_snapshot_with_action(
             self.writer_lock,
             audit_commit.operation_id(),
             next_references,
-            &[history_reference],
+            &staged_references,
             &canonical_action_payload,
             &audit_record,
         ) {
             Ok(prepare) => prepare,
             Err(error) => {
-                let cleanup = history.remove_staged_reference(history_reference);
-                let message = match cleanup {
-                    Ok(()) => error.to_string(),
-                    Err(cleanup_error) => {
-                        format!("{error}; staged migration segment cleanup failed: {cleanup_error}")
-                    }
-                };
+                let message = cleanup_staged_migration_segments(
+                    &history,
+                    history_reference,
+                    &security_store,
+                    security_reference,
+                )
+                .map_or_else(
+                    || error.to_string(),
+                    |cleanup_error| {
+                        format!("{error}; staged migration cleanup failed: {cleanup_error}")
+                    },
+                );
                 return Err(self.publish_failure(message));
             }
         };
@@ -499,19 +645,24 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
             Ok(prepared) => prepared,
             Err(error) => {
                 let recovery = RecoveryManager::new(self.layout.clone()).recover(self.writer_lock);
-                let cleanup = history.remove_staged_reference(history_reference);
-                if recovery.is_err() || cleanup.is_err() {
+                let cleanup = cleanup_staged_migration_segments(
+                    &history,
+                    history_reference,
+                    &security_store,
+                    security_reference,
+                );
+                if recovery.is_err() || cleanup.is_some() {
                     self.writes_blocked = true;
                 }
-                let message = match (recovery, cleanup) {
-                    (Ok(_), Ok(())) => error.to_string(),
-                    (Err(recovery_error), _) => {
-                        format!("{error}; WAL prepare recovery failed: {recovery_error}")
-                    }
-                    (_, Err(cleanup_error)) => {
-                        format!("{error}; staged migration cleanup failed: {cleanup_error}")
-                    }
-                };
+                let mut message = error.to_string();
+                if let Err(recovery_error) = recovery {
+                    message.push_str(&format!("; WAL prepare recovery failed: {recovery_error}"));
+                }
+                if let Some(cleanup_error) = cleanup {
+                    message.push_str(&format!(
+                        "; staged migration cleanup failed: {cleanup_error}"
+                    ));
+                }
                 return Err(self.publish_failure(message));
             }
         };
@@ -520,8 +671,13 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
             Ok(permit) => permit,
             Err(error) => {
                 let recovery = RecoveryManager::new(self.layout.clone()).recover(self.writer_lock);
-                let cleanup = history.remove_staged_reference(history_reference);
-                if recovery.is_err() || cleanup.is_err() {
+                let cleanup = cleanup_staged_migration_segments(
+                    &history,
+                    history_reference,
+                    &security_store,
+                    security_reference,
+                );
+                if recovery.is_err() || cleanup.is_some() {
                     self.writes_blocked = true;
                 }
                 self.last_failure = recovery
@@ -530,7 +686,7 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
                         format!("cancelled before commitpoint; recovery failed: {failure}")
                     })
                     .or_else(|| {
-                        cleanup.err().map(|failure| {
+                        cleanup.map(|failure| {
                             format!(
                                 "cancelled before commitpoint; staged cleanup failed: {failure}"
                             )
@@ -543,7 +699,13 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
         match self.wal.publish_prepared_commit(prepared_commit) {
             Ok(receipt) if receipt.revision() == target_revision => {
                 permit.committed();
-                self.append_committed_entries(target_revision, entries, history_reference);
+                self.append_committed_entries(
+                    target_revision,
+                    entries,
+                    history_reference,
+                    security_reference,
+                    next_security_version.as_ref(),
+                );
                 if let Err(error) =
                     RecoveryManager::new(self.layout.clone()).recover(self.writer_lock)
                 {
@@ -565,22 +727,34 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
                 ))
             }
             Err(error @ WalError::UnknownCommitOutcome { .. }) => {
-                match self.reconcile_unknown_commit(
-                    audit_commit.operation_id(),
-                    expected_base_revision,
+                match self.reconcile_unknown_commit(MigrationCommitRecoveryExpectation {
+                    operation_id: audit_commit.operation_id(),
+                    expected_base: expected_base_revision,
                     target_revision,
-                    &audit_record,
-                    &canonical_action_payload,
+                    audit_record: &audit_record,
+                    canonical_action_payload: &canonical_action_payload,
                     history_reference,
-                ) {
+                    security_reference,
+                }) {
                     Ok(true) => {
                         permit.committed();
-                        self.append_committed_entries(target_revision, entries, history_reference);
+                        self.append_committed_entries(
+                            target_revision,
+                            entries,
+                            history_reference,
+                            security_reference,
+                            next_security_version.as_ref(),
+                        );
                         Ok(target_revision)
                     }
                     Ok(false) => {
                         permit.not_committed();
-                        let _ = history.remove_staged_reference(history_reference);
+                        let _ = cleanup_staged_migration_segments(
+                            &history,
+                            history_reference,
+                            &security_store,
+                            security_reference,
+                        );
                         Err(self.publish_failure(error))
                     }
                     Err(reconcile_error) => {
@@ -598,11 +772,34 @@ impl MigrationCommitBackend for FileMigrationCommitBackend<'_> {
             Err(error) => {
                 permit.not_committed();
                 let _ = RecoveryManager::new(self.layout.clone()).recover(self.writer_lock);
-                let _ = history.remove_staged_reference(history_reference);
+                let _ = cleanup_staged_migration_segments(
+                    &history,
+                    history_reference,
+                    &security_store,
+                    security_reference,
+                );
                 Err(self.publish_failure(error))
             }
         }
     }
+}
+
+fn cleanup_staged_migration_segments(
+    history: &HistorySegmentStore,
+    history_reference: ManifestSegmentReference,
+    security: &SecurityPolicyHistoryStore,
+    security_reference: Option<ManifestSegmentReference>,
+) -> Option<String> {
+    let mut failures = Vec::new();
+    if let Err(error) = history.remove_staged_reference(history_reference) {
+        failures.push(error.to_string());
+    }
+    if let Some(reference) = security_reference {
+        if let Err(error) = security.remove_staged_reference(reference) {
+            failures.push(error.to_string());
+        }
+    }
+    (!failures.is_empty()).then(|| failures.join("; "))
 }
 
 /// Borrowed read of migration history through one supported snapshot.

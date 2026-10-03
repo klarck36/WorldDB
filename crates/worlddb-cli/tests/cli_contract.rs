@@ -12,6 +12,13 @@ use worlddb_core::{
     PolicySubject, Principal, PrincipalId, Revision, SecurityEpoch, SecurityPolicyHistory,
     SecurityPolicySnapshot, SecurityPolicyVersion, SnapshotId,
 };
+#[cfg(windows)]
+use worlddb_core::{
+    JobBudget, MigrationCategory, MigrationId, MigrationPlan, MigrationPlanSpec, MigrationRunId,
+    MigrationStepId, MigrationStepTargetSchema, MigrationTargetSchema, MigrationTransformerVersion,
+    PredicateId, Record, SchemaDefinitionId, SchemaHistoryReferenceModel, SchemaIdentityTransition,
+    SchemaMode, SchemaRevision, SourceSchemaPrecondition, encode_record,
+};
 use worlddb_storage_file::{
     DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, RawReadAuditWal,
     WalPrepareLog, WriterLockError,
@@ -20,13 +27,13 @@ use worlddb_storage_file::{
 #[cfg(windows)]
 use worlddb_core::{
     AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
-    AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, PolicyTarget,
-    SecurityPolicyChange, SecurityPolicyRecord,
+    AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes,
+    MigrationRunJournalState, PolicyTarget, SecurityPolicyChange, SecurityPolicyRecord,
 };
 #[cfg(windows)]
 use worlddb_storage_file::{
-    ManifestSegmentKind, ManifestSegmentReference, RecoveryManager, SecurityPolicyHistoryStore,
-    StorageVerifier,
+    FileStoreGuardedMigrationRun, ManifestSegmentKind, ManifestSegmentReference, RecoveryManager,
+    SecurityPolicyHistoryStore, StorageVerifier,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -306,6 +313,312 @@ fn create_host_policy_project(
     }
     drop(lock);
     Ok(principal)
+}
+
+#[cfg(windows)]
+fn breaking_migration_plan_frame() -> Result<(Vec<u8>, MigrationStepId), String> {
+    let step_id = domain_id::<MigrationStepId>(41)?;
+    let source_predicate = domain_id::<PredicateId>(42)?;
+    let target_predicate = domain_id::<PredicateId>(43)?;
+    let source_fingerprint = SchemaHistoryReferenceModel::new()
+        .schema_at(SchemaMode::Current, Revision::FIRST_COMMIT)
+        .map_err(|error| error.to_string())?
+        .fingerprint();
+    let target_revision = Revision::new(2).map_err(|error| error.to_string())?;
+    let target_schema = MigrationTargetSchema::new(
+        SchemaRevision::from_published_revision(target_revision),
+        source_fingerprint,
+    );
+    let transition = SchemaIdentityTransition::new(
+        Some(SchemaDefinitionId::Predicate(source_predicate)),
+        Some(SchemaDefinitionId::Predicate(target_predicate)),
+        MigrationCategory::Breaking,
+    )
+    .map_err(|error| error.to_string())?;
+    let plan = MigrationPlan::new(MigrationPlanSpec {
+        migration_id: domain_id::<MigrationId>(40)?,
+        category: MigrationCategory::Breaking,
+        source_schema: SourceSchemaPrecondition::new(
+            SchemaRevision::from_published_revision(Revision::FIRST_COMMIT),
+            source_fingerprint,
+        ),
+        target_schema,
+        steps: vec![step_id],
+        step_targets: Some(vec![MigrationStepTargetSchema::new(step_id, target_schema)]),
+        schema_changes: vec![transition],
+        transformer_version: MigrationTransformerVersion::new(1)
+            .map_err(|error| error.to_string())?,
+        calendar_shift: None,
+        budget: JobBudget::new(10, 1024 * 1024).map_err(|error| error.to_string())?,
+    })
+    .map_err(|error| error.to_string())?;
+    let frame = encode_record(&Record::MigrationPlan(plan)).map_err(|error| error.to_string())?;
+    Ok((frame, step_id))
+}
+
+#[cfg(windows)]
+#[test]
+fn breaking_migration_without_explicit_confirmation_does_not_create_restore_artifacts()
+-> Result<(), String> {
+    let area = TempArea::create()?;
+    let database_path = area.path("migration-source");
+    let _principal = create_host_policy_project(&database_path, &[Capability::MigrationExecute])?;
+    let (plan_frame, step_id) = breaking_migration_plan_frame()?;
+    let plan_path = area.path("breaking-plan.bin");
+    fs::write(&plan_path, plan_frame).map_err(|error| error.to_string())?;
+    let run_id = domain_id::<MigrationRunId>(44)?.to_string();
+    let operation_id = operation_id(45)?.to_string();
+    let backup_path = area.path("migration-backup");
+    let restore_path = area.path("migration-restore");
+    let database_text = database_path
+        .to_str()
+        .ok_or_else(|| String::from("database path is not valid UTF-8"))?;
+    let plan_text = plan_path
+        .to_str()
+        .ok_or_else(|| String::from("plan path is not valid UTF-8"))?;
+    let run_text = run_id.as_str();
+    let step_text = step_id.to_string();
+    let operation_text = operation_id.as_str();
+    let backup_text = backup_path
+        .to_str()
+        .ok_or_else(|| String::from("backup path is not valid UTF-8"))?;
+    let restore_text = restore_path
+        .to_str()
+        .ok_or_else(|| String::from("restore path is not valid UTF-8"))?;
+    let arguments = [
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "run",
+        database_text,
+        "--plan-file",
+        plan_text,
+        "--run-id",
+        run_text,
+        "--step",
+        &step_text,
+        "--operation-id",
+        operation_text,
+        "--backup",
+        backup_text,
+        "--restore",
+        restore_text,
+    ];
+    let output = run(&arguments).ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"code\":\"InvalidRequest\""));
+    assert!(!stdout.contains(backup_text));
+    assert!(!stdout.contains(restore_text));
+    assert!(!backup_path.exists());
+    assert!(!restore_path.exists());
+
+    let layout = DatabaseLayout::open(&database_path).map_err(|error| error.to_string())?;
+    let manifest = ManifestStore::new(layout)
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("migration source manifest disappeared"))?;
+    assert_eq!(manifest.revision(), Revision::FIRST_COMMIT);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn migration_plan_dry_run_breaking_run_and_resume_guards_are_end_to_end() -> Result<(), String> {
+    let area = TempArea::create()?;
+    let database_path = area.path("migration-source");
+    let _principal = create_host_policy_project(
+        &database_path,
+        &[
+            Capability::ProjectRead,
+            Capability::MigrationPlan,
+            Capability::MigrationExecute,
+            Capability::BackupCreate,
+            Capability::BackupRestore,
+        ],
+    )?;
+    let (plan_frame, step_id) = breaking_migration_plan_frame()?;
+    let plan_path = area.path("breaking-plan.bin");
+    fs::write(&plan_path, plan_frame).map_err(|error| error.to_string())?;
+    let run_id = domain_id::<MigrationRunId>(46)?.to_string();
+    let operation_id = operation_id(47)?.to_string();
+    let backup_path = area.path("migration-backup");
+    let restore_path = area.path("migration-restore");
+    let resume_restore_path = area.path("migration-resume-restore");
+    let database_text = database_path
+        .to_str()
+        .ok_or_else(|| String::from("database path is not valid UTF-8"))?;
+    let plan_text = plan_path
+        .to_str()
+        .ok_or_else(|| String::from("plan path is not valid UTF-8"))?;
+    let run_text = run_id.as_str();
+    let step_text = step_id.to_string();
+    let operation_text = operation_id.as_str();
+    let backup_text = backup_path
+        .to_str()
+        .ok_or_else(|| String::from("backup path is not valid UTF-8"))?;
+    let restore_text = restore_path
+        .to_str()
+        .ok_or_else(|| String::from("restore path is not valid UTF-8"))?;
+    let resume_restore_text = resume_restore_path
+        .to_str()
+        .ok_or_else(|| String::from("resume restore path is not valid UTF-8"))?;
+
+    let original_tree = snapshot_tree(&database_path)?;
+    let plan_output = run(&[
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "plan",
+        database_text,
+        "--plan-file",
+        plan_text,
+    ])
+    .ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert!(plan_output.status.success());
+    assert!(String::from_utf8_lossy(&plan_output.stdout).contains("\"status\":\"planned\""));
+    assert!(!String::from_utf8_lossy(&plan_output.stdout).contains(database_text));
+    assert_eq!(snapshot_tree(&database_path)?, original_tree);
+
+    let dry_run_output = run(&[
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "dry-run",
+        database_text,
+        "--plan-file",
+        plan_text,
+        "--step",
+        &step_text,
+    ])
+    .ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert!(dry_run_output.status.success());
+    let dry_run_text = String::from_utf8_lossy(&dry_run_output.stdout);
+    assert!(dry_run_text.contains("\"status\":\"previewed\""));
+    assert!(!dry_run_text.contains(database_text));
+    assert_eq!(snapshot_tree(&database_path)?, original_tree);
+
+    let missing_resume_output = run(&[
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "resume",
+        database_text,
+        "--plan-file",
+        plan_text,
+        "--run-id",
+        run_text,
+        "--step",
+        &step_text,
+        "--operation-id",
+        operation_text,
+        "--backup",
+        backup_text,
+        "--restore",
+        resume_restore_text,
+        "--confirm-breaking",
+    ])
+    .ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert_eq!(missing_resume_output.status.code(), Some(5));
+    assert!(
+        String::from_utf8_lossy(&missing_resume_output.stdout).contains("\"code\":\"NotFound\"")
+    );
+    assert!(!backup_path.exists());
+    assert!(!resume_restore_path.exists());
+
+    let run_output = run(&[
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "run",
+        database_text,
+        "--plan-file",
+        plan_text,
+        "--run-id",
+        run_text,
+        "--step",
+        &step_text,
+        "--operation-id",
+        operation_text,
+        "--backup",
+        backup_text,
+        "--restore",
+        restore_text,
+        "--confirm-breaking",
+    ])
+    .ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert!(
+        run_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run_output.stdout)
+    );
+    let run_text_out = String::from_utf8_lossy(&run_output.stdout);
+    assert!(run_text_out.contains("\"status\":\"completed\""));
+    assert!(run_text_out.contains("\"final_revision\":\"2\""));
+    assert!(!run_text_out.contains(database_text));
+    assert!(!run_text_out.contains(backup_text));
+    assert!(!run_text_out.contains(restore_text));
+    assert!(backup_path.is_dir());
+    assert!(restore_path.is_dir());
+
+    let layout = DatabaseLayout::open(&database_path).map_err(|error| error.to_string())?;
+    let lock = layout
+        .try_writer_lock()
+        .map_err(|error| error.to_string())?;
+    let migration_run = FileStoreGuardedMigrationRun::open(layout, &lock)
+        .map_err(|error| format!("could not open migration run: {error}"))?;
+    let snapshot = migration_run
+        .load_journal_status(domain_id::<MigrationRunId>(46)?)
+        .map_err(|error| format!("could not read migration run journal: {error}"))?
+        .ok_or_else(|| String::from("migration run journal disappeared"))?;
+    assert_eq!(snapshot.state(), MigrationRunJournalState::Completed);
+    drop(lock);
+
+    let resume_output = run(&[
+        "--format=jsonl",
+        "v1",
+        "migration",
+        "resume",
+        database_text,
+        "--plan-file",
+        plan_text,
+        "--run-id",
+        run_text,
+        "--step",
+        &step_text,
+        "--operation-id",
+        operation_text,
+        "--backup",
+        backup_text,
+        "--restore",
+        resume_restore_text,
+        "--confirm-breaking",
+    ])
+    .ok_or_else(|| String::from("CLI process failed to start"))?;
+    assert_eq!(
+        resume_output.status.code(),
+        Some(2),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&resume_output.stdout),
+        String::from_utf8_lossy(&resume_output.stderr)
+    );
+    let resume_text_out = String::from_utf8_lossy(&resume_output.stdout);
+    assert!(resume_text_out.contains("\"code\":\"InvalidRequest\""));
+    assert!(!resume_text_out.contains(database_text));
+    assert!(!resume_text_out.contains(backup_text));
+    assert!(!resume_text_out.contains(resume_restore_text));
+    assert!(!resume_restore_path.exists());
+
+    let layout = DatabaseLayout::open(&database_path).map_err(|error| error.to_string())?;
+    let manifest = ManifestStore::new(layout)
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("migration source manifest disappeared"))?;
+    assert_eq!(
+        manifest.revision(),
+        Revision::new(2).map_err(|error| error.to_string())?
+    );
+    Ok(())
 }
 
 #[cfg(windows)]

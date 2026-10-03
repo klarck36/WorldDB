@@ -814,6 +814,20 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates the required-audit record identity for one guarded migration step.
+    #[doc(hidden)]
+    pub fn generate_migration_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the required-audit operation identity for one guarded migration step.
+    #[doc(hidden)]
+    pub fn generate_migration_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Records a restore-point token after the file adapter verified a real clone restore.
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments, reason = "WDB-EXC-0004")]

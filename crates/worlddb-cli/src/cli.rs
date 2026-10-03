@@ -1,27 +1,36 @@
 //! Versioned command-line interface and safe output boundary.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr;
 
 use worlddb_core::api::v1::{CURRENT_PROTOCOL, PublicCode, RequestId};
 use worlddb_core::{
-    AuditPolicyFingerprint, AuthorizationDecision, AuthorizationMode, Bytes, Capability,
-    DatabaseId, DomainId, PolicyTarget, PrincipalId,
+    AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
+    AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, AuthorizationDecision,
+    AuthorizationMode, BreakingMigrationAdminAction, Bytes, Capability, DatabaseId, DomainId,
+    MigrationAdminDecision, MigrationCategory, MigrationDryRun, MigrationId,
+    MigrationItemResolution, MigrationPlan, MigrationRunId, MigrationRunJournalState,
+    MigrationStepId, MigrationStepInput, MigrationTransformer, OperationId, PolicyTarget,
+    PrincipalId, Record, Revision, RevisionBackend, SchemaDefinition, SchemaHistoryReferenceModel,
+    SchemaMode, SchemaRevision, SecurityEpoch, UpgradePlanId, UpgradeRunId,
+    ValidatedMigrationDecisions, decode_record,
 };
 use worlddb_storage_file::{
     BackupAuthenticity, BackupError, BackupProfile, BackupVerification, DatabaseLayout,
-    ExactBackupManager, FormatProbeError, Manifest, ManifestSegmentKind, ManifestStore,
-    RecoveryDisposition, RecoveryError, RecoveryManager, RestoreError, RestoreManager,
-    SalvageError, SalvageInventorySource, SalvageManager, SalvageSegmentOutcome,
-    SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, StorageDamageClass,
-    StorageFileError, StorageVerifier, StorageVerifyAction, StorageVerifyError,
-    StorageVerifyReport, WriterLock, WriterLockError, verify_audit_complete_backup,
-    verify_exact_backup,
+    ExactBackupManager, FileStoreGuardedMigrationRun, FormatProbeError, HistorySegmentStore,
+    Manifest, ManifestSegmentKind, ManifestStore, MigrationRestorePointError, RecoveryDisposition,
+    RecoveryError, RecoveryManager, RestoreError, RestoreManager, SalvageError,
+    SalvageInventorySource, SalvageManager, SalvageSegmentOutcome, SecurityPolicyHistorySnapshot,
+    SecurityPolicyHistoryStore, StorageDamageClass, StorageFileError, StorageUpgradeBudget,
+    StorageUpgradeManager, StorageUpgradeRestoreTargets, StorageVerifier, StorageVerifyAction,
+    StorageVerifyError, StorageVerifyReport, WalPrepareLog, WriterLock, WriterLockError,
+    verify_audit_complete_backup, verify_exact_backup,
 };
 
 use crate::adapter_protocol::{
@@ -40,7 +49,7 @@ const EXIT_CANCELLED: u8 = 9;
 const EXIT_BUDGET_EXCEEDED: u8 = 10;
 const EXIT_INTERNAL: u8 = 70;
 
-const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
+const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 migration               Plan, preview, run, or resume a schema migration\n  v1 storage upgrade          Upgrade the storage format with restore proof\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
 
 const HELP_ADAPTER_RUN: &str = "Usage: worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\n\nThe manifest binds the operation, deterministic seed, ID mapping, protocol capabilities, and process budgets. The adapter receives only framed stdin/stdout data; the output file is written only after a clean adapter exit.";
 const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <database-directory>\n\nRuns read-only storage verification under a shared lock. The report includes safe_revision, disposition, observed damage classes, and safe next actions.";
@@ -49,6 +58,8 @@ const HELP_OPEN_READ_ONLY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 
 const HELP_SALVAGE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 salvage <source-directory> --output <new-directory>\n\nCopies verified immutable data to a new marked salvage fork. The source is opened with a shared read-only lock and is never repaired or rewritten.";
 const HELP_BACKUP: &str = "Usage: worlddb-cli [--format human|jsonl] v1 backup create <source-directory> --output <new-directory> --profile exact|audit-complete --audit-scope excluded|included\n       worlddb-cli [--format human|jsonl] v1 backup verify <backup-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nThe profile and matching audit scope are mandatory and repeated in every result. Exact excludes audit history. AuditComplete includes the supported raw-read audit prefix. Creation requires the current host-bound ProjectRead and BackupCreate capabilities; AuditComplete also requires AuditRead and AuditExport.";
 const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore clone <backup-directory> --authorize-with <current-project-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nRestore checks the current host-bound BackupRestore capability in the authorization project. AuditComplete also requires AuditRead and AuditExport. The authorization project must be the database named by the backup. Same-identity disaster recovery is not supported by the storage contract.";
+const HELP_MIGRATION: &str = "Usage: worlddb-cli [--format human|jsonl] v1 migration plan|dry-run|run|resume <database-directory> --plan-file <canonical-MigrationPlan-record> [--run-id <uuid>] [--step <step-uuid> [--operation-id <uuid>] [--record <canonical-record-file>...]] [--omit <record-index>|--replace <record-index> <canonical-record-file>]... [--backup <exact-backup-directory> --restore <new-clone-directory> --confirm-breaking]\n\nPlan and dry-run are read-only. Every supplied record file contains exactly one canonical WorldDB record frame. Step groups must match the plan order. Run and resume require current MigrationExecute permission and stable run/step operation IDs. Breaking requires an exact backup, a real verified restore clone, and the explicit --confirm-breaking flag; resume uses the retained backup and a new restore-clone destination.";
+const HELP_STORAGE_UPGRADE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 storage upgrade <database-directory> --backup <new-exact-backup-directory> --restore <new-clone-directory> --confirm\n\nPrepares the supported CURRENT v1 to v2 upgrade, creates an exact backup, verifies a real clone restore, requires current StorageFormatUpgrade, BackupCreate, and BackupRestore permissions, then publishes the format upgrade. The --confirm flag is mandatory.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -66,6 +77,107 @@ enum HelpScope {
     Salvage,
     Backup,
     Restore,
+    Migration,
+    StorageUpgrade,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationStatus {
+    Planned,
+    Previewed,
+    Completed,
+    Resumed,
+}
+
+impl MigrationStatus {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Previewed => "previewed",
+            Self::Completed => "completed",
+            Self::Resumed => "resumed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MigrationSummary {
+    status: MigrationStatus,
+    database_id: DatabaseId,
+    migration_id: MigrationId,
+    category: MigrationCategory,
+    fingerprint: [u8; 32],
+    source_revision: u64,
+    target_revision: u64,
+    step_count: usize,
+    input_record_count: u64,
+    input_bytes: u64,
+    estimate_output_bytes: Option<u64>,
+    error_count: u64,
+    unresolved_count: usize,
+    completed_step_count: usize,
+    final_revision: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StorageUpgradeSummary {
+    plan_id: UpgradePlanId,
+    run_id: UpgradeRunId,
+    source_revision: u64,
+    target_fingerprint: [u8; 32],
+    pointer_digest: [u8; 32],
+    resumed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationCommandAction {
+    Plan,
+    DryRun,
+    Run,
+    Resume,
+}
+
+#[derive(Debug)]
+struct MigrationStepFiles {
+    step_id: MigrationStepId,
+    operation_id: Option<OperationId>,
+    record_files: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+struct MigrationResolutionSpec {
+    record_index: u64,
+    resolution: MigrationItemResolution,
+}
+
+#[derive(Debug)]
+struct MigrationCommandRequest {
+    action: MigrationCommandAction,
+    database_path: PathBuf,
+    plan_path: PathBuf,
+    run_id: Option<MigrationRunId>,
+    steps: Vec<MigrationStepFiles>,
+    resolutions: Vec<MigrationResolutionSpec>,
+    backup_path: Option<PathBuf>,
+    restore_path: Option<PathBuf>,
+    confirm_breaking: bool,
+}
+
+#[derive(Debug)]
+struct LoadedMigrationStep {
+    step_id: MigrationStepId,
+    operation_id: Option<OperationId>,
+    records: Vec<Vec<u8>>,
+}
+
+struct MigrationAuditContext<'a> {
+    plan: &'a MigrationPlan,
+    actor: PrincipalId,
+    policy: &'a worlddb_core::SecurityPolicySnapshot,
+    epoch: SecurityEpoch,
+    target: PolicyTarget,
+    layout: &'a DatabaseLayout,
+    writer_lock: &'a WriterLock,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -245,6 +357,8 @@ enum Success {
         audit_scope: BackupAuditScope,
         summary: RestoreSummary,
     },
+    Migration(MigrationSummary),
+    StorageUpgrade(StorageUpgradeSummary),
     AdapterRun {
         protocol_major: u16,
         protocol_minor: u16,
@@ -453,6 +567,12 @@ fn parse_help_scope(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     if scope == "restore" && arguments.is_empty() {
         return Ok(Success::Help(HelpScope::Restore));
     }
+    if scope == "migration" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Migration));
+    }
+    if scope == "storage-upgrade" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::StorageUpgrade));
+    }
     Err(CliError::invalid_request())
 }
 
@@ -493,6 +613,12 @@ fn parse_v1_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     }
     if command == "restore" {
         return parse_restore_command(arguments);
+    }
+    if command == "migration" {
+        return parse_migration_command(arguments);
+    }
+    if command == "storage" {
+        return parse_storage_command(arguments);
     }
     Err(CliError::unsupported_operation())
 }
@@ -719,6 +845,1079 @@ fn parse_restore_command(mut arguments: VecDeque<OsString>) -> Result<Success, C
         profile,
         audit_scope,
     )
+}
+
+fn parse_migration_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(action) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::Migration));
+    };
+    if action == "--help" || action == "-h" || action == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::Migration))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    let action = match action.to_str() {
+        Some("plan") => MigrationCommandAction::Plan,
+        Some("dry-run") => MigrationCommandAction::DryRun,
+        Some("run") => MigrationCommandAction::Run,
+        Some("resume") => MigrationCommandAction::Resume,
+        Some(_) => return Err(CliError::unsupported_operation()),
+        None => return Err(CliError::invalid_request()),
+    };
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::Migration));
+    }
+
+    let database_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    if !take_option(&mut arguments, "--plan-file") {
+        return Err(CliError::invalid_request());
+    }
+    let plan_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    let mut request = MigrationCommandRequest {
+        action,
+        database_path,
+        plan_path,
+        run_id: None,
+        steps: Vec::new(),
+        resolutions: Vec::new(),
+        backup_path: None,
+        restore_path: None,
+        confirm_breaking: false,
+    };
+
+    while let Some(argument) = arguments.pop_front() {
+        match argument.to_str() {
+            Some("--run-id")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                let value = arguments
+                    .pop_front()
+                    .ok_or_else(CliError::invalid_request)?;
+                if request.run_id.replace(parse_cli_id(value)?).is_some() {
+                    return Err(CliError::invalid_request());
+                }
+            }
+            Some("--step") if action != MigrationCommandAction::Plan => {
+                let step_id = parse_cli_id(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                )?;
+                let operation_id = if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) {
+                    if !take_option(&mut arguments, "--operation-id") {
+                        return Err(CliError::invalid_request());
+                    }
+                    Some(parse_cli_id(
+                        arguments
+                            .pop_front()
+                            .ok_or_else(CliError::invalid_request)?,
+                    )?)
+                } else {
+                    None
+                };
+                let mut record_files = Vec::new();
+                while arguments
+                    .front()
+                    .is_some_and(|argument| argument == "--record")
+                {
+                    let _ = arguments.pop_front();
+                    record_files.push(
+                        arguments
+                            .pop_front()
+                            .map(PathBuf::from)
+                            .ok_or_else(CliError::invalid_request)?,
+                    );
+                }
+                request.steps.push(MigrationStepFiles {
+                    step_id,
+                    operation_id,
+                    record_files,
+                });
+            }
+            Some("--omit")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                let value = arguments
+                    .pop_front()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(CliError::invalid_request)?;
+                let record_index = parse_canonical_u64(&value)?;
+                request.resolutions.push(MigrationResolutionSpec {
+                    record_index,
+                    resolution: MigrationItemResolution::OmitRecord,
+                });
+            }
+            Some("--replace")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                let value = arguments
+                    .pop_front()
+                    .and_then(|value| value.into_string().ok())
+                    .ok_or_else(CliError::invalid_request)?;
+                let record_index = parse_canonical_u64(&value)?;
+                let frame_path = arguments
+                    .pop_front()
+                    .map(PathBuf::from)
+                    .ok_or_else(CliError::invalid_request)?;
+                let bytes = read_bounded_file(&frame_path, 16 * 1024 * 1024)?;
+                request.resolutions.push(MigrationResolutionSpec {
+                    record_index,
+                    resolution: MigrationItemResolution::ReplaceRecord(bytes),
+                });
+            }
+            Some("--backup")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                let path = arguments
+                    .pop_front()
+                    .map(PathBuf::from)
+                    .ok_or_else(CliError::invalid_request)?;
+                if request.backup_path.replace(path).is_some() {
+                    return Err(CliError::invalid_request());
+                }
+            }
+            Some("--restore")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                let path = arguments
+                    .pop_front()
+                    .map(PathBuf::from)
+                    .ok_or_else(CliError::invalid_request)?;
+                if request.restore_path.replace(path).is_some() {
+                    return Err(CliError::invalid_request());
+                }
+            }
+            Some("--confirm-breaking")
+                if matches!(
+                    action,
+                    MigrationCommandAction::Run | MigrationCommandAction::Resume
+                ) =>
+            {
+                if request.confirm_breaking {
+                    return Err(CliError::invalid_request());
+                }
+                request.confirm_breaking = true;
+            }
+            _ => return Err(CliError::invalid_request()),
+        }
+    }
+
+    if matches!(
+        action,
+        MigrationCommandAction::Run | MigrationCommandAction::Resume
+    ) && request.run_id.is_none()
+    {
+        return Err(CliError::invalid_request());
+    }
+    if matches!(
+        action,
+        MigrationCommandAction::Plan | MigrationCommandAction::DryRun
+    ) && (!request.resolutions.is_empty()
+        || request.backup_path.is_some()
+        || request.restore_path.is_some()
+        || request.confirm_breaking)
+    {
+        return Err(CliError::invalid_request());
+    }
+
+    run_migration_command(request)
+}
+
+fn parse_storage_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(action) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::StorageUpgrade));
+    };
+    if action == "--help" || action == "-h" || action == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::StorageUpgrade))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    if action != "upgrade" {
+        return Err(CliError::unsupported_operation());
+    }
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::StorageUpgrade));
+    }
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::StorageUpgrade));
+    }
+    let database_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    if !take_option(&mut arguments, "--backup") {
+        return Err(CliError::invalid_request());
+    }
+    let backup_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    if !take_option(&mut arguments, "--restore") {
+        return Err(CliError::invalid_request());
+    }
+    let restore_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    if arguments.pop_front().as_deref() != Some(OsString::from("--confirm").as_os_str())
+        || !arguments.is_empty()
+    {
+        return Err(CliError::invalid_request());
+    }
+    run_storage_upgrade(&database_path, &backup_path, &restore_path)
+}
+
+fn parse_cli_id<T: FromStr>(value: OsString) -> Result<T, CliError> {
+    value
+        .into_string()
+        .map_err(|_| CliError::invalid_request())?
+        .parse()
+        .map_err(|_| CliError::invalid_request())
+}
+
+fn parse_canonical_u64(value: &str) -> Result<u64, CliError> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| CliError::invalid_request())?;
+    if parsed.to_string() != value {
+        return Err(CliError::invalid_request());
+    }
+    Ok(parsed)
+}
+
+fn run_migration_command(request: MigrationCommandRequest) -> Result<Success, CliError> {
+    let plan = load_migration_plan(&request.plan_path)?;
+    if request.action == MigrationCommandAction::Plan && !request.steps.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+    let execution = matches!(
+        request.action,
+        MigrationCommandAction::Run | MigrationCommandAction::Resume
+    );
+    let loaded_steps = if request.action == MigrationCommandAction::Plan {
+        Vec::new()
+    } else {
+        load_migration_step_records(&plan, &request.steps, execution)?
+    };
+
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project(&request.database_path)?;
+    let layout = project.layout.clone();
+    let source_revision = project.manifest.revision();
+    let database_id = layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let actual_schema_fingerprint = schema_fingerprint_from_manifest(&layout, &project.manifest)?;
+    let policy_history = project.policy_history.policy().clone();
+    drop(project);
+
+    let policy = policy_history
+        .select(AuthorizationMode::Now, principal, source_revision)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let target = PolicyTarget::default();
+    match request.action {
+        MigrationCommandAction::Plan | MigrationCommandAction::DryRun => {
+            authorize_cli_capability(policy, Capability::MigrationPlan, target)?;
+            validate_migration_source(&plan, source_revision, actual_schema_fingerprint)?;
+        }
+        MigrationCommandAction::Run => {
+            validate_migration_source(&plan, source_revision, actual_schema_fingerprint)?;
+            authorize_cli_capability(policy, Capability::MigrationExecute, target)?;
+        }
+        MigrationCommandAction::Resume => {
+            authorize_cli_capability(policy, Capability::MigrationExecute, target)?;
+        }
+    }
+
+    if request.action == MigrationCommandAction::Plan {
+        return Ok(Success::Migration(MigrationSummary {
+            status: MigrationStatus::Planned,
+            database_id,
+            migration_id: plan.migration_id(),
+            category: plan.category(),
+            fingerprint: *plan.fingerprint().as_bytes(),
+            source_revision: plan
+                .source_schema_precondition()
+                .revision()
+                .revision()
+                .value(),
+            target_revision: plan.target_schema().revision().revision().value(),
+            step_count: plan.steps().len(),
+            input_record_count: 0,
+            input_bytes: 0,
+            estimate_output_bytes: None,
+            error_count: 0,
+            unresolved_count: 0,
+            completed_step_count: 0,
+            final_revision: None,
+        }));
+    }
+
+    let mut step_metadata = Vec::new();
+    step_metadata
+        .try_reserve_exact(loaded_steps.len())
+        .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+    let mut flat_records = Vec::new();
+    for step in loaded_steps {
+        step_metadata.push((step.step_id, step.operation_id, step.records.len()));
+        flat_records.extend(step.records);
+    }
+    let step_count = step_metadata.len();
+    let source_schema_revision = plan.source_schema_precondition().revision();
+    let report = MigrationDryRun::run(
+        &plan,
+        source_schema_revision,
+        *plan.source_schema_precondition().fingerprint(),
+        &flat_records,
+    );
+
+    if request.action == MigrationCommandAction::DryRun {
+        return Ok(Success::Migration(migration_summary_from_report(
+            MigrationStatus::Previewed,
+            database_id,
+            &plan,
+            &report,
+            0,
+            None,
+        )));
+    }
+
+    let mut decisions = Vec::new();
+    for specification in request.resolutions {
+        let item = report
+            .unresolved_items()
+            .iter()
+            .copied()
+            .find(|item| item.record_index() == specification.record_index)
+            .ok_or_else(CliError::invalid_request)?;
+        decisions.push(
+            MigrationAdminDecision::for_item(&report, item, specification.resolution)
+                .map_err(|_| CliError::invalid_request())?,
+        );
+    }
+    let validated_decisions = ValidatedMigrationDecisions::validate(
+        &plan,
+        &report,
+        decisions,
+        policy.current_snapshot(),
+        principal,
+        target,
+    )
+    .map_err(|error| match error {
+        worlddb_core::MigrationDecisionError::Unauthorized => {
+            CliError::new(PublicCode::UNAUTHORIZED)
+        }
+        _ => CliError::new(PublicCode::CORRUPT_DATA),
+    })?;
+
+    let run_id = request.run_id.ok_or_else(CliError::invalid_request)?;
+    if request.action == MigrationCommandAction::Resume {
+        validate_resumable_migration_journal(&layout, run_id)?;
+    }
+
+    let safe_restore_point = if plan.category() == MigrationCategory::Breaking {
+        if !request.confirm_breaking {
+            return Err(CliError::invalid_request());
+        }
+        let backup = request
+            .backup_path
+            .as_deref()
+            .ok_or_else(CliError::invalid_request)?;
+        let restore = request
+            .restore_path
+            .as_deref()
+            .ok_or_else(CliError::invalid_request)?;
+        reject_restore_target_within_project(backup, layout.root())?;
+        reject_restore_target_within_project(restore, layout.root())?;
+        reject_overlapping_targets(backup, restore)?;
+        let manager = ExactBackupManager::new(layout.clone());
+        let proof = if request.action == MigrationCommandAction::Resume {
+            manager.create_migration_safe_restore_point_from_backup(
+                &plan, backup, restore, None, policy, target,
+            )
+        } else {
+            manager
+                .create_migration_safe_restore_point(&plan, backup, restore, None, policy, target)
+        }
+        .map_err(map_migration_restore_point_error)?;
+        Some(proof)
+    } else {
+        if request.confirm_breaking
+            || request.backup_path.is_some()
+            || request.restore_path.is_some()
+        {
+            return Err(CliError::invalid_request());
+        }
+        None
+    };
+
+    let root = layout.root().to_path_buf();
+    let layout = DatabaseLayout::open(root).map_err(map_storage_file_error)?;
+    let writer_lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
+    let verification = StorageVerifier::new(layout.clone())
+        .verify(&writer_lock)
+        .map_err(map_storage_verify_error)?;
+    if !verification.is_clean() {
+        return Err(CliError::new(PublicCode::STORAGE_READ));
+    }
+    let mut run = FileStoreGuardedMigrationRun::open(layout.clone(), &writer_lock)
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    let journal = run
+        .load_journal_status(run_id)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    match (request.action, journal.as_ref().map(|entry| entry.state())) {
+        (MigrationCommandAction::Run, Some(_))
+        | (MigrationCommandAction::Resume, Some(MigrationRunJournalState::Completed)) => {
+            return Err(CliError::invalid_request());
+        }
+        (MigrationCommandAction::Resume, None) => {
+            return Err(CliError::new(PublicCode::NOT_FOUND));
+        }
+        _ => {}
+    }
+
+    let manifest = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let locked_policy_history = load_policy_history(&layout, &manifest)?;
+    let locked_policy = locked_policy_history
+        .policy()
+        .select(AuthorizationMode::Now, principal, manifest.revision())
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    authorize_cli_capability(locked_policy, Capability::MigrationExecute, target)?;
+
+    let execution_source_fingerprint = if request.action == MigrationCommandAction::Resume {
+        *plan.source_schema_precondition().fingerprint()
+    } else {
+        let actual = schema_fingerprint_from_run(&run, run.latest_published())?;
+        validate_migration_source(&plan, run.latest_published(), actual)?;
+        actual
+    };
+    let locked_database_id = layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    if locked_database_id != database_id {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    let transformer = MigrationTransformer::for_version(plan.transformer_version())
+        .map_err(|_| CliError::unsupported_operation())?;
+    let mut inputs = Vec::new();
+    inputs
+        .try_reserve_exact(step_count)
+        .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+    let mut flat_records = flat_records.into_iter();
+    for (step_id, operation_id, record_count) in step_metadata {
+        let operation_id = operation_id.ok_or_else(CliError::invalid_request)?;
+        let records = flat_records.by_ref().take(record_count).collect();
+        inputs.push(MigrationStepInput::new(step_id, operation_id, records));
+    }
+
+    let restore_ref = safe_restore_point.as_ref();
+    let admin_action = if let Some(restore_point) = restore_ref {
+        Some(
+            BreakingMigrationAdminAction::confirm(
+                &plan,
+                locked_database_id,
+                &execution_source_fingerprint,
+                principal,
+                locked_policy.current_snapshot(),
+                target,
+                restore_point,
+            )
+            .map_err(|_| CliError::new(PublicCode::UNAUTHORIZED))?,
+        )
+    } else {
+        None
+    };
+    let required_audit_records = migration_audit_records(
+        &inputs,
+        MigrationAuditContext {
+            plan: &plan,
+            actor: principal,
+            policy: locked_policy.current_snapshot(),
+            epoch: locked_policy.current_epoch(),
+            target,
+            layout: &layout,
+            writer_lock: &writer_lock,
+        },
+    )?;
+
+    let result = run
+        .execute(
+            &plan,
+            run_id,
+            database_id,
+            execution_source_fingerprint,
+            transformer,
+            inputs,
+            validated_decisions,
+            principal,
+            locked_policy.current_snapshot(),
+            target,
+            locked_policy.current_epoch(),
+            restore_ref,
+            admin_action.as_ref(),
+            required_audit_records,
+            |backend, base_revision, entries, target_schema| {
+                let actual =
+                    schema_fingerprint_after_migration_step(backend, base_revision, entries)?;
+                if actual == *target_schema.schema().fingerprint() {
+                    Ok(())
+                } else {
+                    Err(CliError::new(PublicCode::CORRUPT_DATA))
+                }
+            },
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+
+    Ok(Success::Migration(migration_summary_from_report(
+        if request.action == MigrationCommandAction::Resume {
+            MigrationStatus::Resumed
+        } else {
+            MigrationStatus::Completed
+        },
+        locked_database_id,
+        &plan,
+        &report,
+        result.completed_steps().len(),
+        Some(result.final_revision().value()),
+    )))
+}
+
+fn validate_resumable_migration_journal(
+    layout: &DatabaseLayout,
+    run_id: MigrationRunId,
+) -> Result<(), CliError> {
+    let writer_lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
+    let verification = StorageVerifier::new(layout.clone())
+        .verify(&writer_lock)
+        .map_err(map_storage_verify_error)?;
+    if !verification.is_clean() {
+        return Err(CliError::new(PublicCode::STORAGE_READ));
+    }
+    let run = FileStoreGuardedMigrationRun::open(layout.clone(), &writer_lock)
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    match run
+        .load_journal_status(run_id)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?
+    {
+        Some(snapshot) if snapshot.state() == MigrationRunJournalState::Running => Ok(()),
+        Some(_) => Err(CliError::invalid_request()),
+        None => Err(CliError::new(PublicCode::NOT_FOUND)),
+    }
+}
+
+fn load_migration_plan(path: &Path) -> Result<MigrationPlan, CliError> {
+    const MAX_MIGRATION_PLAN_BYTES: u64 = 16 * 1024 * 1024;
+    let bytes = read_bounded_file(path, MAX_MIGRATION_PLAN_BYTES)?;
+    let record = decode_record(&bytes)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?
+        .into_record();
+    match record {
+        Record::MigrationPlan(plan) => Ok(plan),
+        _ => Err(CliError::invalid_request()),
+    }
+}
+
+fn load_migration_step_records(
+    plan: &MigrationPlan,
+    step_files: &[MigrationStepFiles],
+    execution: bool,
+) -> Result<Vec<LoadedMigrationStep>, CliError> {
+    if step_files.len() != plan.steps().len() || plan.step_targets().is_none() {
+        return Err(CliError::invalid_request());
+    }
+    let mut total_bytes = 0_u64;
+    let mut total_records = 0_u64;
+    let mut loaded = Vec::new();
+    loaded
+        .try_reserve_exact(step_files.len())
+        .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+    for (planned_step, supplied) in plan.steps().iter().zip(step_files) {
+        if *planned_step != supplied.step_id || supplied.operation_id.is_some() != execution {
+            return Err(CliError::invalid_request());
+        }
+        let mut records = Vec::new();
+        records
+            .try_reserve_exact(supplied.record_files.len())
+            .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+        for path in &supplied.record_files {
+            let remaining = plan
+                .budget()
+                .max_memory_bytes()
+                .checked_sub(total_bytes)
+                .ok_or_else(|| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+            let bytes = read_bounded_file(path, remaining)?;
+            total_bytes = total_bytes
+                .checked_add(
+                    u64::try_from(bytes.len())
+                        .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?,
+                )
+                .ok_or_else(|| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+            total_records = total_records
+                .checked_add(1)
+                .ok_or_else(|| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+            if total_records > plan.budget().max_work_units() {
+                return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+            }
+            records.push(bytes);
+        }
+        loaded.push(LoadedMigrationStep {
+            step_id: supplied.step_id,
+            operation_id: supplied.operation_id,
+            records,
+        });
+    }
+    Ok(loaded)
+}
+
+fn validate_migration_source(
+    plan: &MigrationPlan,
+    revision: Revision,
+    schema_fingerprint: [u8; 32],
+) -> Result<(), CliError> {
+    let actual_revision = SchemaRevision::from_published_revision(revision);
+    plan.validate_source_schema(actual_revision, schema_fingerprint)
+        .map_err(|_| CliError::new(PublicCode::CURSOR_INVALIDATED))
+}
+
+fn migration_summary_from_report(
+    status: MigrationStatus,
+    database_id: DatabaseId,
+    plan: &MigrationPlan,
+    report: &worlddb_core::MigrationDryRunReport,
+    completed_step_count: usize,
+    final_revision: Option<u64>,
+) -> MigrationSummary {
+    MigrationSummary {
+        status,
+        database_id,
+        migration_id: plan.migration_id(),
+        category: plan.category(),
+        fingerprint: *plan.fingerprint().as_bytes(),
+        source_revision: report.source_revision().revision().value(),
+        target_revision: plan.target_schema().revision().revision().value(),
+        step_count: plan.steps().len(),
+        input_record_count: report.source_record_count().unwrap_or(0),
+        input_bytes: report.source_bytes().unwrap_or(0),
+        estimate_output_bytes: report.output().map(|output| output.encoded_bytes()),
+        error_count: report.error_count(),
+        unresolved_count: report.unresolved_items().len(),
+        completed_step_count,
+        final_revision,
+    }
+}
+
+fn load_policy_history(
+    layout: &DatabaseLayout,
+    manifest: &Manifest,
+) -> Result<SecurityPolicyHistorySnapshot, CliError> {
+    let segment_ids = manifest
+        .segments()
+        .iter()
+        .filter(|segment| segment.kind() == ManifestSegmentKind::SecurityPolicy)
+        .map(|segment| segment.id())
+        .collect::<Vec<_>>();
+    if segment_ids.is_empty() {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    SecurityPolicyHistoryStore::new(layout.clone())
+        .load_history(manifest.revision(), &segment_ids)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))
+}
+
+fn schema_fingerprint_from_manifest(
+    layout: &DatabaseLayout,
+    manifest: &Manifest,
+) -> Result<[u8; 32], CliError> {
+    let store = HistorySegmentStore::new(layout.clone());
+    let mut accumulator = SchemaHistoryAccumulator::new();
+    for reference in manifest
+        .segments()
+        .iter()
+        .filter(|reference| reference.kind() == ManifestSegmentKind::History)
+    {
+        let segment = store
+            .read_segment(reference.id())
+            .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+        if segment.content_digest() != reference.content_digest() {
+            return Err(CliError::new(PublicCode::CORRUPT_DATA));
+        }
+        for decoded in segment.records() {
+            accumulator.push(decoded.record())?;
+        }
+    }
+    accumulator.fingerprint(manifest.revision())
+}
+
+fn schema_fingerprint_from_run(
+    run: &FileStoreGuardedMigrationRun<'_>,
+    revision: Revision,
+) -> Result<[u8; 32], CliError> {
+    let reader = run
+        .read_at(revision)
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    let mut accumulator = SchemaHistoryAccumulator::new();
+    for (_, record) in reader {
+        accumulator.push(record)?;
+    }
+    accumulator.fingerprint(revision)
+}
+
+fn schema_fingerprint_after_migration_step(
+    run: &FileStoreGuardedMigrationRun<'_>,
+    base_revision: Revision,
+    staged_records: &[Record],
+) -> Result<[u8; 32], CliError> {
+    let reader = run
+        .read_at(base_revision)
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    let mut accumulator = SchemaHistoryAccumulator::new();
+    for (_, record) in reader {
+        accumulator.push(record)?;
+    }
+    for record in staged_records {
+        accumulator.push(record)?;
+    }
+    let target_revision = base_revision
+        .next_commit()
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    accumulator.fingerprint(target_revision)
+}
+
+#[derive(Default)]
+struct SchemaHistoryAccumulator {
+    genesis: Vec<SchemaDefinition>,
+    batches: BTreeMap<Revision, Vec<SchemaDefinition>>,
+}
+
+impl SchemaHistoryAccumulator {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn push(&mut self, record: &Record) -> Result<(), CliError> {
+        let definition = match record {
+            Record::LayerDefinition(value) => Some((
+                value.created_revision().revision(),
+                SchemaDefinition::Layer(value.clone()),
+            )),
+            Record::LayerSchemaSnapshot(value) => Some((
+                value.revision().revision(),
+                SchemaDefinition::LayerSnapshot(value.clone()),
+            )),
+            Record::EntityTypeDefinition(value) => Some((
+                value.created_revision(),
+                SchemaDefinition::EntityType(value.clone()),
+            )),
+            Record::PredicateDefinition(value) => Some((
+                value.created_revision(),
+                SchemaDefinition::Predicate(value.clone()),
+            )),
+            Record::EventKindDefinition(value) => Some((
+                value.created_revision(),
+                SchemaDefinition::EventKind(value.clone()),
+            )),
+            _ => None,
+        };
+        if let Some((revision, definition)) = definition {
+            if revision == Revision::GENESIS {
+                self.genesis
+                    .try_reserve(1)
+                    .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+                self.genesis.push(definition);
+            } else {
+                let batch = self.batches.entry(revision).or_default();
+                batch
+                    .try_reserve(1)
+                    .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+                batch.push(definition);
+            }
+        }
+        Ok(())
+    }
+
+    fn fingerprint(self, _head: Revision) -> Result<[u8; 32], CliError> {
+        let mut model = if self.genesis.is_empty() {
+            SchemaHistoryReferenceModel::new()
+        } else {
+            SchemaHistoryReferenceModel::with_genesis(self.genesis)
+                .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?
+        };
+        for (revision, definitions) in self.batches {
+            model
+                .publish(revision, definitions)
+                .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+        }
+        model
+            .schema_at(SchemaMode::Current, _head)
+            .map(|snapshot| snapshot.fingerprint())
+            .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))
+    }
+}
+
+fn migration_audit_records(
+    inputs: &[MigrationStepInput],
+    context: MigrationAuditContext<'_>,
+) -> Result<Vec<AuditRecord>, CliError> {
+    let MigrationAuditContext {
+        plan,
+        actor,
+        policy,
+        epoch,
+        target,
+        layout,
+        writer_lock,
+    } = context;
+    let committed = WalPrepareLog::new(layout)
+        .committed_required_audit_records(writer_lock)
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    let operation_ids = inputs
+        .iter()
+        .map(MigrationStepInput::operation_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    if operation_ids.len() != inputs.len() {
+        return Err(CliError::invalid_request());
+    }
+    let mut existing = BTreeMap::new();
+    let mut highest_sequence = 0_u64;
+    for entry in committed {
+        highest_sequence = highest_sequence.max(entry.record().sequence().value());
+        if operation_ids.contains(&entry.operation_id())
+            && existing
+                .insert(entry.operation_id(), entry.record().clone())
+                .is_some()
+        {
+            return Err(CliError::new(PublicCode::CORRUPT_DATA));
+        }
+    }
+
+    let rights = policy.effective_capability_fingerprint(actor, target);
+    let policy_fingerprint = AuditPolicyFingerprint::new(Bytes::new(rights.to_vec()))
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let targets = plan
+        .step_targets()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    if inputs.len() != targets.len() {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(inputs.len())
+        .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+    for (input, step_target) in inputs.iter().zip(targets) {
+        if let Some(record) = existing.remove(&input.operation_id()) {
+            output.push(record);
+            continue;
+        }
+        highest_sequence = highest_sequence
+            .checked_add(1)
+            .ok_or_else(|| CliError::new(PublicCode::BUDGET_EXCEEDED))?;
+        let record_id = worlddb_core::storage_internal::generate_migration_audit_record_id()
+            .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        let audit_operation_id =
+            worlddb_core::storage_internal::generate_migration_audit_operation_id()
+                .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        output.push(AuditRecord::new(
+            AuditRecordIdentity {
+                record_id,
+                sequence: AuditSequence::new(highest_sequence),
+                audit_operation_id,
+            },
+            AuditRecordDetails {
+                actor,
+                action: AuditAction::Migration,
+                object_class: AuditObjectClass::Migration,
+                outcome: AuditOutcome::Succeeded,
+                commit_context: AuditCommitContext::Committed {
+                    revision: step_target.schema().revision().revision(),
+                    operation_id: input.operation_id(),
+                },
+                security_epoch: epoch,
+                policy_fingerprint: policy_fingerprint.clone(),
+            },
+        ));
+    }
+    Ok(output)
+}
+
+fn run_storage_upgrade(
+    database_path: &Path,
+    backup_path: &Path,
+    restore_path: &Path,
+) -> Result<Success, CliError> {
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project(database_path)?;
+    let layout = project.layout.clone();
+    let policy_revision = project.manifest.revision();
+    let policy_history = project.policy_history.policy().clone();
+    drop(project);
+    let policy = policy_history
+        .select(AuthorizationMode::Now, principal, policy_revision)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let target = PolicyTarget::default();
+    authorize_cli_capability(policy, Capability::StorageFormatUpgrade, target)?;
+    authorize_cli_capability(policy, Capability::BackupCreate, target)?;
+    authorize_cli_capability(policy, Capability::BackupRestore, target)?;
+    reject_restore_target_within_project(backup_path, layout.root())?;
+    reject_restore_target_within_project(restore_path, layout.root())?;
+    reject_overlapping_targets(backup_path, restore_path)?;
+
+    let manager = StorageUpgradeManager::new();
+    let plan = manager
+        .prepare(&layout, StorageUpgradeBudget::current_pointer_v1_to_v2())
+        .map_err(map_storage_upgrade_error)?;
+    let restore_point = manager
+        .create_safe_restore_point(
+            &layout,
+            &plan,
+            StorageUpgradeRestoreTargets::new(backup_path, restore_path),
+            None,
+            policy,
+            target,
+        )
+        .map_err(map_storage_upgrade_error)?;
+    let action = manager
+        .confirm(&plan, &restore_point, policy, target)
+        .map_err(map_storage_upgrade_error)?;
+    let receipt = manager
+        .execute(&layout, &plan, &restore_point, &action, policy, target)
+        .map_err(map_storage_upgrade_error)?;
+    Ok(Success::StorageUpgrade(StorageUpgradeSummary {
+        plan_id: receipt.plan_id(),
+        run_id: receipt.run_id(),
+        source_revision: receipt.source_revision().value(),
+        target_fingerprint: *receipt.target_profile_fingerprint(),
+        pointer_digest: *receipt.current_pointer_digest(),
+        resumed: receipt.resumed(),
+    }))
+}
+
+fn reject_overlapping_targets(first: &Path, second: &Path) -> Result<(), CliError> {
+    let first = canonical_target_candidate(first)?;
+    let second = canonical_target_candidate(second)?;
+    if first.starts_with(&second) || second.starts_with(&first) {
+        return Err(CliError::invalid_request());
+    }
+    Ok(())
+}
+
+fn canonical_target_candidate(path: &Path) -> Result<PathBuf, CliError> {
+    let file_name = path.file_name().ok_or_else(CliError::invalid_request)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = fs::canonicalize(parent).map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    Ok(parent.join(file_name))
+}
+
+fn map_migration_restore_point_error(error: MigrationRestorePointError) -> CliError {
+    match error {
+        MigrationRestorePointError::AuthorizationDenied { .. } => {
+            CliError::new(PublicCode::UNAUTHORIZED)
+        }
+        MigrationRestorePointError::Backup(error) => map_backup_error(error),
+        MigrationRestorePointError::Restore(error) => map_restore_error(error),
+        MigrationRestorePointError::PlanNotBreaking
+        | MigrationRestorePointError::SourceBindingMismatch
+        | MigrationRestorePointError::RestoreBindingMismatch
+        | MigrationRestorePointError::RestoredLayoutMismatch
+        | MigrationRestorePointError::Proof(_) => CliError::new(PublicCode::CORRUPT_DATA),
+        MigrationRestorePointError::Io { .. } | MigrationRestorePointError::StorageFile(_) => {
+            CliError::new(PublicCode::STORAGE_READ)
+        }
+        MigrationRestorePointError::AuditFingerprint(_) => CliError::new(PublicCode::CORRUPT_DATA),
+    }
+}
+
+fn map_storage_upgrade_error(error: worlddb_storage_file::StorageUpgradeError) -> CliError {
+    match error {
+        worlddb_storage_file::StorageUpgradeError::AuthorizationDenied { .. }
+        | worlddb_storage_file::StorageUpgradeError::AuthorizationChanged
+        | worlddb_storage_file::StorageUpgradeError::ActionBindingMismatch => {
+            CliError::new(PublicCode::UNAUTHORIZED)
+        }
+        worlddb_storage_file::StorageUpgradeError::Backup(error) => map_backup_error(error),
+        worlddb_storage_file::StorageUpgradeError::Restore(error) => map_restore_error(error),
+        worlddb_storage_file::StorageUpgradeError::WriterLock(error) => {
+            map_writer_lock_error(error)
+        }
+        worlddb_storage_file::StorageUpgradeError::StorageFile(error) => {
+            map_storage_file_error(error)
+        }
+        worlddb_storage_file::StorageUpgradeError::StorageVerify(error) => {
+            map_storage_verify_error(error)
+        }
+        worlddb_storage_file::StorageUpgradeError::Io { .. }
+        | worlddb_storage_file::StorageUpgradeError::Manifest(_)
+        | worlddb_storage_file::StorageUpgradeError::Wal(_) => {
+            CliError::new(PublicCode::STORAGE_READ)
+        }
+        worlddb_storage_file::StorageUpgradeError::UnsupportedSourceProfile => {
+            CliError::unsupported_operation()
+        }
+        worlddb_storage_file::StorageUpgradeError::SourceBindingMismatch => {
+            CliError::new(PublicCode::CURSOR_INVALIDATED)
+        }
+        worlddb_storage_file::StorageUpgradeError::SourceNotClean
+        | worlddb_storage_file::StorageUpgradeError::RestoreBindingMismatch
+        | worlddb_storage_file::StorageUpgradeError::InvalidJournal => {
+            CliError::new(PublicCode::CORRUPT_DATA)
+        }
+        worlddb_storage_file::StorageUpgradeError::InvalidBudget
+        | worlddb_storage_file::StorageUpgradeError::JournalMissing
+        | worlddb_storage_file::StorageUpgradeError::BudgetExceeded => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+        worlddb_storage_file::StorageUpgradeError::IdGeneration(_) => {
+            CliError::new(PublicCode::INTERNAL)
+        }
+        worlddb_storage_file::StorageUpgradeError::InjectedFailure { .. } => {
+            CliError::new(PublicCode::CANCELLED)
+        }
+    }
 }
 
 fn take_option(arguments: &mut VecDeque<OsString>, option: &str) -> bool {
@@ -1301,6 +2500,25 @@ fn backup_profile_label(profile: BackupProfile) -> &'static str {
     }
 }
 
+fn migration_category_label(category: MigrationCategory) -> &'static str {
+    match category {
+        MigrationCategory::MetadataOnly => "MetadataOnly",
+        MigrationCategory::Additive => "Additive",
+        MigrationCategory::CompatibleConstraintChange => "CompatibleConstraintChange",
+        MigrationCategory::Restrictive => "Restrictive",
+        MigrationCategory::Breaking => "Breaking",
+    }
+}
+
+fn fingerprint_hex(fingerprint: &[u8; 32]) -> String {
+    fingerprint
+        .iter()
+        .fold(String::with_capacity(64), |mut output, byte| {
+            let _ = write!(&mut output, "{byte:02x}");
+            output
+        })
+}
+
 fn damage_class_index(class: StorageDamageClass) -> usize {
     match class {
         StorageDamageClass::Bitflip => 0,
@@ -1433,6 +2651,10 @@ fn write_success<W: Write>(
             Success::Help(HelpScope::Salvage) => writeln!(writer, "{HELP_SALVAGE}"),
             Success::Help(HelpScope::Backup) => writeln!(writer, "{HELP_BACKUP}"),
             Success::Help(HelpScope::Restore) => writeln!(writer, "{HELP_RESTORE}"),
+            Success::Help(HelpScope::Migration) => writeln!(writer, "{HELP_MIGRATION}"),
+            Success::Help(HelpScope::StorageUpgrade) => {
+                writeln!(writer, "{HELP_STORAGE_UPGRADE}")
+            }
             Success::Version => writeln!(
                 writer,
                 "worlddb-cli {} (CLI protocol {}.{})",
@@ -1539,6 +2761,39 @@ fn write_success<W: Write>(
                     .map_or_else(|| String::from("none"), |sequence| sequence.to_string()),
                 summary.authenticity.label()
             ),
+            Success::Migration(summary) => writeln!(
+                writer,
+                "migration {}: database_id={}, migration_id={}, category={}, plan_fingerprint={}, source_revision={}, target_revision={}, steps={}, input_records={}, input_bytes={}, estimate_output_bytes={}, errors={}, unresolved={}, completed_steps={}, final_revision={}",
+                summary.status.label(),
+                summary.database_id.to_canonical_string(),
+                summary.migration_id.to_canonical_string(),
+                migration_category_label(summary.category),
+                fingerprint_hex(&summary.fingerprint),
+                summary.source_revision,
+                summary.target_revision,
+                summary.step_count,
+                summary.input_record_count,
+                summary.input_bytes,
+                summary
+                    .estimate_output_bytes
+                    .map_or_else(|| String::from("none"), |bytes| bytes.to_string()),
+                summary.error_count,
+                summary.unresolved_count,
+                summary.completed_step_count,
+                summary
+                    .final_revision
+                    .map_or_else(|| String::from("none"), |revision| revision.to_string())
+            ),
+            Success::StorageUpgrade(summary) => writeln!(
+                writer,
+                "storage upgrade completed: plan_id={}, run_id={}, source_revision={}, target_profile_fingerprint={}, current_pointer_digest={}, resumed={}",
+                summary.plan_id.to_canonical_string(),
+                summary.run_id.to_canonical_string(),
+                summary.source_revision,
+                fingerprint_hex(&summary.target_fingerprint),
+                fingerprint_hex(&summary.pointer_digest),
+                summary.resumed
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
     }
@@ -1553,7 +2808,7 @@ fn write_json_success<W: Write>(
     match success {
         Success::Help(HelpScope::Root) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 migration\",\"v1 storage upgrade\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
         ),
         Success::Help(HelpScope::AdapterRun) => writeln!(
             writer,
@@ -1582,6 +2837,14 @@ fn write_json_success<W: Write>(
         Success::Help(HelpScope::Restore) => writeln!(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"restore\",\"clone_usage\":\"v1 restore clone <backup-directory> --authorize-with <current-project-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\",\"same_identity_disaster_recovery\":false}}}}}}"
+        ),
+        Success::Help(HelpScope::Migration) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"migration\",\"usage\":\"v1 migration plan|dry-run|run|resume <database> --plan-file <record> [step options]\",\"breaking_requires\":[\"--backup\",\"--restore\",\"--confirm-breaking\"],\"paths_in_results\":false}}}}}}"
+        ),
+        Success::Help(HelpScope::StorageUpgrade) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"storage_upgrade\",\"usage\":\"v1 storage upgrade <database> --backup <new-directory> --restore <new-directory> --confirm\",\"confirmation_required\":true}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -1705,6 +2968,51 @@ fn write_json_success<W: Write>(
                 ",\"authenticity\":\"{}\",\"target_verified\":true,\"source_modified\":false}}}}}}",
                 summary.authenticity.label()
             )
+        }
+        Success::Migration(summary) => {
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"migration\",\"data\":{{\"status\":\"{}\",\"database_id\":\"{}\",\"migration_id\":\"{}\",\"category\":\"{}\",\"plan_fingerprint\":\"{}\",\"source_revision\":\"{}\",\"target_revision\":\"{}\",\"step_count\":\"{}\",\"input_record_count\":\"{}\",\"input_bytes\":\"{}\",\"estimate_output_bytes\":",
+                summary.status.label(),
+                summary.database_id.to_canonical_string(),
+                summary.migration_id.to_canonical_string(),
+                migration_category_label(summary.category),
+                fingerprint_hex(&summary.fingerprint),
+                summary.source_revision,
+                summary.target_revision,
+                summary.step_count,
+                summary.input_record_count,
+                summary.input_bytes
+            )?;
+            if let Some(bytes) = summary.estimate_output_bytes {
+                write!(writer, "\"{bytes}\"")?;
+            } else {
+                writer.write_all(b"null")?;
+            }
+            write!(
+                writer,
+                ",\"error_count\":\"{}\",\"unresolved_count\":\"{}\",\"completed_step_count\":\"{}\",\"final_revision\":",
+                summary.error_count, summary.unresolved_count, summary.completed_step_count
+            )?;
+            if let Some(revision) = summary.final_revision {
+                write!(writer, "\"{revision}\"")?;
+            } else {
+                writer.write_all(b"null")?;
+            }
+            writer.write_all(b"}}}\n")
+        }
+        Success::StorageUpgrade(summary) => {
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"storage_upgrade\",\"data\":{{\"status\":\"completed\",\"plan_id\":\"{}\",\"run_id\":\"{}\",\"source_revision\":\"{}\",\"target_profile_fingerprint\":\"{}\",\"current_pointer_digest\":\"{}\",\"resumed\":{}",
+                summary.plan_id.to_canonical_string(),
+                summary.run_id.to_canonical_string(),
+                summary.source_revision,
+                fingerprint_hex(&summary.target_fingerprint),
+                fingerprint_hex(&summary.pointer_digest),
+                summary.resumed
+            )?;
+            writer.write_all(b"}}}\n")
         }
     }
 }

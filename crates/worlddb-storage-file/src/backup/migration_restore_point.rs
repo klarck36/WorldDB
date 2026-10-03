@@ -208,6 +208,110 @@ impl ExactBackupManager {
         )
         .map_err(MigrationRestorePointError::Proof)
     }
+
+    /// Re-verifies an existing exact source backup and restores a fresh clone for crash resume.
+    ///
+    /// A partially committed Breaking migration no longer has the plan's original source at the
+    /// live project head. This method uses the retained exact backup to establish that source
+    /// binding again, then performs and verifies a new real clone restore. The new clone target
+    /// must not already exist.
+    pub fn create_migration_safe_restore_point_from_backup(
+        &self,
+        plan: &MigrationPlan,
+        backup_source: impl AsRef<Path>,
+        restore_destination: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        policy: SecurityPolicyView<'_>,
+        policy_target: PolicyTarget,
+    ) -> Result<MigrationSafeRestorePoint, MigrationRestorePointError> {
+        if plan.category() != MigrationCategory::Breaking {
+            return Err(MigrationRestorePointError::PlanNotBreaking);
+        }
+        for capability in [
+            Capability::MigrationExecute,
+            Capability::BackupCreate,
+            Capability::BackupRestore,
+        ] {
+            if policy
+                .current_snapshot()
+                .authorize(policy.principal_id(), capability, policy_target)
+                != AuthorizationDecision::Allow
+            {
+                return Err(MigrationRestorePointError::AuthorizationDenied { capability });
+            }
+        }
+
+        let backup = super::verify_exact_backup(backup_source.as_ref(), key)
+            .map_err(MigrationRestorePointError::Backup)?;
+        let source_database_id =
+            self.source
+                .database_id()
+                .ok_or(MigrationRestorePointError::Backup(
+                    super::BackupError::DatabaseIdentityMissing,
+                ))?;
+        if backup.profile() != super::BackupProfile::ExactDatabase
+            || backup.database_id() != source_database_id
+            || backup.revision() != plan.source_schema_precondition().revision().revision()
+            || !backup.storage_report().is_clean()
+        {
+            return Err(MigrationRestorePointError::SourceBindingMismatch);
+        }
+
+        let policy_fingerprint = policy
+            .current_snapshot()
+            .effective_capability_fingerprint(policy.principal_id(), policy_target);
+        let audit_policy_fingerprint =
+            AuditPolicyFingerprint::new(Bytes::new(policy_fingerprint.to_vec()))
+                .map_err(MigrationRestorePointError::AuditFingerprint)?;
+        let restore = RestoreManager::new()
+            .restore_clone(
+                backup_source.as_ref(),
+                restore_destination.as_ref(),
+                key,
+                policy,
+                policy_target,
+                audit_policy_fingerprint,
+            )
+            .map_err(MigrationRestorePointError::Restore)?;
+        if restore.profile() != super::BackupProfile::ExactDatabase
+            || restore.source_database_id() != backup.database_id()
+            || restore.source_revision() != backup.revision()
+            || restore.restored_database_id() == backup.database_id()
+            || restore.restored_revision() <= backup.revision()
+        {
+            return Err(MigrationRestorePointError::RestoreBindingMismatch);
+        }
+
+        let restored_layout = DatabaseLayout::open(restore.destination())
+            .map_err(MigrationRestorePointError::StorageFile)?;
+        if restored_layout.database_id() != Some(restore.restored_database_id()) {
+            return Err(MigrationRestorePointError::RestoredLayoutMismatch);
+        }
+        let destination = fs::canonicalize(restore.destination()).map_err(|source| {
+            MigrationRestorePointError::Io {
+                operation: "canonicalize verified resume restore destination",
+                source,
+            }
+        })?;
+        let restore_destination_fingerprint = fingerprint_path(&destination);
+        let verification_fingerprint =
+            fingerprint_verification(plan, &backup, &restore, &destination);
+        worlddb_core::storage_internal::migration_safe_restore_point_from_verified_restore(
+            plan,
+            backup.database_id(),
+            backup.revision(),
+            *backup.commit_hash().as_bytes(),
+            *backup.inventory_digest(),
+            *backup.manifest_digest(),
+            restore.source_database_id(),
+            restore.source_revision(),
+            restore.restored_database_id(),
+            restore.restored_revision(),
+            restore_destination_fingerprint,
+            verification_fingerprint,
+        )
+        .map_err(MigrationRestorePointError::Proof)
+    }
 }
 
 fn fingerprint_path(path: &Path) -> [u8; 32] {

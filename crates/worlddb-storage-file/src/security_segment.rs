@@ -616,6 +616,48 @@ impl SecurityPolicyHistoryStore {
         )
     }
 
+    pub(crate) fn remove_staged_reference(
+        &self,
+        reference: ManifestSegmentReference,
+    ) -> Result<(), SecurityPolicyStorageError> {
+        if reference.kind() != ManifestSegmentKind::SecurityPolicy {
+            return Err(SecurityPolicyStorageError::InvalidSecurityFrame);
+        }
+        let directory = self.validate_staging_directory()?;
+        let path = security_staging_path(&directory, reference.id());
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(SecurityPolicyStorageError::Io {
+                    operation: "inspect staged security-policy segment for cleanup",
+                    source,
+                });
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(SecurityPolicyStorageError::PathOutsideDatabase);
+        }
+        let canonical =
+            fs::canonicalize(&path).map_err(|source| SecurityPolicyStorageError::Io {
+                operation: "resolve staged security-policy segment for cleanup",
+                source,
+            })?;
+        if !canonical.starts_with(&directory) {
+            return Err(SecurityPolicyStorageError::PathOutsideDatabase);
+        }
+        fs::remove_file(&path).map_err(|source| SecurityPolicyStorageError::Io {
+            operation: "remove uncommitted staged security-policy segment",
+            source,
+        })?;
+        crate::manifest::sync_directory(&directory).map_err(|source| {
+            SecurityPolicyStorageError::Io {
+                operation: "sync staging directory after security-policy cleanup",
+                source,
+            }
+        })
+    }
+
     pub(crate) fn materialize_staged_reference(
         &self,
         reference: ManifestSegmentReference,
