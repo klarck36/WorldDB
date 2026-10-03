@@ -389,7 +389,11 @@ fn authorize_metadata_records(
         let (capability, target) = match record {
             Record::HistorySpaceDefinition(definition) => (
                 Capability::HistorySpaceCreate,
-                PolicyTarget::new(Some(definition.history_space_id()), None, None, None, None),
+                definition
+                    .parent_history_space_id()
+                    .map_or_else(PolicyTarget::default, |parent| {
+                        PolicyTarget::new(Some(parent), None, None, None, None)
+                    }),
             ),
             Record::Entity(_) => (Capability::EntityCreate, PolicyTarget::default()),
             Record::EntityRetirement(retirement) => (
@@ -1311,18 +1315,46 @@ mod tests {
                     Capability::HistorySpaceCreate,
                     crate::security::GrantEffect::Allow,
                 ),
-                PolicyScope::project(),
+                PolicyScope::new(Some(history_space_id), None, None, None, None),
             )],
         )?;
         let post_state = validate_project_metadata_transaction(
             &scenario.base,
-            candidate,
+            candidate.clone(),
             &child_records,
             &policy,
             scenario.principal,
         )?;
         assert_eq!(post_state.history_spaces().definitions().len(), 3);
         assert_eq!(post_state.schema().fingerprint(), prior_fingerprint);
+
+        let wrong_target_policy = SecurityPolicySnapshot::new(
+            vec![crate::security::Principal::new(scenario.principal)],
+            vec![],
+            vec![],
+            vec![CapabilityRule::new(
+                id::<PolicyRuleId>(41)?,
+                PolicySubject::Principal(scenario.principal),
+                CapabilityGrant::new(
+                    Capability::HistorySpaceCreate,
+                    crate::security::GrantEffect::Allow,
+                ),
+                PolicyScope::new(Some(left_child_id), None, None, None, None),
+            )],
+        )?;
+        assert!(matches!(
+            validate_project_metadata_transaction(
+                &scenario.base,
+                candidate,
+                &child_records,
+                &wrong_target_policy,
+                scenario.principal,
+            ),
+            Err(ProjectMetadataValidationError::Denied {
+                capability: Capability::HistorySpaceCreate,
+                ..
+            })
+        ));
         Ok(())
     }
 }

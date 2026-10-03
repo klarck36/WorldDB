@@ -21,6 +21,9 @@ use crate::transfer_model::{
     TransferPlan,
 };
 
+/// One shared-revision batch of HistorySpace-scoped transfer records.
+pub type PublishedTransferCommit<T> = (Revision, Vec<(HistorySpaceId, TransferRecord<T>)>);
+
 /// One immutable generic content item used by the transfer reference model.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransferRecord<T> {
@@ -271,6 +274,93 @@ impl<T: Clone + Eq> TransferReferenceModel<T> {
             lineage: Vec::new(),
             transfer_lineage: Vec::new(),
         })
+    }
+
+    /// Reconstructs a persisted transfer view from the full shared commit
+    /// sequence. Empty batches retain revisions created by project metadata or
+    /// other operations, while nonempty batches may contain several spaces.
+    pub fn from_published_history(
+        database_id: crate::ids::DatabaseId,
+        definitions: Vec<HistorySpaceDefinition>,
+        latest_published: Revision,
+        commits: Vec<PublishedTransferCommit<T>>,
+        project_wide_references: Vec<RecordRef>,
+        event_relations: Vec<(EventRelation, Option<EventRelationRetraction>, bool)>,
+    ) -> Result<Self, TransferReferenceModelError> {
+        let mut known_content_ids = BTreeSet::new();
+        let mut history_commits = Vec::new();
+        let mut history_space_heads = definitions
+            .iter()
+            .map(|definition| (definition.history_space_id(), definition.base_revision()))
+            .collect::<BTreeMap<_, _>>();
+        history_commits
+            .try_reserve_exact(commits.len())
+            .map_err(|_| TransferReferenceModelError::AllocationFailed)?;
+
+        for (revision, commit) in commits {
+            let mut scoped = Vec::new();
+            scoped
+                .try_reserve_exact(commit.len())
+                .map_err(|_| TransferReferenceModelError::AllocationFailed)?;
+            for (history_space_id, record) in commit {
+                if !history_space_heads.contains_key(&history_space_id) {
+                    return Err(TransferReferenceModelError::UnknownHistorySpace);
+                }
+                if !known_content_ids.insert(record.id) {
+                    return Err(TransferReferenceModelError::ContentIdentityCollision {
+                        identity: record.id,
+                    });
+                }
+                history_space_heads.insert(history_space_id, revision);
+                scoped.push((
+                    history_space_id,
+                    ScopedTransferRecord {
+                        history_space_id,
+                        record,
+                    },
+                ));
+            }
+            history_commits.push((revision, scoped));
+        }
+
+        let history = HistorySpaceReferenceModel::from_published_snapshot(
+            definitions,
+            latest_published,
+            history_commits,
+        )?;
+        let mut model = Self {
+            database_id,
+            history,
+            history_space_heads,
+            known_content_ids,
+            known_provenance_ids: BTreeSet::new(),
+            known_transfer_lineage_ids: BTreeSet::new(),
+            known_archive_transition_ids: BTreeSet::new(),
+            event_relations: BTreeMap::new(),
+            known_event_relation_ids: BTreeSet::new(),
+            known_event_relation_retraction_ids: BTreeSet::new(),
+            project_wide_references: project_wide_references.into_iter().collect(),
+            lineage: Vec::new(),
+            transfer_lineage: Vec::new(),
+        };
+        for record_ref in &model.project_wide_references {
+            match record_ref {
+                RecordRef::Provenance(identity) => {
+                    model.known_provenance_ids.insert(*identity);
+                }
+                RecordRef::TransferLineage(identity) => {
+                    model.known_transfer_lineage_ids.insert(*identity);
+                }
+                RecordRef::ArchiveTransition(identity) => {
+                    model.known_archive_transition_ids.insert(*identity);
+                }
+                _ => {}
+            }
+        }
+        for (relation, retraction, archived) in event_relations {
+            model.register_event_relation(relation, retraction, archived)?;
+        }
+        Ok(model)
     }
 
     /// Returns the shared latest published revision.
@@ -1528,6 +1618,8 @@ pub enum TransferReferenceModelError {
     },
     /// Revision exhaustion prevents publication.
     RevisionExhausted(RevisionError),
+    /// The in-memory transfer snapshot could not reserve required storage.
+    AllocationFailed,
     /// The HistorySpace reference model rejected a read or publication.
     History(HistorySpaceModelError),
 }
@@ -1715,6 +1807,7 @@ impl fmt::Display for TransferReferenceModelError {
                 "archive policy produced an invalid transition for {target:?}"
             ),
             Self::RevisionExhausted(error) => write!(formatter, "revision exhausted: {error}"),
+            Self::AllocationFailed => formatter.write_str("transfer history allocation failed"),
             Self::History(error) => write!(formatter, "transfer history failed: {error}"),
         }
     }

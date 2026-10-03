@@ -1247,9 +1247,11 @@ pub use wire::{
     decode_value_with_limits, encode_frame, encode_id, encode_value,
 };
 pub use wire_records::{
-    DecodedRecord, Record, RecordCodecError, RecordKind, decode_record,
+    DecodedRecord, Record, RecordCodecError, RecordKind, TransferRecordRemapError, decode_record,
     decode_record_batch_with_limits, decode_record_ref, decode_record_with_limits,
     encode_decoded_record, encode_record, encode_record_ref, encode_record_with_flags,
+    history_space_content_ref, history_space_content_references,
+    remap_history_space_content_record,
 };
 pub use write_authorization::{
     WriteAuthorizationError, authorize_deprecated_schema_warnings, authorize_validated_write_batch,

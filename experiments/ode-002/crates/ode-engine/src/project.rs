@@ -5,14 +5,15 @@ use std::path::{Path, PathBuf};
 use worlddb_core::{
     AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
     AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, Capability,
-    PolicyBundle, PolicyScope, PolicyTarget, Principal, PrincipalId, Revision, RoleAssignment,
-    RoleDefinition, SecurityEpoch, SecurityPolicyChange, SecurityPolicyRecord,
-    SecurityPolicySnapshot, SecurityPolicyVersion, Symbol,
+    HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, LayerSchemaSnapshot,
+    Lifecycle, PolicyBundle, PolicyScope, PolicyTarget, Principal, PrincipalId, Record, Revision,
+    RoleAssignment, RoleDefinition, SchemaRevision, SecurityEpoch, SecurityPolicyChange,
+    SecurityPolicyRecord, SecurityPolicySnapshot, SecurityPolicyVersion, Symbol,
 };
 use worlddb_storage_file::{
-    DatabaseLayout, ManifestSegmentKind, ManifestSegmentReference, ManifestStore,
-    RecoveryDisposition, RecoveryManager, SecurityPolicyHistoryStore, StorageVerifier,
-    WalOperationStatus, WalPrepareLog,
+    DatabaseLayout, HistorySegmentStore, ManifestSegmentKind, ManifestSegmentReference,
+    ManifestStore, RecoveryDisposition, RecoveryManager, SecurityPolicyHistoryStore,
+    StorageVerifier, WalOperationStatus, WalPrepareLog,
 };
 
 /// A safe host-facing failure class for project create/open.
@@ -152,13 +153,23 @@ pub fn create_project(
         policy_receipt.content_digest(),
         bootstrap.version.revision(),
     );
-    let references = vec![genesis_reference, policy_reference];
+    let history_store = HistorySegmentStore::new(layout.clone());
+    let history_receipt = history_store
+        .stage_segment(&lock, &bootstrap.metadata_records)
+        .map_err(|_| ProjectError::HostUnavailable)?;
+    let history_reference = ManifestSegmentReference::new(
+        ManifestSegmentKind::History,
+        history_receipt.id(),
+        history_receipt.content_digest(),
+        bootstrap.version.revision(),
+    );
+    let references = vec![genesis_reference, policy_reference, history_reference];
     let wal = WalPrepareLog::new(&layout);
     let committed = wal.commit_audited_manifest_snapshot(
         &lock,
         bootstrap.operation_id,
         references,
-        &[genesis_reference, policy_reference],
+        &[genesis_reference, policy_reference, history_reference],
         &bootstrap.audit_record,
     );
     if committed.is_err() {
@@ -260,6 +271,7 @@ struct ProjectBootstrap {
     policy_record: SecurityPolicyRecord,
     audit_record: AuditRecord,
     operation_id: worlddb_core::OperationId,
+    metadata_records: Vec<Record>,
 }
 
 fn build_bootstrap(creator: PrincipalId) -> Result<ProjectBootstrap, ProjectError> {
@@ -289,6 +301,30 @@ fn build_bootstrap(creator: PrincipalId) -> Result<ProjectBootstrap, ProjectErro
     )
     .map_err(|_| ProjectError::HostUnavailable)?;
     let revision = Revision::FIRST_COMMIT;
+    let history_space_id =
+        generate::<HistorySpaceId>().map_err(|_| ProjectError::HostUnavailable)?;
+    let layer_id = generate::<LayerId>().map_err(|_| ProjectError::HostUnavailable)?;
+    let history_space = HistorySpaceDefinition::new(history_space_id, None, Revision::GENESIS)
+        .map_err(|_| ProjectError::HostUnavailable)?;
+    let base_layer = LayerDefinition::new(
+        layer_id,
+        Symbol::new("base").map_err(|_| ProjectError::HostUnavailable)?,
+        Some("Grundlage für neue Inhalte".to_owned()),
+        0,
+        Lifecycle::Active,
+        SchemaRevision::from_published_revision(revision),
+    );
+    let layer_snapshot = LayerSchemaSnapshot::new(
+        SchemaRevision::from_published_revision(revision),
+        vec![base_layer.clone()],
+        layer_id,
+    )
+    .map_err(|_| ProjectError::HostUnavailable)?;
+    let metadata_records = vec![
+        Record::HistorySpaceDefinition(history_space),
+        Record::LayerDefinition(base_layer),
+        Record::LayerSchemaSnapshot(layer_snapshot),
+    ];
     let epoch = SecurityEpoch::INITIAL
         .next()
         .map_err(|_| ProjectError::HostUnavailable)?;
@@ -353,6 +389,7 @@ fn build_bootstrap(creator: PrincipalId) -> Result<ProjectBootstrap, ProjectErro
         policy_record,
         audit_record,
         operation_id,
+        metadata_records,
     })
 }
 
@@ -403,7 +440,9 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use worlddb_core::{Capability, PolicyTarget, PrincipalId};
+    use worlddb_core::{
+        Capability, PolicyTarget, PrincipalId, Revision, SchemaMode, SchemaRevision,
+    };
 
     use super::{ProjectError, create_project, open_project};
     use crate::EngineHost;
@@ -462,6 +501,131 @@ mod tests {
             }
         ));
         drop(verified);
+        let _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_branch_and_layer_metadata_keep_historical_cutoffs() -> Result<(), String> {
+        let root = root();
+        let creator = principal(17)?;
+        create_project(&root, creator).map_err(|error| error.to_string())?;
+        let layout =
+            worlddb_storage_file::DatabaseLayout::open(&root).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let mut manager =
+            worlddb_storage_file::FileProjectMetadataManager::open(layout, &lock, creator)
+                .map_err(|error| error.to_string())?;
+
+        let initial = manager
+            .snapshot_at(SchemaMode::Current, Revision::GENESIS)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(initial.history_spaces().definitions().len(), 1);
+        assert_eq!(initial.layers().definitions().len(), 1);
+        let root_space = initial.history_spaces().definitions()[0].history_space_id();
+        let initial_base = initial.layers().base_layer_id();
+        assert_eq!(
+            initial
+                .layers()
+                .definition(initial_base)
+                .map(|value| value.symbol().as_str()),
+            Some("base")
+        );
+
+        let child_id = worlddb_core::storage_internal::generate_project_bootstrap_id::<
+            worlddb_core::HistorySpaceId,
+        >()
+        .map_err(|error| error.to_string())?;
+        let child = manager
+            .create_child(
+                manager.revision(),
+                worlddb_core::storage_internal::generate_schema_management_operation_id()
+                    .map_err(|error| error.to_string())?,
+                child_id,
+                root_space,
+                Revision::FIRST_COMMIT,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(child.revision().value(), 2);
+
+        let overlay_id = worlddb_core::storage_internal::generate_project_bootstrap_id::<
+            worlddb_core::LayerId,
+        >()
+        .map_err(|error| error.to_string())?;
+        let overlay = manager
+            .create_layer(
+                manager.revision(),
+                worlddb_core::storage_internal::generate_schema_management_operation_id()
+                    .map_err(|error| error.to_string())?,
+                overlay_id,
+                worlddb_core::Symbol::new("notes").map_err(|error| error.to_string())?,
+                Some("Notizen und ergänzende Fakten".to_owned()),
+                1,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(overlay.revision().value(), 3);
+
+        let switched = manager
+            .revise_layer(
+                manager.revision(),
+                worlddb_core::storage_internal::generate_schema_management_operation_id()
+                    .map_err(|error| error.to_string())?,
+                overlay_id,
+                Some("Notizen und ergänzende Fakten".to_owned()),
+                1,
+                worlddb_core::Lifecycle::Active,
+                overlay_id,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(switched.revision().value(), 4);
+
+        let historical = manager
+            .snapshot_at(
+                SchemaMode::Explicit(SchemaRevision::from_published_revision(
+                    Revision::FIRST_COMMIT,
+                )),
+                Revision::GENESIS,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(historical.layers().base_layer_id(), initial_base);
+        let current = manager
+            .snapshot_at(SchemaMode::Current, Revision::GENESIS)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(current.layers().base_layer_id(), overlay_id);
+        assert_eq!(
+            current
+                .history_spaces()
+                .definition(child_id)
+                .and_then(|value| value.parent_history_space_id()),
+            Some(root_space)
+        );
+        assert_eq!(
+            current
+                .history_spaces()
+                .definition(child_id)
+                .map(|value| value.base_revision()),
+            Some(Revision::FIRST_COMMIT)
+        );
+
+        let stale = manager.create_child(
+            Revision::new(3).map_err(|error| error.to_string())?,
+            worlddb_core::storage_internal::generate_schema_management_operation_id()
+                .map_err(|error| error.to_string())?,
+            worlddb_core::storage_internal::generate_project_bootstrap_id::<
+                worlddb_core::HistorySpaceId,
+            >()
+            .map_err(|error| error.to_string())?,
+            root_space,
+            Revision::FIRST_COMMIT,
+        );
+        assert!(matches!(
+            stale,
+            Err(worlddb_storage_file::LayerManagementError::Conflict)
+        ));
+        assert_eq!(manager.revision().value(), 4);
+        drop(lock);
         let _ = std::fs::remove_dir_all(root);
         Ok(())
     }

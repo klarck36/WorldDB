@@ -79,6 +79,46 @@ const entityDeprecatedOptIn = document.querySelector("#entity-deprecated-opt-in"
 const entityAcceptDeprecated = document.querySelector("#entity-accept-deprecated");
 const entityDeprecatedWarning = document.querySelector("#entity-deprecated-warning");
 const entityCreateButton = document.querySelector("#entity-create");
+const branchLayerPanel = document.querySelector("#branch-layer-panel");
+const branchLayerStatus = document.querySelector("#branch-layer-status");
+const branchTree = document.querySelector("#branch-tree");
+const layerList = document.querySelector("#layer-list");
+const branchLayerViewMode = document.querySelector("#branch-layer-view-mode");
+const branchLayerViewRevision = document.querySelector("#branch-layer-view-revision");
+const branchLayerViewRevisionWrap = document.querySelector("#branch-layer-view-revision-wrap");
+const branchLayerViewRevisionLabel = document.querySelector("#branch-layer-view-revision-label");
+const branchLayerRefreshButton = document.querySelector("#branch-layer-refresh");
+const branchCreateEditor = document.querySelector("#branch-create-editor");
+const branchParentSelect = document.querySelector("#branch-parent-select");
+const branchCutoff = document.querySelector("#branch-cutoff");
+const branchCreateButton = document.querySelector("#branch-create");
+const layerCreateEditor = document.querySelector("#layer-create-editor");
+const layerSymbol = document.querySelector("#layer-symbol");
+const layerRank = document.querySelector("#layer-rank");
+const layerDescription = document.querySelector("#layer-description");
+const layerCreateButton = document.querySelector("#layer-create");
+const layerEditEditor = document.querySelector("#layer-edit-editor");
+const layerEditSelect = document.querySelector("#layer-edit-select");
+const layerBaseSelect = document.querySelector("#layer-base-select");
+const layerEditRank = document.querySelector("#layer-edit-rank");
+const layerLifecycle = document.querySelector("#layer-lifecycle");
+const layerEditDescription = document.querySelector("#layer-edit-description");
+const layerUpdateButton = document.querySelector("#layer-update");
+const transferPanel = document.querySelector("#history-space-transfer-panel");
+const transferSource = document.querySelector("#transfer-source");
+const transferTarget = document.querySelector("#transfer-target");
+const transferRevision = document.querySelector("#transfer-revision");
+const transferExternalPolicy = document.querySelector("#transfer-external-policy");
+const transferLoadButton = document.querySelector("#transfer-load");
+const transferStatus = document.querySelector("#transfer-status");
+const transferPicker = document.querySelector("#transfer-content-picker");
+const transferContentList = document.querySelector("#transfer-content-list");
+const transferRelationList = document.querySelector("#transfer-relation-list");
+const transferPreviewButton = document.querySelector("#transfer-preview");
+const transferPreviewPanel = document.querySelector("#transfer-preview-panel");
+const transferPreviewSummary = document.querySelector("#transfer-preview-summary");
+const transferAcknowledge = document.querySelector("#transfer-acknowledge");
+const transferCommitButton = document.querySelector("#transfer-commit");
 
 const userMessages = {
   project_already_exists: "An diesem Ort gibt es bereits ein Projekt.",
@@ -92,6 +132,8 @@ const userMessages = {
   unknown_commit_outcome: "Der Speicherstatus ist unklar. Prüfe das Projekt, bevor du es erneut änderst.",
   schema_rejected: "Die Schema-Aktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
   entity_rejected: "Die Entitätsaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
+  branch_layer_rejected: "Die Branch- oder Layer-Aktion wurde abgelehnt. Prüfe Cutoff, Priorität, Berechtigung und aktuellen Projektstand.",
+  history_space_transfer_rejected: "Die Übertragung wurde abgelehnt. Lade Quelle und Ziel neu und prüfe die Verweise sowie die Vorschau.",
 };
 
 let sessionId;
@@ -100,11 +142,17 @@ let projectRevision = null;
 let projectBusy = false;
 let schemaBusy = false;
 let entityBusy = false;
+let branchLayerBusy = false;
+let transferBusy = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
 let currentSchema = null;
 let selectedEntities = null;
+let selectedBranchLayers = null;
+let branchLayerCurrentMode = true;
+let transferCatalog = null;
+let transferPreviewTicket = null;
 let stagedEventRoles = [];
 let stagedEventAttributes = [];
 let stagedLifecycleChanges = [];
@@ -120,12 +168,12 @@ function showError(error) {
 }
 
 function updateSchemaControls() {
-  const canRead = projectOpen && !schemaBusy && !projectBusy;
+  const canRead = projectOpen && !schemaBusy && !projectBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && schemaCurrentMode;
   schemaRefreshButton.disabled = !canRead;
   schemaCreateButton.disabled = !canMutate;
   for (const control of schemaEditor.querySelectorAll("input, select, textarea, button")) {
-    control.disabled = schemaBusy || projectBusy;
+    control.disabled = schemaBusy || projectBusy || branchLayerBusy || transferBusy;
   }
   schemaCreateButton.disabled = !canMutate;
   schemaLifecyclePublish.disabled = !canMutate || stagedLifecycleChanges.length === 0;
@@ -136,16 +184,18 @@ function updateSchemaControls() {
     button.disabled = schemaBusy || projectBusy;
   }
   updateEntityControls();
+  updateBranchLayerControls();
+  updateTransferControls();
   updateProjectControls();
 }
 
 function updateEntityControls() {
   if (!entityPanel) return;
-  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy;
+  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && entityCurrentMode;
   entityRefreshButton.disabled = !canRead;
   for (const control of entityEditor.querySelectorAll("input, select, button")) {
-    control.disabled = entityBusy || projectBusy || schemaBusy;
+    control.disabled = entityBusy || projectBusy || schemaBusy || branchLayerBusy || transferBusy;
   }
   entityCreateButton.disabled = !canMutate || !entityTypeSelect.value
     || (selectedEntityType()?.lifecycle === "deprecated" && !entityAcceptDeprecated.checked);
@@ -154,10 +204,46 @@ function updateEntityControls() {
   }
 }
 
+function updateBranchLayerControls() {
+  if (!branchLayerPanel) return;
+  const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !transferBusy;
+  const canMutate = canRead && branchLayerCurrentMode;
+  branchLayerRefreshButton.disabled = !canRead;
+  for (const editor of [branchCreateEditor, layerCreateEditor, layerEditEditor]) {
+    for (const control of editor.querySelectorAll("input, select, button")) {
+      control.disabled = !canMutate;
+    }
+  }
+  const parent = selectedBranchLayers?.branches.find((item) => item.history_space_id === branchParentSelect.value);
+  const cutoff = Number(branchCutoff.value);
+  branchCreateButton.disabled = !canMutate || !parent || !Number.isSafeInteger(cutoff)
+    || cutoff < parent.base_revision || cutoff > selectedBranchLayers.revision;
+  const rank = Number(layerRank.value);
+  let validSymbol = false;
+  try { validateSymbol(layerSymbol.value); validSymbol = true; } catch {}
+  layerCreateButton.disabled = !canMutate || !validSymbol || !Number.isInteger(rank)
+    || rank <= (selectedBranchLayers?.layers.find((layer) => layer.is_base)?.precedence_rank ?? -2147483648);
+  const edited = selectedBranchLayers?.layers.find((item) => item.layer_id === layerEditSelect.value);
+  const editedRank = Number(layerEditRank.value);
+  layerUpdateButton.disabled = !canMutate || !edited || !layerBaseSelect.value || !Number.isInteger(editedRank);
+}
+
+function updateTransferControls() {
+  if (!transferPanel) return;
+  const blocked = transferBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy;
+  const canRead = projectOpen && !blocked;
+  transferLoadButton.disabled = !canRead || !transferSource.value || !transferTarget.value
+    || transferSource.value === transferTarget.value;
+  transferPicker.disabled = !canRead || !transferCatalog;
+  transferPreviewButton.disabled = !canRead || !transferCatalog
+    || transferContentList.querySelectorAll('input[type="checkbox"]:checked').length === 0;
+  transferCommitButton.disabled = !canRead || !transferPreviewTicket || !transferAcknowledge.checked;
+}
+
 function updateProjectControls() {
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || projectOpen;
-  openButton.disabled = projectBusy || schemaBusy || entityBusy || projectOpen;
-  closeButton.disabled = projectBusy || schemaBusy || entityBusy || !projectOpen;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || projectOpen;
+  openButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || projectOpen;
+  closeButton.disabled = projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || !projectOpen;
 }
 
 function setBusy(busy) {
@@ -169,6 +255,8 @@ function renderProject(project) {
   projectOpen = Boolean(project.project_open);
   schemaPanel.hidden = !projectOpen;
   entityPanel.hidden = !projectOpen;
+  branchLayerPanel.hidden = !projectOpen;
+  transferPanel.hidden = !projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -196,13 +284,27 @@ async function refreshProject(activeSessionId) {
     await refreshEntities(activeSessionId).catch((error) => {
       entityStatus.textContent = showError(error);
     });
+    await refreshBranchLayers(activeSessionId).catch((error) => {
+      branchLayerStatus.textContent = showError(error);
+    });
+    await refreshTransferCatalog(activeSessionId).catch((error) => {
+      transferStatus.textContent = showError(error);
+    });
   }
   if (!projectOpen) {
     selectedSchema = null;
     currentSchema = null;
     selectedEntities = null;
+    selectedBranchLayers = null;
+    transferCatalog = null;
+    transferPreviewTicket = null;
     schemaDefinitions.replaceChildren();
     entityList.replaceChildren();
+    branchTree.replaceChildren();
+    layerList.replaceChildren();
+    transferContentList.replaceChildren();
+    transferRelationList.replaceChildren();
+    transferPreviewPanel.hidden = true;
     entityTypeSelect.replaceChildren();
     entityAcceptDeprecated.checked = false;
     updateEntityControls();
@@ -297,6 +399,454 @@ async function manageEntities(command, activeSessionId = sessionId) {
   });
   if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
   return response.result;
+}
+
+function branchLayerModeInput() {
+  const mode = branchLayerViewMode.value;
+  if (mode === "current") return { mode: "current" };
+  const revision = Number(branchLayerViewRevision.value);
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("invalid_request");
+  return mode === "historical"
+    ? { mode: "historical", recorded_as_of: revision }
+    : { mode: "explicit", revision };
+}
+
+async function manageBranchLayers(command, activeSessionId = sessionId) {
+  const response = await invoke("manage_branch_layers", {
+    request: { protocol_version: 1, session_id: activeSessionId, command },
+  });
+  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+  return response.result;
+}
+
+async function manageHistorySpaceTransfer(command, activeSessionId = sessionId) {
+  const response = await invoke("manage_history_space_transfer", {
+    request: { protocol_version: 1, session_id: activeSessionId, command },
+  });
+  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+  return response.result;
+}
+
+function clearTransferPreview() {
+  transferPreviewTicket = null;
+  transferPreviewPanel.hidden = true;
+  transferPreviewSummary.replaceChildren();
+  transferAcknowledge.checked = false;
+  updateTransferControls();
+}
+
+function updateTransferBranchSelectors(snapshot) {
+  const labels = branchLabels(snapshot);
+  const priorSource = transferSource.value;
+  const priorTarget = transferTarget.value;
+  for (const select of [transferSource, transferTarget]) select.replaceChildren();
+  for (const branch of snapshot.branches) {
+    const label = labels.get(branch.history_space_id) ?? "Branch";
+    for (const select of [transferSource, transferTarget]) {
+      const option = document.createElement("option");
+      option.value = branch.history_space_id;
+      option.textContent = label;
+      select.append(option);
+    }
+  }
+  if (snapshot.branches.some((item) => item.history_space_id === priorSource)) {
+    transferSource.value = priorSource;
+  }
+  if (snapshot.branches.some((item) => item.history_space_id === priorTarget)) {
+    transferTarget.value = priorTarget;
+  } else if (snapshot.branches.length > 1) {
+    transferTarget.selectedIndex = 1;
+  }
+  if (transferSource.value === transferTarget.value && snapshot.branches.length > 1) {
+    transferTarget.selectedIndex = snapshot.branches.findIndex((item) => item.history_space_id !== transferSource.value);
+  }
+  transferRevision.max = String(snapshot.revision);
+  if (!Number.isSafeInteger(Number(transferRevision.value)) || Number(transferRevision.value) > snapshot.revision) {
+    transferRevision.value = String(snapshot.revision);
+  }
+}
+
+async function refreshTransferCatalog(activeSessionId = sessionId) {
+  if (!projectOpen || !activeSessionId || transferBusy) return;
+  transferBusy = true;
+  updateSchemaControls();
+  transferStatus.textContent = "Quellinhalte werden geladen …";
+  clearTransferPreview();
+  transferCatalog = null;
+  transferPicker.disabled = true;
+  try {
+    const branches = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+    if (branches.kind !== "snapshot") throw new Error("unsupported_protocol");
+    updateTransferBranchSelectors(branches);
+    if (!transferSource.value || !transferTarget.value || transferSource.value === transferTarget.value) {
+      transferStatus.textContent = "Lege zuerst einen zweiten Branch an, um Inhalte übertragen zu können.";
+      updateTransferControls();
+      return;
+    }
+    await loadTransferContents(activeSessionId);
+  } catch (error) {
+    transferStatus.textContent = showError(error);
+    transferContentList.replaceChildren();
+    transferRelationList.replaceChildren();
+    throw error;
+  } finally {
+    transferBusy = false;
+    updateSchemaControls();
+  }
+}
+
+async function loadTransferContents(activeSessionId = sessionId) {
+  if (!activeSessionId || !transferSource.value || !transferTarget.value
+    || transferSource.value === transferTarget.value) return;
+  clearTransferPreview();
+  transferCatalog = null;
+  transferPicker.disabled = true;
+  const asOf = Number(transferRevision.value);
+  if (!Number.isSafeInteger(asOf) || asOf < 0) throw new Error("invalid_request");
+  const result = await manageHistorySpaceTransfer({
+    command: "list",
+    source_history_space_id: transferSource.value,
+    target_history_space_id: transferTarget.value,
+    source_recorded_as_of: asOf,
+  }, activeSessionId);
+  if (result.kind !== "catalog") throw new Error("unsupported_protocol");
+  transferCatalog = result;
+  transferContentList.replaceChildren();
+  transferRelationList.replaceChildren();
+  if (result.records.length === 0) appendText(transferContentList, "p", "In diesem Quellstand sind keine übertragbaren Datensätze sichtbar.", "muted");
+  for (const item of result.records) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    const row = document.createElement("div");
+    row.className = "inline compact";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.disabled = !item.selectable;
+    checkbox.dataset.family = item.family;
+    checkbox.dataset.recordId = item.id;
+    checkbox.setAttribute("aria-label", `${item.label}, Revision ${item.recorded_revision}`);
+    checkbox.addEventListener("change", updateTransferControls);
+    row.append(checkbox);
+    appendText(row, "span", `${item.label} · Revision ${item.recorded_revision}${item.archived ? " · archiviert" : ""}`);
+    card.append(row);
+    if (!item.selectable) appendText(card, "p", "Dieser Lebenszyklusdatensatz kann nicht in derselben Transferrevision kopiert werden.", "muted");
+    transferContentList.append(card);
+  }
+  if (result.event_relations.length === 0) {
+    appendText(transferRelationList, "p", "Keine übertragbaren Ereignisverknüpfungen.", "muted");
+  }
+  for (const item of result.event_relations) {
+    const row = document.createElement("div");
+    row.className = "inline compact definition";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.relationId = item.id;
+    checkbox.setAttribute("aria-label", `Ereignisverknüpfung: ${item.label}`);
+    checkbox.addEventListener("change", updateTransferControls);
+    row.append(checkbox);
+    const flags = [item.archived ? "archiviert" : null, item.retracted ? "zurückgenommen" : null]
+      .filter(Boolean).join(" · ");
+    appendText(row, "span", `Ereignisverknüpfung · ${item.label}${flags ? ` · ${flags}` : ""}`);
+    transferRelationList.append(row);
+  }
+  transferStatus.textContent = `Quellrevision ${result.current_revision} · Quellstand ${result.source_head} · Zielstand ${result.target_head}`;
+  transferPicker.disabled = false;
+  updateTransferControls();
+}
+
+async function previewTransfer() {
+  if (!sessionId || !projectOpen || transferBusy || !transferCatalog) return;
+  const selectedRecords = [...transferContentList.querySelectorAll('input[type="checkbox"]:checked')]
+    .map((checkbox) => ({ family: checkbox.dataset.family, id: checkbox.dataset.recordId }));
+  const selectedRelations = [...transferRelationList.querySelectorAll('input[type="checkbox"]:checked')]
+    .map((checkbox) => checkbox.dataset.relationId);
+  if (selectedRecords.length === 0) {
+    transferStatus.textContent = "Wähle mindestens einen Datensatz aus.";
+    return;
+  }
+  transferBusy = true;
+  updateSchemaControls();
+  transferStatus.textContent = "Übertragung und Verweise werden geprüft …";
+  clearTransferPreview();
+  try {
+    const result = await manageHistorySpaceTransfer({
+      command: "preview",
+      source_history_space_id: transferSource.value,
+      target_history_space_id: transferTarget.value,
+      source_recorded_as_of: Number(transferRevision.value),
+      selected_records: selectedRecords,
+      selected_event_relations: selectedRelations,
+      external_reference_policy: transferExternalPolicy.value,
+    });
+    if (result.kind !== "preview") throw new Error("unsupported_protocol");
+    transferPreviewTicket = result.preview_ticket;
+    const lines = [
+      `Quellrevision ${result.source_revision} · Zielstand ${result.target_head}`,
+      `${result.copied_record_count} Datensatz/Datensätze und ${result.copied_relation_count} Ereignisverknüpfung(en) werden kopiert.`,
+      `${result.omitted_lifecycle_count} effektive Lebenszykluswirkung(en) und ${result.omitted_relation_retraction_count} Ereignisverknüpfungs-Zurücknahme(n) werden ausgelassen.`,
+      `${result.archived_records_start_unarchived} archivierte Datensätze und ${result.archived_relations_start_unarchived} archivierte Verknüpfungen starten in der Kopie unarchiviert.`,
+      "Die Vorschau gilt fünf Minuten und wird beim Veröffentlichen erneut gegen den aktuellen Zielstand geprüft.",
+    ];
+    transferPreviewSummary.replaceChildren();
+    for (const line of lines) appendText(transferPreviewSummary, "p", line);
+    transferPreviewPanel.hidden = false;
+    transferStatus.textContent = "Die Vorschau ist bereit. Prüfe die Auswirkungen und bestätige sie vor der Veröffentlichung.";
+  } catch (error) {
+    transferStatus.textContent = showError(error);
+    throw error;
+  } finally {
+    transferBusy = false;
+    updateSchemaControls();
+  }
+}
+
+async function reloadTransferContents() {
+  if (!projectOpen || !sessionId || transferBusy) return;
+  transferBusy = true;
+  updateSchemaControls();
+  try {
+    await loadTransferContents();
+  } catch (error) {
+    transferStatus.textContent = showError(error);
+  } finally {
+    transferBusy = false;
+    updateSchemaControls();
+  }
+}
+
+async function commitTransfer() {
+  if (!sessionId || !projectOpen || transferBusy || !transferPreviewTicket || !transferAcknowledge.checked) return;
+  transferBusy = true;
+  updateSchemaControls();
+  transferStatus.textContent = "Die geprüfte Übertragung wird veröffentlicht …";
+  try {
+    const result = await manageHistorySpaceTransfer({
+      command: "commit",
+      preview_ticket: transferPreviewTicket,
+      acknowledge_lifecycle_omissions: transferAcknowledge.checked,
+    });
+    if (result.kind !== "published") throw new Error("unsupported_protocol");
+    transferPreviewTicket = null;
+    transferStatus.textContent = `Übertragung veröffentlicht · Datenrevision ${result.revision} · ${result.copied_record_count} Datensatz/Datensätze kopiert.`;
+    await refreshProject(sessionId);
+    await loadTransferContents(sessionId);
+  } catch (error) {
+    transferStatus.textContent = showError(error);
+  } finally {
+    transferBusy = false;
+    updateSchemaControls();
+  }
+}
+
+async function refreshBranchLayers(activeSessionId = sessionId) {
+  if (!projectOpen || !activeSessionId || branchLayerBusy) return;
+  branchLayerBusy = true;
+  updateSchemaControls();
+  branchLayerStatus.textContent = "Branches und Layer werden geladen …";
+  try {
+    const result = await manageBranchLayers({ command: "snapshot", mode: branchLayerModeInput() }, activeSessionId);
+    if (result.kind !== "snapshot") throw new Error("unsupported_protocol");
+    selectedBranchLayers = result;
+    branchLayerCurrentMode = branchLayerViewMode.value === "current";
+    renderBranchLayers(result);
+    updateBranchLayerControls();
+  } catch (error) {
+    branchLayerStatus.textContent = showError(error);
+    branchTree.replaceChildren();
+    layerList.replaceChildren();
+    updateBranchLayerControls();
+    throw error;
+  } finally {
+    branchLayerBusy = false;
+    updateSchemaControls();
+  }
+}
+
+function branchLabels(snapshot) {
+  const byId = new Map(snapshot.branches.map((branch) => [branch.history_space_id, branch]));
+  const roots = snapshot.branches.filter((branch) => branch.parent_history_space_id == null);
+  const labels = new Map();
+  function getLabel(branch, path = new Set()) {
+    if (labels.has(branch.history_space_id)) return labels.get(branch.history_space_id);
+    if (path.has(branch.history_space_id)) return "Ungültige Verzweigung";
+    path.add(branch.history_space_id);
+    let label;
+    if (branch.parent_history_space_id == null) {
+      const rootIndex = roots.findIndex((item) => item.history_space_id === branch.history_space_id);
+      label = roots.length <= 1 ? "Hauptbereich" : `Hauptbereich ${rootIndex + 1}`;
+    } else {
+      const parent = byId.get(branch.parent_history_space_id);
+      if (!parent) label = "Unbekannter Parent";
+      else {
+        const siblings = snapshot.branches
+          .filter((item) => item.parent_history_space_id === branch.parent_history_space_id)
+          .sort((left, right) => left.history_space_id.localeCompare(right.history_space_id));
+        const siblingIndex = siblings.findIndex((item) => item.history_space_id === branch.history_space_id);
+        label = `${getLabel(parent, path)} › Abzweig ${siblingIndex + 1}`;
+      }
+    }
+    path.delete(branch.history_space_id);
+    labels.set(branch.history_space_id, label);
+    return label;
+  }
+  for (const branch of snapshot.branches) getLabel(branch);
+  return labels;
+}
+
+function renderBranchLayers(snapshot) {
+  const labels = branchLabels(snapshot);
+  branchLayerStatus.textContent = `Datenrevision ${snapshot.revision} · ${snapshot.branches.length} Branch(es) · ${snapshot.layers.length} Layer`;
+  branchTree.replaceChildren();
+  if (snapshot.branches.length === 0) appendText(branchTree, "p", "In diesem Stand gibt es noch keine Branches.", "muted");
+  for (const branch of snapshot.branches) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    appendText(card, "h4", labels.get(branch.history_space_id) ?? "Branch");
+    const parent = branch.parent_history_space_id == null
+      ? "Kein Parent (Hauptbereich)"
+      : `Parent: ${labels.get(branch.parent_history_space_id) ?? "nicht verfügbar"}`;
+    appendText(card, "p", `${parent} · Parent-Cutoff: Revision ${branch.base_revision}`);
+    branchTree.append(card);
+  }
+
+  layerList.replaceChildren();
+  const layers = [...snapshot.layers].sort((left, right) => left.precedence_rank - right.precedence_rank || left.symbol.localeCompare(right.symbol));
+  for (const layer of layers) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    const baseLabel = layer.is_base ? " · Basis" : " · Overlay";
+    appendText(card, "h4", `${layer.symbol}${baseLabel}`);
+    appendText(card, "p", `Priorität ${layer.precedence_rank} · ${lifecycleLabel(layer.lifecycle)}`);
+    if (layer.description) appendText(card, "p", layer.description, "muted");
+    layerList.append(card);
+  }
+  updateBranchLayerSelectors(snapshot, labels);
+}
+
+function updateBranchLayerSelectors(snapshot, labels) {
+  const priorParent = branchParentSelect.value;
+  branchParentSelect.replaceChildren();
+  for (const branch of snapshot.branches) {
+    const option = document.createElement("option");
+    option.value = branch.history_space_id;
+    option.textContent = `${labels.get(branch.history_space_id) ?? "Branch"} · Cutoff ${branch.base_revision}`;
+    branchParentSelect.append(option);
+  }
+  if (snapshot.branches.some((branch) => branch.history_space_id === priorParent)) branchParentSelect.value = priorParent;
+  updateBranchCutoffBounds();
+
+  const priorLayer = layerEditSelect.value;
+  layerEditSelect.replaceChildren();
+  for (const layer of snapshot.layers) {
+    const option = document.createElement("option");
+    option.value = layer.layer_id;
+    option.textContent = `${layer.symbol}${layer.is_base ? " · Basis" : ""} · ${lifecycleLabel(layer.lifecycle)}`;
+    layerEditSelect.append(option);
+  }
+  if (snapshot.layers.some((layer) => layer.layer_id === priorLayer)) layerEditSelect.value = priorLayer;
+  else if (snapshot.layers.length) layerEditSelect.value = snapshot.base_layer_id;
+
+  const priorBase = layerBaseSelect.value;
+  layerBaseSelect.replaceChildren();
+  for (const layer of snapshot.layers.filter((item) => item.lifecycle === "active")) {
+    const option = document.createElement("option");
+    option.value = layer.layer_id;
+    option.textContent = layer.symbol;
+    layerBaseSelect.append(option);
+  }
+  if ([...layerBaseSelect.options].some((option) => option.value === priorBase)) layerBaseSelect.value = priorBase;
+  else if ([...layerBaseSelect.options].some((option) => option.value === snapshot.base_layer_id)) layerBaseSelect.value = snapshot.base_layer_id;
+  loadLayerEditForm();
+}
+
+function updateBranchCutoffBounds() {
+  const parent = selectedBranchLayers?.branches.find((branch) => branch.history_space_id === branchParentSelect.value);
+  if (!parent) return;
+  branchCutoff.min = String(parent.base_revision);
+  branchCutoff.max = String(selectedBranchLayers.revision);
+  const value = Number(branchCutoff.value);
+  if (!Number.isSafeInteger(value) || value < parent.base_revision || value > selectedBranchLayers.revision) {
+    branchCutoff.value = String(Math.max(parent.base_revision, selectedBranchLayers.revision));
+  }
+  updateBranchLayerControls();
+}
+
+function loadLayerEditForm() {
+  const layer = selectedBranchLayers?.layers.find((item) => item.layer_id === layerEditSelect.value);
+  if (!layer) return;
+  layerEditRank.value = String(layer.precedence_rank);
+  layerEditDescription.value = layer.description ?? "";
+  layerLifecycle.value = layer.lifecycle;
+  updateBranchLayerControls();
+}
+
+async function publishBranchLayer(command, successMessage) {
+  if (!sessionId || !projectOpen || !branchLayerCurrentMode || branchLayerBusy || !selectedBranchLayers) return;
+  branchLayerBusy = true;
+  updateSchemaControls();
+  branchLayerStatus.textContent = "Änderung wird geprüft und gespeichert …";
+  try {
+    const result = await manageBranchLayers({
+      ...command,
+      expected_base_revision: selectedBranchLayers.revision,
+    });
+    if (result.kind !== "published") throw new Error("unsupported_protocol");
+    branchLayerStatus.textContent = `${successMessage} · Datenrevision ${result.revision}`;
+    branchLayerViewMode.value = "current";
+    branchLayerCurrentMode = true;
+    await refreshBranchLayers();
+  } catch (error) {
+    branchLayerStatus.textContent = showError(error);
+  } finally {
+    branchLayerBusy = false;
+    updateSchemaControls();
+  }
+}
+
+function createChildBranch() {
+  if (!branchParentSelect.value) return;
+  return publishBranchLayer({
+    command: "create_child",
+    parent_history_space_id: branchParentSelect.value,
+    base_revision: Number(branchCutoff.value),
+  }, "Child-Branch angelegt");
+}
+
+function createOverlayLayer() {
+  let symbol;
+  try { symbol = validateSymbol(layerSymbol.value); } catch {
+    branchLayerStatus.textContent = "Das Layer-Symbol muss mit einem Kleinbuchstaben beginnen und darf nur Kleinbuchstaben, Zahlen und Unterstriche enthalten.";
+    return;
+  }
+  const rank = Number(layerRank.value);
+  if (!Number.isInteger(rank)) {
+    branchLayerStatus.textContent = "Bitte gib eine gültige Layer-Priorität ein.";
+    return;
+  }
+  return publishBranchLayer({
+    command: "create_layer",
+    symbol,
+    description: layerDescription.value.trim() || null,
+    precedence_rank: rank,
+  }, "Overlay-Layer angelegt");
+}
+
+function reviseSelectedLayer() {
+  const layer = selectedBranchLayers?.layers.find((item) => item.layer_id === layerEditSelect.value);
+  if (!layer) return;
+  const newBase = layerBaseSelect.value;
+  if (layerLifecycle.value === "retired" && layer.lifecycle !== "retired"
+    && !window.confirm("Soll dieser Layer dauerhaft stillgelegt werden? Die frühere Layer-Historie bleibt erhalten.")) return;
+  if (newBase !== selectedBranchLayers.base_layer_id
+    && !window.confirm("Soll der ausgewählte Layer die neue Basis werden? Die beiden Prioritäten werden dafür getauscht.")) return;
+  return publishBranchLayer({
+    command: "revise_layer",
+    layer_id: layer.layer_id,
+    description: layerEditDescription.value.trim() || null,
+    precedence_rank: Number(layerEditRank.value),
+    lifecycle: layerLifecycle.value,
+    base_layer_id: newBase,
+  }, "Layer-Änderung veröffentlicht");
 }
 
 async function invokeEntitiesFor(activeSessionId, mode) {
@@ -555,6 +1105,96 @@ async function runEntitySmoke(activeSessionId) {
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
+}
+
+async function runBranchLayerSmoke(activeSessionId) {
+  const initial = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  if (initial.kind !== "snapshot" || initial.branches.length !== 1 || initial.layers.length !== 1) {
+    throw new Error("project bootstrap did not publish one root branch and one base Layer");
+  }
+  const root = initial.branches.find((branch) => branch.parent_history_space_id == null);
+  const base = initial.layers.find((layer) => layer.is_base);
+  if (!root || !base) throw new Error("branch/layer bootstrap snapshot is incomplete");
+
+  const child = await manageBranchLayers({
+    command: "create_child",
+    expected_base_revision: initial.revision,
+    parent_history_space_id: root.history_space_id,
+    base_revision: initial.revision,
+  }, activeSessionId);
+  if (child.kind !== "published") throw new Error("child branch did not publish");
+  const afterChild = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  if (afterChild.branches.length !== 2) throw new Error("child branch was not visible in the current tree");
+  const childBranch = afterChild.branches.find((branch) => branch.parent_history_space_id === root.history_space_id);
+  if (!childBranch || childBranch.base_revision !== initial.revision) {
+    throw new Error("child branch did not keep its selected fixed parent cutoff");
+  }
+  const historicalBefore = await manageBranchLayers({
+    command: "snapshot",
+    mode: { mode: "explicit", revision: initial.revision },
+  }, activeSessionId);
+  if (historicalBefore.branches.length !== 1) throw new Error("historical tree included a later child branch");
+
+  const createdLayer = await manageBranchLayers({
+    command: "create_layer",
+    expected_base_revision: afterChild.revision,
+    symbol: "ipc_smoke_overlay",
+    description: "Temporary overlay for branch/layer IPC verification.",
+    precedence_rank: base.precedence_rank + 1,
+  }, activeSessionId);
+  if (createdLayer.kind !== "published") throw new Error("overlay Layer did not publish");
+  const afterLayer = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  const overlay = afterLayer.layers.find((layer) => layer.symbol === "ipc_smoke_overlay");
+  if (!overlay || overlay.is_base) throw new Error("created overlay Layer is missing or became the base unexpectedly");
+
+  const switched = await manageBranchLayers({
+    command: "revise_layer",
+    expected_base_revision: afterLayer.revision,
+    layer_id: overlay.layer_id,
+    description: overlay.description,
+    precedence_rank: overlay.precedence_rank,
+    lifecycle: "active",
+    base_layer_id: overlay.layer_id,
+  }, activeSessionId);
+  if (switched.kind !== "published") throw new Error("base Layer switch did not publish");
+  const current = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  if (current.base_layer_id !== overlay.layer_id
+    || !current.layers.find((layer) => layer.layer_id === overlay.layer_id)?.is_base) {
+    throw new Error("base Layer switch did not update the current schema snapshot");
+  }
+  const beforeSwitch = await manageBranchLayers({
+    command: "snapshot",
+    mode: { mode: "explicit", revision: createdLayer.revision },
+  }, activeSessionId);
+  if (beforeSwitch.base_layer_id !== base.layer_id) {
+    throw new Error("historical Layer selection did not preserve the prior base designation");
+  }
+  const stale = await manageBranchLayers({
+    command: "create_child",
+    expected_base_revision: initial.revision,
+    parent_history_space_id: root.history_space_id,
+    base_revision: initial.revision,
+  }, activeSessionId).then(() => false, () => true);
+  if (!stale) throw new Error("stale branch update was not rejected");
+  const unchanged = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  if (unchanged.revision !== current.revision || unchanged.branches.length !== 2) {
+    throw new Error("rejected stale branch update changed persisted project state");
+  }
+  branchLayerViewMode.value = "current";
+  await refreshBranchLayers(activeSessionId);
+
+  const transferCatalog = await manageHistorySpaceTransfer({
+    command: "list",
+    source_history_space_id: root.history_space_id,
+    target_history_space_id: childBranch.history_space_id,
+    source_recorded_as_of: current.revision,
+  }, activeSessionId);
+  if (transferCatalog.kind !== "catalog"
+    || !Array.isArray(transferCatalog.records)
+    || !Array.isArray(transferCatalog.event_relations)
+    || !Number.isSafeInteger(transferCatalog.current_revision)) {
+    throw new Error("HistorySpace transfer catalog did not return a pinned typed inventory");
+  }
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
@@ -1130,6 +1770,12 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
+          if (!branchLayerBusy) refreshBranchLayers(sessionId).catch((error) => {
+            branchLayerStatus.textContent = showError(error);
+          });
+          if (!transferBusy) refreshTransferCatalog(sessionId).catch((error) => {
+            transferStatus.textContent = showError(error);
+          });
         });
       }
 
@@ -1151,9 +1797,10 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
         await runProjectSmoke(sessionId);
         if (role === "primary") {
-          operationStatus.textContent = "Schema-, Entitäts- und Historienprüfung läuft …";
+          operationStatus.textContent = "Schema-, Entitäts-, Branch- und Layerprüfung läuft …";
           await runSchemaSmoke(sessionId);
           await runEntitySmoke(sessionId);
+          await runBranchLayerSmoke(sessionId);
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
@@ -1241,6 +1888,35 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   entityTypeSelect.addEventListener("change", updateEntityTypeSelectionState);
   entityAcceptDeprecated.addEventListener("change", updateEntityControls);
   entityCreateButton.addEventListener("click", createEntity);
+  branchLayerRefreshButton.addEventListener("click", () => refreshBranchLayers().catch(() => {}));
+  transferLoadButton.addEventListener("click", reloadTransferContents);
+  transferSource.addEventListener("change", reloadTransferContents);
+  transferTarget.addEventListener("change", reloadTransferContents);
+  transferRevision.addEventListener("change", reloadTransferContents);
+  transferExternalPolicy.addEventListener("change", clearTransferPreview);
+  transferPreviewButton.addEventListener("click", previewTransfer);
+  transferAcknowledge.addEventListener("change", updateTransferControls);
+  transferCommitButton.addEventListener("click", commitTransfer);
+  branchLayerViewMode.addEventListener("change", () => {
+    branchLayerViewRevisionWrap.hidden = branchLayerViewMode.value === "current";
+    branchLayerViewRevisionLabel.textContent = branchLayerViewMode.value === "historical"
+      ? "Datenrevision (RecordedAsOf)"
+      : "Datenrevision";
+    branchLayerCurrentMode = branchLayerViewMode.value === "current";
+    updateBranchLayerControls();
+    if (projectOpen) refreshBranchLayers().catch(() => {});
+  });
+  branchLayerViewRevision.addEventListener("change", () => refreshBranchLayers().catch(() => {}));
+  branchParentSelect.addEventListener("change", updateBranchCutoffBounds);
+  branchCutoff.addEventListener("input", updateBranchLayerControls);
+  branchCreateButton.addEventListener("click", createChildBranch);
+  layerSymbol.addEventListener("input", updateBranchLayerControls);
+  layerRank.addEventListener("input", updateBranchLayerControls);
+  layerCreateButton.addEventListener("click", createOverlayLayer);
+  layerEditSelect.addEventListener("change", loadLayerEditForm);
+  layerBaseSelect.addEventListener("change", updateBranchLayerControls);
+  layerEditRank.addEventListener("input", updateBranchLayerControls);
+  layerUpdateButton.addEventListener("click", reviseSelectedLayer);
   schemaFamily.addEventListener("change", updateSchemaFormVisibility);
   schemaValueKind.addEventListener("change", updateSchemaFormVisibility);
   schemaCardinality.addEventListener("change", updateSchemaFormVisibility);

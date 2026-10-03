@@ -19,6 +19,15 @@ use crate::{
 
 mod entity;
 pub use entity::{EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager};
+mod project_metadata;
+pub use project_metadata::{
+    FileProjectMetadataManager, LayerManagementError, MetadataPublicationReceipt,
+};
+mod transfer;
+pub use transfer::{
+    FileHistorySpaceTransferManager, HistorySpaceTransferError, TransferEventRelationItem,
+    TransferPublicationReceipt, TransferSourceItem,
+};
 
 const MAX_SCHEMA_BATCH_RECORDS: usize = 1_024;
 

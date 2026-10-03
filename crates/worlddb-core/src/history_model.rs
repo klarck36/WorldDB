@@ -49,6 +49,118 @@ impl<T> HistorySpaceReferenceModel<T> {
         })
     }
 
+    /// Reconstructs a persisted global history while retaining commits that do
+    /// not contain HistorySpace-owned records. Each vector element is one
+    /// shared database revision and may contain records owned by several spaces.
+    pub fn from_published_history(
+        definitions: Vec<HistorySpaceDefinition>,
+        commits: Vec<Vec<(HistorySpaceId, T)>>,
+    ) -> Result<Self, HistorySpaceModelError> {
+        let catalog = HistorySpaceCatalog::new(definitions)?;
+        let mut history = InMemoryRevisionLog::new();
+        for commit in commits {
+            let revision = history.reserve_next()?;
+            let mut entries = Vec::new();
+            entries
+                .try_reserve_exact(commit.len())
+                .map_err(|_| HistorySpaceModelError::AllocationFailed)?;
+            for (history_space_id, value) in commit {
+                if catalog.definition(history_space_id).is_none() {
+                    return Err(HistorySpaceModelError::UnknownHistorySpace);
+                }
+                entries.push(ScopedEntry {
+                    history_space_id,
+                    value,
+                });
+            }
+            history.publish(revision, entries)?;
+        }
+
+        let published = history.latest_published();
+        for definition in catalog.definitions() {
+            if definition.base_revision() > published {
+                return Err(HistorySpaceModelError::BaseRevisionNotPublished {
+                    requested: definition.base_revision(),
+                    published,
+                });
+            }
+            if let Some(parent_id) = definition.parent_history_space_id() {
+                let parent =
+                    catalog
+                        .definition(parent_id)
+                        .ok_or(HistorySpaceModelError::Catalog(
+                            HistorySpaceError::UnknownParent,
+                        ))?;
+                if definition.base_revision() < parent.base_revision() {
+                    return Err(HistorySpaceModelError::CutoffBeforeParentBase {
+                        requested: definition.base_revision(),
+                        parent_base: parent.base_revision(),
+                    });
+                }
+            }
+        }
+
+        Ok(Self { catalog, history })
+    }
+
+    /// Reconstructs a persisted snapshot from only revisions containing local
+    /// HistorySpace records. Commit revisions may have gaps because other
+    /// project transactions can advance the shared revision without adding
+    /// HistorySpace-owned data.
+    pub fn from_published_snapshot(
+        definitions: Vec<HistorySpaceDefinition>,
+        latest_published: Revision,
+        commits: Vec<(Revision, Vec<(HistorySpaceId, T)>)>,
+    ) -> Result<Self, HistorySpaceModelError> {
+        let catalog = HistorySpaceCatalog::new(definitions)?;
+        for definition in catalog.definitions() {
+            if definition.base_revision() > latest_published {
+                return Err(HistorySpaceModelError::BaseRevisionNotPublished {
+                    requested: definition.base_revision(),
+                    published: latest_published,
+                });
+            }
+            if let Some(parent_id) = definition.parent_history_space_id() {
+                let parent =
+                    catalog
+                        .definition(parent_id)
+                        .ok_or(HistorySpaceModelError::Catalog(
+                            HistorySpaceError::UnknownParent,
+                        ))?;
+                if definition.base_revision() < parent.base_revision() {
+                    return Err(HistorySpaceModelError::CutoffBeforeParentBase {
+                        requested: definition.base_revision(),
+                        parent_base: parent.base_revision(),
+                    });
+                }
+            }
+        }
+
+        let mut scoped_commits = Vec::new();
+        scoped_commits
+            .try_reserve_exact(commits.len())
+            .map_err(|_| HistorySpaceModelError::AllocationFailed)?;
+        for (revision, entries) in commits {
+            let mut scoped = Vec::new();
+            scoped
+                .try_reserve_exact(entries.len())
+                .map_err(|_| HistorySpaceModelError::AllocationFailed)?;
+            for (history_space_id, value) in entries {
+                if catalog.definition(history_space_id).is_none() {
+                    return Err(HistorySpaceModelError::UnknownHistorySpace);
+                }
+                scoped.push(ScopedEntry {
+                    history_space_id,
+                    value,
+                });
+            }
+            scoped_commits.push((revision, scoped));
+        }
+        let history =
+            InMemoryRevisionLog::from_published_commits(latest_published, scoped_commits)?;
+        Ok(Self { catalog, history })
+    }
+
     /// Returns the global latest published revision.
     #[must_use]
     pub const fn latest_published(&self) -> Revision {
@@ -191,6 +303,8 @@ pub enum HistorySpaceModelError {
     },
     /// An invalid HistorySpace catalog was supplied.
     Catalog(HistorySpaceError),
+    /// A required in-memory history reservation could not be allocated.
+    AllocationFailed,
     /// The global revision sequence rejected a publication or read.
     Revision(RevisionLogError),
 }
@@ -233,6 +347,7 @@ impl fmt::Display for HistorySpaceModelError {
                 "read revision {requested} predates HistorySpace base {base_revision}"
             ),
             Self::Catalog(error) => write!(formatter, "invalid HistorySpace catalog: {error}"),
+            Self::AllocationFailed => formatter.write_str("HistorySpace history allocation failed"),
             Self::Revision(error) => write!(formatter, "invalid revision history: {error}"),
         }
     }

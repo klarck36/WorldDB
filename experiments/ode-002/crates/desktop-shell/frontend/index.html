@@ -42,6 +42,7 @@
       .compact { margin: 6px 0; }
       .schema-note { border-left: 3px solid color-mix(in srgb, Highlight 65%, transparent); padding-left: 12px; }
       #schema-status { min-height: 1.5em; }
+      #branch-layer-status { min-height: 1.5em; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
       label { display: block; font-weight: 600; margin-bottom: 7px; }
       input, button {
@@ -251,6 +252,117 @@
           </div>
           <p id="entity-deprecated-warning" class="schema-note muted" hidden>Dieser EntityType ist veraltet. Die Anlage benötigt ausdrückliche Freigabe und eine zusätzliche Berechtigung.</p>
           <div class="actions"><button id="entity-create" type="button">Entität anlegen</button></div>
+        </fieldset>
+      </section>
+      <section id="branch-layer-panel" class="card" aria-labelledby="branch-layer-heading" hidden>
+        <h2 id="branch-layer-heading">Branches und Layer</h2>
+        <p class="muted">Child-Branches übernehmen ihren Parent nur bis zum fest gespeicherten Cutoff. Overlay-Layer ergänzen Fakten, ohne andere Branches oder ältere Layer-Stände zu ändern.</p>
+        <div class="grid">
+          <div>
+            <label for="branch-layer-view-mode">Ansicht</label>
+            <select id="branch-layer-view-mode">
+              <option value="current">Aktueller Stand</option>
+              <option value="historical">Stand zu einer Datenrevision</option>
+              <option value="explicit">Genau diese Datenrevision</option>
+            </select>
+          </div>
+          <div id="branch-layer-view-revision-wrap" hidden>
+            <label id="branch-layer-view-revision-label" for="branch-layer-view-revision">Datenrevision</label>
+            <input id="branch-layer-view-revision" type="number" min="0" step="1" value="1" />
+          </div>
+        </div>
+        <div class="actions"><button id="branch-layer-refresh" type="button">Branches und Layer anzeigen</button></div>
+        <p id="branch-layer-status" class="muted" role="status" aria-live="polite"></p>
+        <div class="grid">
+          <section aria-labelledby="branch-tree-heading">
+            <h3 id="branch-tree-heading">Branch-Baum</h3>
+            <div id="branch-tree" aria-live="polite"></div>
+          </section>
+          <section aria-labelledby="layer-list-heading">
+            <h3 id="layer-list-heading">Layer-Reihenfolge</h3>
+            <div id="layer-list" aria-live="polite"></div>
+          </section>
+        </div>
+        <fieldset id="branch-create-editor">
+          <legend>Child-Branch anlegen</legend>
+          <p class="muted">Der Cutoff muss zwischen dem Cutoff des Parents und der aktuellen Datenrevision liegen.</p>
+          <label for="branch-parent-select">Parent</label>
+          <select id="branch-parent-select"></select>
+          <label for="branch-cutoff">Parent-Cutoff (Datenrevision)</label>
+          <input id="branch-cutoff" type="number" min="0" step="1" value="1" />
+          <div class="actions"><button id="branch-create" type="button">Child-Branch anlegen</button></div>
+        </fieldset>
+        <fieldset id="layer-create-editor">
+          <legend>Overlay-Layer anlegen</legend>
+          <div class="grid">
+            <div>
+              <label for="layer-symbol">Symbol</label>
+              <input id="layer-symbol" autocomplete="off" placeholder="z. B. notizen" />
+            </div>
+            <div>
+              <label for="layer-rank">Priorität (größer liegt höher)</label>
+              <input id="layer-rank" type="number" min="-2147483648" max="2147483647" step="1" value="1" />
+            </div>
+          </div>
+          <label for="layer-description">Beschreibung</label>
+          <input id="layer-description" autocomplete="off" />
+          <div class="actions"><button id="layer-create" type="button">Overlay-Layer anlegen</button></div>
+        </fieldset>
+        <fieldset id="layer-edit-editor">
+          <legend>Layer bearbeiten und Basis wählen</legend>
+          <div class="grid">
+            <div>
+              <label for="layer-edit-select">Layer</label>
+              <select id="layer-edit-select"></select>
+            </div>
+            <div>
+              <label for="layer-base-select">Basis-Layer</label>
+              <select id="layer-base-select"></select>
+            </div>
+          </div>
+          <div class="grid">
+            <div>
+              <label for="layer-edit-rank">Priorität</label>
+              <input id="layer-edit-rank" type="number" min="-2147483648" max="2147483647" step="1" />
+            </div>
+            <div>
+              <label for="layer-lifecycle">Lebenszyklus</label>
+              <select id="layer-lifecycle">
+                <option value="active">Aktiv</option>
+                <option value="deprecated">Veraltet</option>
+                <option value="retired">Stillgelegt</option>
+              </select>
+            </div>
+          </div>
+          <label for="layer-edit-description">Beschreibung</label>
+          <input id="layer-edit-description" autocomplete="off" />
+          <div class="actions"><button id="layer-update" type="button">Layer-Änderung veröffentlichen</button></div>
+        </fieldset>
+      </section>
+      <section id="history-space-transfer-panel" class="card" aria-labelledby="transfer-heading" hidden>
+        <h2 id="transfer-heading">Inhalte zwischen Branches übertragen</h2>
+        <p class="muted">Wähle einen festen Quellstand und einzelne Datensätze. Die Vorschau prüft Verweise und Zielstand, bevor ein gemeinsamer, geprüfter Commit veröffentlicht wird.</p>
+        <div class="grid">
+          <div><label for="transfer-source">Quelle</label><select id="transfer-source"></select></div>
+          <div><label for="transfer-target">Ziel</label><select id="transfer-target"></select></div>
+          <div><label for="transfer-revision">Quellrevision</label><input id="transfer-revision" type="number" min="0" step="1" value="1" /></div>
+          <div><label for="transfer-external-policy">Nicht ausgewählte Verweise</label><select id="transfer-external-policy"><option value="reject">Übertragung ablehnen</option><option value="retain_if_visible">Nur behalten, wenn sie im Ziel sichtbar sind</option></select></div>
+        </div>
+        <div class="actions"><button id="transfer-load" type="button">Quellinhalte laden</button></div>
+        <p id="transfer-status" class="muted" role="status" aria-live="polite"></p>
+        <fieldset id="transfer-content-picker" disabled>
+          <legend>Zu übertragende Datensätze</legend>
+          <div id="transfer-content-list" class="definition-list" aria-live="polite"></div>
+          <h3>Ereignisverknüpfungen (optional)</h3>
+          <div id="transfer-relation-list" class="definition-list" aria-live="polite"></div>
+          <p class="schema-note muted">Neue Kopien starten unarchiviert. Effektive Zurücknahmen und Gültigkeitsenden werden ausgelassen und in der Vorschau ausgewiesen. Lebenszyklusdatensätze selbst benötigen einen späteren Commit.</p>
+          <div class="actions"><button id="transfer-preview" type="button">Übertragung prüfen</button></div>
+        </fieldset>
+        <fieldset id="transfer-preview-panel" hidden>
+          <legend>Geprüfte Vorschau</legend>
+          <div id="transfer-preview-summary" aria-live="polite"></div>
+          <div class="inline compact"><input id="transfer-acknowledge" type="checkbox" /><label for="transfer-acknowledge">Ich bestätige die ausgewiesenen Auslassungen und den unarchivierten Start der Kopien.</label></div>
+          <div class="actions"><button id="transfer-commit" type="button" disabled>Übertragung veröffentlichen</button></div>
         </fieldset>
       </section>
     </main>

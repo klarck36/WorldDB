@@ -183,6 +183,36 @@ fn main() {
                     std::process::exit(74);
                 }
             }
+            Request::BranchLayers { command } => {
+                let response = match engine.branch_layers(command) {
+                    Ok(result) => Response::BranchLayers { result },
+                    Err(worlddb_ode_engine::EngineError::BranchLayer(_)) => Response::Error {
+                        code: "branch_layer_rejected".to_owned(),
+                    },
+                    Err(_) => Response::Error {
+                        code: "engine_failed".to_owned(),
+                    },
+                };
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
+            Request::HistorySpaceTransfer { command } => {
+                let response = match engine.history_space_transfer(command) {
+                    Ok(result) => Response::HistorySpaceTransfer { result },
+                    Err(worlddb_ode_engine::EngineError::HistorySpaceTransfer(_)) => {
+                        Response::Error {
+                            code: "history_space_transfer_rejected".to_owned(),
+                        }
+                    }
+                    Err(_) => Response::Error {
+                        code: "engine_failed".to_owned(),
+                    },
+                };
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
             Request::Panic => engine.panic_for_spike(),
             Request::Shutdown => {
                 let _ = write_response(&Response::Shutdown);

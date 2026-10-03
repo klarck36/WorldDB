@@ -162,6 +162,8 @@ pub enum AuditAction {
     EntityCreation,
     /// Retirement of one Entity catalog identity.
     EntityRetirement,
+    /// Copy of selected HistorySpace-owned records into another HistorySpace.
+    HistorySpaceTransfer,
 }
 
 /// Closed object classes that can be named without copying sensitive payloads.

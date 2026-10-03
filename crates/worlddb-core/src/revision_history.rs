@@ -55,6 +55,43 @@ impl<T> InMemoryRevisionLog<T> {
         }
     }
 
+    /// Reconstructs a sparse immutable history snapshot. Empty database
+    /// commits need no stored entry, so revisions in `commits` may have gaps;
+    /// the declared head still advances normal future publication from the
+    /// exact persisted database revision.
+    pub fn from_published_commits(
+        latest_published: Revision,
+        commits: Vec<(Revision, Vec<T>)>,
+    ) -> Result<Self, RevisionLogError> {
+        let mut published = Vec::new();
+        published
+            .try_reserve_exact(commits.len())
+            .map_err(|_| RevisionLogError::AllocationFailed)?;
+        let mut prior = Revision::GENESIS;
+        for (revision, entries) in commits {
+            let expected = prior.next_commit()?;
+            if revision < expected {
+                return Err(RevisionLogError::RevisionGap {
+                    expected,
+                    actual: revision,
+                });
+            }
+            if revision > latest_published {
+                return Err(RevisionLogError::RevisionNotPublished {
+                    requested: revision,
+                    published: latest_published,
+                });
+            }
+            published.push(PublishedCommit { revision, entries });
+            prior = revision;
+        }
+        Ok(Self {
+            latest_published,
+            commits: published,
+            reservation: None,
+        })
+    }
+
     /// Returns the latest published revision; unpublished reservations are hidden.
     #[must_use]
     pub const fn latest_published(&self) -> Revision {
@@ -174,6 +211,8 @@ pub enum RevisionLogError {
     },
     /// No later revision can be reserved without reaching the reserved maximum.
     RevisionExhausted(RevisionError),
+    /// Rebuilding the persisted revision snapshot could not reserve memory.
+    AllocationFailed,
 }
 
 impl From<RevisionError> for RevisionLogError {
@@ -204,6 +243,7 @@ impl fmt::Display for RevisionLogError {
             Self::RevisionExhausted(error) => {
                 write!(formatter, "revision space exhausted: {error}")
             }
+            Self::AllocationFailed => formatter.write_str("revision history allocation failed"),
         }
     }
 }

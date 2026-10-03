@@ -257,6 +257,7 @@ fn encode_action(value: AuditAction) -> u8 {
         AuditAction::SchemaManagement => 10,
         AuditAction::EntityCreation => 11,
         AuditAction::EntityRetirement => 12,
+        AuditAction::HistorySpaceTransfer => 13,
     }
 }
 
@@ -274,6 +275,7 @@ fn decode_action(bytes: &[u8]) -> Result<AuditAction, AuditCodecError> {
         [10] => Ok(AuditAction::SchemaManagement),
         [11] => Ok(AuditAction::EntityCreation),
         [12] => Ok(AuditAction::EntityRetirement),
+        [13] => Ok(AuditAction::HistorySpaceTransfer),
         _ => Err(invalid(AuditRecordKind::AuditRecord, 5)),
     }
 }
@@ -703,12 +705,13 @@ mod tests {
             (AuditAction::SchemaManagement, 10),
             (AuditAction::EntityCreation, 11),
             (AuditAction::EntityRetirement, 12),
+            (AuditAction::HistorySpaceTransfer, 13),
         ] {
             assert_eq!(encode_action(value), code);
             assert_eq!(decode_action(&[code]), Ok(value));
         }
         assert!(decode_action(&[0]).is_err());
-        assert!(decode_action(&[13]).is_err());
+        assert!(decode_action(&[14]).is_err());
 
         for (value, code) in [
             (AuditObjectClass::Database, 1),

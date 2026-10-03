@@ -14,8 +14,9 @@ use worlddb_ode_engine::EngineHost;
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
-    EntityCommand, EntityModeInput, EntityResponse, Response, SchemaCommand, SchemaResponse,
-    StreamPlan,
+    BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
+    HistorySpaceTransferCommand, HistorySpaceTransferResponse, Response, SchemaCommand,
+    SchemaResponse, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -168,7 +169,9 @@ fn run() -> Result<(), String> {
             open_project,
             close_project,
             manage_schema,
-            manage_entities
+            manage_entities,
+            manage_branch_layers,
+            manage_history_space_transfer
         ])
         .run(tauri::generate_context!())
         .map_err(|error| error.to_string())
@@ -266,6 +269,34 @@ struct EntityRequestV1 {
     protocol_version: u16,
     session_id: String,
     command: EntityCommand,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BranchLayerRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: BranchLayerCommand,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistorySpaceTransferRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: HistorySpaceTransferCommand,
+}
+
+#[derive(Serialize)]
+struct BranchLayerResponseV1 {
+    protocol_version: u16,
+    result: BranchLayerResponse,
+}
+
+#[derive(Serialize)]
+struct HistorySpaceTransferResponseV1 {
+    protocol_version: u16,
+    result: HistorySpaceTransferResponse,
 }
 
 #[derive(Serialize)]
@@ -514,6 +545,80 @@ fn manage_entities(
     }
 }
 
+#[tauri::command]
+fn manage_branch_layers(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: BranchLayerRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<BranchLayerResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let operation = branch_layer_smoke_operation(&request.command);
+    match backend.branch_layers(request.command) {
+        Ok(result) => {
+            record_branch_layer_smoke(window.label(), operation, true, Some(&result))?;
+            if matches!(result, BranchLayerResponse::Published(_)) {
+                let _ = app.emit("project-state-changed", ());
+            }
+            Ok(BranchLayerResponseV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                result,
+            })
+        }
+        Err(_) => {
+            record_branch_layer_smoke(window.label(), operation, false, None)?;
+            Err(IpcErrorV1::new("branch_layer_rejected"))
+        }
+    }
+}
+
+#[tauri::command]
+fn manage_history_space_transfer(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: HistorySpaceTransferRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<HistorySpaceTransferResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let operation = history_space_transfer_smoke_operation(&request.command);
+    match backend.history_space_transfer(request.command) {
+        Ok(result) => {
+            record_history_space_transfer_smoke(window.label(), operation, true, Some(&result))?;
+            if matches!(result, HistorySpaceTransferResponse::Published(_)) {
+                let _ = app.emit("project-state-changed", ());
+            }
+            Ok(HistorySpaceTransferResponseV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                result,
+            })
+        }
+        Err(_) => {
+            record_history_space_transfer_smoke(window.label(), operation, false, None)?;
+            Err(IpcErrorV1::new("history_space_transfer_rejected"))
+        }
+    }
+}
+
 async fn pick_project_parent(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -648,6 +753,31 @@ fn entity_smoke_operation(command: &EntityCommand) -> &'static str {
     }
 }
 
+fn branch_layer_smoke_operation(command: &BranchLayerCommand) -> &'static str {
+    match command {
+        BranchLayerCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Current,
+        } => "snapshot_current",
+        BranchLayerCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Historical { .. },
+        } => "snapshot_historical",
+        BranchLayerCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Explicit { .. },
+        } => "snapshot_explicit",
+        BranchLayerCommand::CreateChild { .. } => "create_child",
+        BranchLayerCommand::CreateLayer { .. } => "create_layer",
+        BranchLayerCommand::ReviseLayer { .. } => "revise_layer",
+    }
+}
+
+fn history_space_transfer_smoke_operation(command: &HistorySpaceTransferCommand) -> &'static str {
+    match command {
+        HistorySpaceTransferCommand::List { .. } => "list",
+        HistorySpaceTransferCommand::Preview { .. } => "preview",
+        HistorySpaceTransferCommand::Commit { .. } => "commit",
+    }
+}
+
 fn record_entity_smoke(
     window_label: &str,
     operation: &str,
@@ -706,6 +836,123 @@ fn record_entity_smoke(
         "entity_count": entity_count,
         "entity_types": entity_types,
         "warning": warning,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+fn record_branch_layer_smoke(
+    window_label: &str,
+    operation: &str,
+    succeeded: bool,
+    result: Option<&BranchLayerResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-branch-layer-{window_label}.jsonl"));
+    let (revision, branch_count, layer_count, branch_created, layer_changed) =
+        result.map_or((None, None, None, None, None), |response| match response {
+            BranchLayerResponse::Snapshot(snapshot) => (
+                Some(snapshot.revision),
+                Some(snapshot.branches.len()),
+                Some(snapshot.layers.len()),
+                None,
+                None,
+            ),
+            BranchLayerResponse::Published(publication) => (
+                Some(publication.revision),
+                None,
+                None,
+                Some(publication.branch_created),
+                Some(publication.layer_changed),
+            ),
+        });
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "succeeded": succeeded,
+        "revision": revision,
+        "branch_count": branch_count,
+        "layer_count": layer_count,
+        "branch_created": branch_created,
+        "layer_changed": layer_changed,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+fn record_history_space_transfer_smoke(
+    window_label: &str,
+    operation: &str,
+    succeeded: bool,
+    result: Option<&HistorySpaceTransferResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_TRANSFER_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-transfer-{window_label}.jsonl"));
+    let (record_count, relation_count, copied_records, copied_relations) =
+        result.map_or((None, None, None, None), |response| match response {
+            HistorySpaceTransferResponse::Catalog(catalog) => (
+                Some(catalog.records.len()),
+                Some(catalog.event_relations.len()),
+                None,
+                None,
+            ),
+            HistorySpaceTransferResponse::Preview(preview) => (
+                None,
+                None,
+                Some(preview.copied_record_count),
+                Some(preview.copied_relation_count),
+            ),
+            HistorySpaceTransferResponse::Published(receipt) => (
+                None,
+                None,
+                Some(receipt.copied_record_count),
+                Some(receipt.copied_relation_count),
+            ),
+        });
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "succeeded": succeeded,
+        "record_count": record_count,
+        "relation_count": relation_count,
+        "copied_record_count": copied_records,
+        "copied_relation_count": copied_relations,
     });
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -1226,6 +1473,17 @@ impl Backend {
         self.with_engine(|engine| engine.entities(command))
     }
 
+    fn branch_layers(&self, command: BranchLayerCommand) -> Result<BranchLayerResponse, String> {
+        self.with_engine(|engine| engine.branch_layers(command))
+    }
+
+    fn history_space_transfer(
+        &self,
+        command: HistorySpaceTransferCommand,
+    ) -> Result<HistorySpaceTransferResponse, String> {
+        self.with_engine(|engine| engine.history_space_transfer(command))
+    }
+
     fn project_status_locked(
         &self,
         state: &mut BackendState,
@@ -1419,6 +1677,37 @@ impl EngineBackend {
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
                 .entities(command),
+        }
+    }
+
+    fn branch_layers(&self, command: BranchLayerCommand) -> Result<BranchLayerResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .branch_layers(command)
+                .map_err(|_| "engine rejected branch or Layer operation".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .branch_layers(command),
+        }
+    }
+
+    fn history_space_transfer(
+        &self,
+        command: HistorySpaceTransferCommand,
+    ) -> Result<HistorySpaceTransferResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .history_space_transfer(command)
+                .map_err(|_| "engine rejected HistorySpace transfer".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .history_space_transfer(command),
         }
     }
 
@@ -1710,6 +1999,28 @@ impl Sidecar {
             Response::Entities { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected Entity operation".to_owned()),
             _ => Err("sidecar returned an unexpected Entity response".to_owned()),
+        }
+    }
+
+    fn branch_layers(
+        &mut self,
+        command: BranchLayerCommand,
+    ) -> Result<BranchLayerResponse, String> {
+        match self.request(Request::BranchLayers { command })? {
+            Response::BranchLayers { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected branch or Layer operation".to_owned()),
+            _ => Err("sidecar returned an unexpected branch/Layer response".to_owned()),
+        }
+    }
+
+    fn history_space_transfer(
+        &mut self,
+        command: HistorySpaceTransferCommand,
+    ) -> Result<HistorySpaceTransferResponse, String> {
+        match self.request(Request::HistorySpaceTransfer { command })? {
+            Response::HistorySpaceTransfer { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected HistorySpace transfer".to_owned()),
+            _ => Err("sidecar returned an unexpected transfer response".to_owned()),
         }
     }
 

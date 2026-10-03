@@ -14,6 +14,17 @@ pub use entity::{
     EntityCommand, EntityModeInput, EntityPublicationView, EntityResponse, EntitySnapshotView,
     EntityTypeView, EntityView, EntityWarningView,
 };
+mod branch_layer;
+pub use branch_layer::{
+    BranchLayerCommand, BranchLayerPublicationView, BranchLayerResponse, BranchLayerSnapshotView,
+    BranchView, LayerView,
+};
+mod history_space_transfer;
+pub use history_space_transfer::{
+    ContentIdentityInput, ExternalReferencePolicyInput, HistorySpaceTransferCommand,
+    HistorySpaceTransferResponse, TransferCatalogView, TransferContentView, TransferPreviewView,
+    TransferPublishedView, TransferRelationView,
+};
 mod schema;
 pub use schema::{
     CalendarPeriodDraft, CardinalityDraft, ConstraintDraft, DecimalMetadataDraft,
@@ -43,6 +54,7 @@ pub struct EngineHost {
     health: Mutex<()>,
     schema_management: Mutex<()>,
     streams: Mutex<HashMap<[u8; 16], ActiveStream>>,
+    transfer_previews: Mutex<HashMap<String, history_space_transfer::PendingTransferPreview>>,
 }
 
 struct ActiveStream {
@@ -79,8 +91,14 @@ pub enum Request {
     Schema {
         command: SchemaCommand,
     },
+    BranchLayers {
+        command: BranchLayerCommand,
+    },
     Entities {
         command: EntityCommand,
+    },
+    HistorySpaceTransfer {
+        command: HistorySpaceTransferCommand,
     },
     Panic,
     Shutdown,
@@ -114,8 +132,14 @@ pub enum Response {
     Schema {
         result: SchemaResponse,
     },
+    BranchLayers {
+        result: BranchLayerResponse,
+    },
     Entities {
         result: EntityResponse,
+    },
+    HistorySpaceTransfer {
+        result: HistorySpaceTransferResponse,
     },
     Shutdown,
     Error {
@@ -213,6 +237,8 @@ pub enum EngineError {
     Stream(&'static str),
     Schema(String),
     Entity(String),
+    BranchLayer(String),
+    HistorySpaceTransfer(String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -222,6 +248,8 @@ impl std::fmt::Display for EngineError {
             Self::Stream(code) => write!(formatter, "stream protocol error: {code}"),
             Self::Schema(message) => formatter.write_str(message),
             Self::Entity(message) => formatter.write_str(message),
+            Self::BranchLayer(message) => formatter.write_str(message),
+            Self::HistorySpaceTransfer(message) => formatter.write_str(message),
         }
     }
 }
@@ -246,6 +274,7 @@ impl EngineHost {
             health: Mutex::new(()),
             schema_management: Mutex::new(()),
             streams: Mutex::new(HashMap::new()),
+            transfer_previews: Mutex::new(HashMap::new()),
         })
     }
 
@@ -271,6 +300,7 @@ impl EngineHost {
                 health: Mutex::new(()),
                 schema_management: Mutex::new(()),
                 streams: Mutex::new(HashMap::new()),
+                transfer_previews: Mutex::new(HashMap::new()),
             },
             access,
         ))

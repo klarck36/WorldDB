@@ -7,16 +7,18 @@ use crate::wire::{
     decode_frame_with_limits, decode_id, encode_frame, encode_id,
 };
 use crate::{
-    ArchiveTransition, Assertion, AssertionRetraction, AssertionValidityClosure, Entity,
-    EntityRetirement, EntityTypeDefinition, Event, EventKindDefinition, EventMask,
-    EventMaskRetraction, EventRelation, EventRelationRetraction, EventRetraction, EventSpanClosure,
-    Evidence, EvidenceRetraction, HistorySpaceDefinition, LayerDefinition, LayerSchemaSnapshot,
-    Mask, MaskRetraction, MaskValidityClosure, MigrationPlan, MigrationRun,
-    MigrationStepCommitIdentity, PerspectiveDefinitionRevision, PerspectiveRetirement,
-    PredicateDefinition, ProvenanceEdge, ProvenanceRetraction, RecordRef, RecordRefWireTag,
-    ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, Source,
+    ArchiveTransition, Assertion, AssertionDraft, AssertionRetraction, AssertionValidityClosure,
+    ContextKey, Entity, EntityRetirement, EntityTypeDefinition, Event, EventKindDefinition,
+    EventMask, EventMaskRetraction, EventRelation, EventRelationRetraction, EventRetraction,
+    EventSpanClosure, Evidence, EvidenceRetraction, HistorySpaceContentRef, HistorySpaceDefinition,
+    HistorySpaceId, LayerDefinition, LayerSchemaSnapshot, Mask, MaskRetraction, MaskSelector,
+    MaskValidityClosure, MigrationPlan, MigrationRun, MigrationStepCommitIdentity,
+    PerspectiveDefinitionRevision, PerspectiveRetirement, PredicateDefinition, ProvenanceEdge,
+    ProvenanceRetraction, RecordRef, RecordRefWireTag, ReplacementBoundary,
+    ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, Revision, Source,
     TransferLineage,
 };
+use std::collections::BTreeMap;
 
 mod events;
 mod lifecycle;
@@ -317,6 +319,350 @@ pub enum Record {
     /// Dedicated record for the source and target of a HistorySpace copy.
     TransferLineage(TransferLineage),
 }
+
+/// Returns the closed typed identity when a Record belongs to the transferable
+/// HistorySpace content subset.
+#[must_use]
+pub fn history_space_content_ref(record: &Record) -> Option<HistorySpaceContentRef> {
+    Some(match record {
+        Record::Assertion(value) => HistorySpaceContentRef::Assertion(value.id()),
+        Record::Mask(value) => HistorySpaceContentRef::Mask(value.id()),
+        Record::ReplacementBoundary(value) => {
+            HistorySpaceContentRef::ReplacementBoundary(value.id())
+        }
+        Record::Event(value) => HistorySpaceContentRef::Event(value.id()),
+        Record::EventMask(value) => HistorySpaceContentRef::EventMask(value.id()),
+        Record::AssertionValidityClosure(value) => {
+            HistorySpaceContentRef::AssertionValidityClosure(value.id())
+        }
+        Record::AssertionRetraction(value) => {
+            HistorySpaceContentRef::AssertionRetraction(value.id())
+        }
+        Record::MaskValidityClosure(value) => {
+            HistorySpaceContentRef::MaskValidityClosure(value.id())
+        }
+        Record::MaskRetraction(value) => HistorySpaceContentRef::MaskRetraction(value.id()),
+        Record::ReplacementBoundaryValidityClosure(value) => {
+            HistorySpaceContentRef::ReplacementBoundaryValidityClosure(value.id())
+        }
+        Record::ReplacementBoundaryRetraction(value) => {
+            HistorySpaceContentRef::ReplacementBoundaryRetraction(value.id())
+        }
+        Record::EventSpanClosure(value) => HistorySpaceContentRef::EventSpanClosure(value.id()),
+        Record::EventRetraction(value) => HistorySpaceContentRef::EventRetraction(value.id()),
+        Record::EventMaskRetraction(value) => {
+            HistorySpaceContentRef::EventMaskRetraction(value.id())
+        }
+        _ => return None,
+    })
+}
+
+/// Returns every RecordRef dependency used by the transfer model to decide
+/// whether the copied item must be mapped or retained from the target view.
+#[must_use]
+pub fn history_space_content_references(record: &Record) -> Vec<RecordRef> {
+    let reference = match record {
+        Record::Mask(value) => match value.selector() {
+            crate::masks::MaskSelector::ExactAssertion(id) => Some(RecordRef::Assertion(*id)),
+            crate::masks::MaskSelector::Proposition(_) | crate::masks::MaskSelector::Slot(_) => {
+                None
+            }
+        },
+        Record::EventMask(value) => Some(RecordRef::Event(value.target_event())),
+        Record::AssertionValidityClosure(value) => Some(RecordRef::Assertion(value.assertion_id())),
+        Record::AssertionRetraction(value) => Some(RecordRef::Assertion(value.assertion_id())),
+        Record::MaskValidityClosure(value) => Some(RecordRef::Mask(value.mask_id())),
+        Record::MaskRetraction(value) => Some(RecordRef::Mask(value.mask_id())),
+        Record::ReplacementBoundaryValidityClosure(value) => Some(RecordRef::ReplacementBoundary(
+            value.replacement_boundary_id(),
+        )),
+        Record::ReplacementBoundaryRetraction(value) => Some(RecordRef::ReplacementBoundary(
+            value.replacement_boundary_id(),
+        )),
+        Record::EventSpanClosure(value) => Some(RecordRef::Event(value.event_id())),
+        Record::EventRetraction(value) => Some(RecordRef::Event(value.event_id())),
+        Record::EventMaskRetraction(value) => Some(RecordRef::EventMask(value.event_mask_id())),
+        _ => None,
+    };
+    reference.into_iter().collect()
+}
+
+/// Rebuilds one selected HistorySpace content record with a fresh same-family
+/// identity, a new owner space, the transfer revision, and remapped local
+/// references. Project-wide identities and domain values remain unchanged.
+pub fn remap_history_space_content_record(
+    source: &Record,
+    target_history_space_id: HistorySpaceId,
+    target_identity: HistorySpaceContentRef,
+    identity_map: &BTreeMap<HistorySpaceContentRef, HistorySpaceContentRef>,
+    created_revision: Revision,
+) -> Result<Record, TransferRecordRemapError> {
+    let source_identity =
+        history_space_content_ref(source).ok_or(TransferRecordRemapError::UnsupportedRecord)?;
+    if identity_map.get(&source_identity) != Some(&target_identity) {
+        return Err(TransferRecordRemapError::MissingIdentityMapping);
+    }
+    let remap = |reference| remap_transfer_reference(reference, identity_map);
+    let result = match (source, target_identity) {
+        (Record::Assertion(value), HistorySpaceContentRef::Assertion(id)) => {
+            let prior = value.context();
+            let context = ContextKey::new(
+                target_history_space_id,
+                prior.layer_id(),
+                prior.perspective_scope(),
+                prior.epistemic_mode(),
+            )
+            .map_err(|_| TransferRecordRemapError::InvalidRecord)?;
+            let draft = AssertionDraft::new(
+                context,
+                value.subject(),
+                value.predicate_id(),
+                value.value().clone(),
+                value.polarity(),
+                value.validity(),
+            );
+            Record::Assertion(Assertion::new(id, draft, created_revision))
+        }
+        (Record::Mask(value), HistorySpaceContentRef::Mask(id)) => {
+            let prior = value.context();
+            let context = ContextKey::new(
+                target_history_space_id,
+                prior.layer_id(),
+                prior.perspective_scope(),
+                prior.epistemic_mode(),
+            )
+            .map_err(|_| TransferRecordRemapError::InvalidRecord)?;
+            let selector = match value.selector() {
+                MaskSelector::ExactAssertion(assertion_id) => {
+                    let reference = remap(RecordRef::Assertion(*assertion_id))?;
+                    let RecordRef::Assertion(mapped_id) = reference else {
+                        return Err(TransferRecordRemapError::InvalidRecord);
+                    };
+                    MaskSelector::ExactAssertion(mapped_id)
+                }
+                selector => selector.clone(),
+            };
+            Record::Mask(
+                Mask::new(id, context, selector, value.validity(), created_revision)
+                    .map_err(|_| TransferRecordRemapError::InvalidRecord)?,
+            )
+        }
+        (Record::ReplacementBoundary(value), HistorySpaceContentRef::ReplacementBoundary(id)) => {
+            let prior = value.context();
+            let context = ContextKey::new(
+                target_history_space_id,
+                prior.layer_id(),
+                prior.perspective_scope(),
+                prior.epistemic_mode(),
+            )
+            .map_err(|_| TransferRecordRemapError::InvalidRecord)?;
+            Record::ReplacementBoundary(crate::masks::ReplacementBoundary::from_wire_fields(
+                id,
+                context,
+                value.subject(),
+                value.predicate_id(),
+                value.validity(),
+                created_revision,
+            ))
+        }
+        (Record::Event(value), HistorySpaceContentRef::Event(id)) => {
+            Record::Event(Event::from_wire_fields(
+                id,
+                crate::events::EventWireFields::new(
+                    target_history_space_id,
+                    value.layer_id(),
+                    value.event_kind_id(),
+                    value.participants().clone(),
+                    value.attributes().clone(),
+                    value.event_time(),
+                ),
+                created_revision,
+            ))
+        }
+        (Record::EventMask(value), HistorySpaceContentRef::EventMask(id)) => {
+            let event = remap(RecordRef::Event(value.target_event()))?;
+            let RecordRef::Event(event_id) = event else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::EventMask(EventMask::new(
+                id,
+                target_history_space_id,
+                value.layer_id(),
+                event_id,
+                created_revision,
+            ))
+        }
+        (
+            Record::AssertionValidityClosure(value),
+            HistorySpaceContentRef::AssertionValidityClosure(id),
+        ) => {
+            let target = remap(RecordRef::Assertion(value.assertion_id()))?;
+            let RecordRef::Assertion(assertion_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::AssertionValidityClosure(
+                crate::assertions::AssertionValidityClosure::from_wire_fields(
+                    id,
+                    assertion_id,
+                    value.close_at_world_time(),
+                    created_revision,
+                ),
+            )
+        }
+        (Record::AssertionRetraction(value), HistorySpaceContentRef::AssertionRetraction(id)) => {
+            let target = remap(RecordRef::Assertion(value.assertion_id()))?;
+            let RecordRef::Assertion(assertion_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::AssertionRetraction(crate::assertions::AssertionRetraction::from_wire_fields(
+                id,
+                assertion_id,
+                value.reason().to_owned(),
+                created_revision,
+            ))
+        }
+        (Record::MaskValidityClosure(value), HistorySpaceContentRef::MaskValidityClosure(id)) => {
+            let target = remap(RecordRef::Mask(value.mask_id()))?;
+            let RecordRef::Mask(mask_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::MaskValidityClosure(crate::masks::MaskValidityClosure::from_wire_fields(
+                id,
+                mask_id,
+                value.close_at_world_time(),
+                created_revision,
+            ))
+        }
+        (Record::MaskRetraction(value), HistorySpaceContentRef::MaskRetraction(id)) => {
+            let target = remap(RecordRef::Mask(value.mask_id()))?;
+            let RecordRef::Mask(mask_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::MaskRetraction(crate::masks::MaskRetraction::from_wire_fields(
+                id,
+                mask_id,
+                value.reason().to_owned(),
+                created_revision,
+            ))
+        }
+        (
+            Record::ReplacementBoundaryValidityClosure(value),
+            HistorySpaceContentRef::ReplacementBoundaryValidityClosure(id),
+        ) => {
+            let target = remap(RecordRef::ReplacementBoundary(
+                value.replacement_boundary_id(),
+            ))?;
+            let RecordRef::ReplacementBoundary(boundary_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::ReplacementBoundaryValidityClosure(
+                crate::masks::ReplacementBoundaryValidityClosure::from_wire_fields(
+                    id,
+                    boundary_id,
+                    value.close_at_world_time(),
+                    created_revision,
+                ),
+            )
+        }
+        (
+            Record::ReplacementBoundaryRetraction(value),
+            HistorySpaceContentRef::ReplacementBoundaryRetraction(id),
+        ) => {
+            let target = remap(RecordRef::ReplacementBoundary(
+                value.replacement_boundary_id(),
+            ))?;
+            let RecordRef::ReplacementBoundary(boundary_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::ReplacementBoundaryRetraction(
+                crate::masks::ReplacementBoundaryRetraction::from_wire_fields(
+                    id,
+                    boundary_id,
+                    value.reason().to_owned(),
+                    created_revision,
+                ),
+            )
+        }
+        (Record::EventSpanClosure(value), HistorySpaceContentRef::EventSpanClosure(id)) => {
+            let target = remap(RecordRef::Event(value.event_id()))?;
+            let RecordRef::Event(event_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::EventSpanClosure(crate::events::EventSpanClosure::from_wire_fields(
+                id,
+                event_id,
+                value.close_at_event_time(),
+                created_revision,
+            ))
+        }
+        (Record::EventRetraction(value), HistorySpaceContentRef::EventRetraction(id)) => {
+            let target = remap(RecordRef::Event(value.event_id()))?;
+            let RecordRef::Event(event_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::EventRetraction(crate::events::EventRetraction::from_wire_fields(
+                id,
+                event_id,
+                value.reason().to_owned(),
+                created_revision,
+            ))
+        }
+        (Record::EventMaskRetraction(value), HistorySpaceContentRef::EventMaskRetraction(id)) => {
+            let target = remap(RecordRef::EventMask(value.event_mask_id()))?;
+            let RecordRef::EventMask(event_mask_id) = target else {
+                return Err(TransferRecordRemapError::InvalidRecord);
+            };
+            Record::EventMaskRetraction(crate::events::EventMaskRetraction::from_wire_fields(
+                id,
+                event_mask_id,
+                value.reason().to_owned(),
+                created_revision,
+            ))
+        }
+        _ => return Err(TransferRecordRemapError::TargetFamilyMismatch),
+    };
+    Ok(result)
+}
+
+fn remap_transfer_reference(
+    reference: RecordRef,
+    identity_map: &BTreeMap<HistorySpaceContentRef, HistorySpaceContentRef>,
+) -> Result<RecordRef, TransferRecordRemapError> {
+    let Ok(content_reference) = HistorySpaceContentRef::try_from(reference) else {
+        return Ok(reference);
+    };
+    Ok(identity_map
+        .get(&content_reference)
+        .copied()
+        .unwrap_or(content_reference)
+        .record_ref())
+}
+
+/// Why a selected Record could not be rebuilt for a target HistorySpace.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferRecordRemapError {
+    /// The Record family is outside the closed HistorySpace content set.
+    UnsupportedRecord,
+    /// The source record did not have the expected exact ID mapping.
+    MissingIdentityMapping,
+    /// The supplied target ID belongs to another concrete family.
+    TargetFamilyMismatch,
+    /// The source Record could not be reconstructed with a valid closed shape.
+    InvalidRecord,
+}
+
+impl fmt::Display for TransferRecordRemapError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedRecord => formatter.write_str("Record is not transferable content"),
+            Self::MissingIdentityMapping => formatter.write_str("transfer ID mapping is missing"),
+            Self::TargetFamilyMismatch => formatter.write_str("transfer ID family changed"),
+            Self::InvalidRecord => formatter.write_str("transferred Record is not valid"),
+        }
+    }
+}
+
+impl std::error::Error for TransferRecordRemapError {}
 
 /// A decoded record with optional frame capabilities retained for exact roundtrip.
 #[derive(Clone, Debug)]
