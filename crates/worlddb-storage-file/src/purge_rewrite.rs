@@ -39,6 +39,15 @@ const MAX_STAGE_ATTEMPTS: u8 = 32;
 
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+fn crash_process_for_test(checkpoint: &str) {
+    if let Ok(requested) = std::env::var("WORLDDB_M7_16G_PURGE_CRASH_AT") {
+        if requested == checkpoint {
+            std::process::exit(86);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PurgeRewriteCheckpoint {
     BeforeAuditCommit,
@@ -657,6 +666,8 @@ impl PurgeRewriteManager {
         if checkpoint(PurgeRewriteCheckpoint::BeforeAuditCommit) {
             return Err(PurgeRewriteError::InjectedBeforeAuditCommit);
         }
+        #[cfg(test)]
+        crash_process_for_test("before_audit_commit");
 
         let receipt = wal
             .commit_audited_manifest_snapshot(
@@ -702,6 +713,8 @@ impl PurgeRewriteManager {
         if checkpoint(PurgeRewriteCheckpoint::BeforePublish) {
             return Err(PurgeRewriteError::InjectedBeforePublish);
         }
+        #[cfg(test)]
+        crash_process_for_test("before_publish");
 
         if let Err(source) = crate::backup::publish_restore_directory(&stage, &target) {
             if source.kind() == io::ErrorKind::AlreadyExists {
@@ -722,6 +735,8 @@ impl PurgeRewriteManager {
                 source: Some(source),
             });
         }
+        #[cfg(test)]
+        crash_process_for_test("after_publish");
         if checkpoint(PurgeRewriteCheckpoint::AfterPublish) {
             return Err(PurgeRewriteError::PublishedOutcomeUnknown {
                 target,
@@ -1269,6 +1284,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use worlddb_core::{
@@ -1287,7 +1303,10 @@ mod tests {
         SecurityPolicyHistoryStore, StorageVerifier, WalPrepareLog,
     };
 
-    use super::{PurgeRewriteCheckpoint, PurgeRewriteError, PurgeRewriteManager};
+    use super::{
+        LogicalExport, PurgeRewriteCheckpoint, PurgeRewriteError, PurgeRewriteManager,
+        REPORT_CONTEXT, REPORT_FILE, REPORT_MAGIC,
+    };
 
     static NEXT_AREA: AtomicU64 = AtomicU64::new(0);
 
@@ -1440,6 +1459,23 @@ mod tests {
             .map_err(|error| error.to_string())?;
         drop(lock);
 
+        fixture_for_source(area, source, permissions)
+    }
+
+    fn fixture_from_existing(area_path: PathBuf) -> Result<Fixture, String> {
+        let area = TestArea(area_path);
+        let source =
+            DatabaseLayout::open(area.0.join("source")).map_err(|error| error.to_string())?;
+        fixture_for_source(area, source, permissions()?)
+    }
+
+    fn fixture_for_source(
+        area: TestArea,
+        source: DatabaseLayout,
+        permissions: SecurityPolicyHistory,
+    ) -> Result<Fixture, String> {
+        let space = id::<HistorySpaceId>(4)?;
+        let entity = id::<EntityId>(6)?;
         let principal = id::<PrincipalId>(1)?;
         let policy_view = permissions
             .select(AuthorizationMode::Now, principal, Revision::GENESIS)
@@ -1490,6 +1526,207 @@ mod tests {
             plan,
             permissions,
         })
+    }
+
+    #[test]
+    fn process_crashes_reopen_source_and_publish_only_verified_target() -> Result<(), String> {
+        const AREA_ENV: &str = "WORLDDB_M7_16G_PURGE_CRASH_AREA";
+        const CRASH_ENV: &str = "WORLDDB_M7_16G_PURGE_CRASH_AT";
+        const TEST_NAME: &str =
+            "purge_rewrite::tests::process_crashes_reopen_source_and_publish_only_verified_target";
+
+        if let Some(area_path) = env::var_os(AREA_ENV) {
+            let fixture = fixture_from_existing(PathBuf::from(area_path))?;
+            let request = fixture.request()?;
+            PurgeRewriteManager::new()
+                .rewrite(request)
+                .map_err(|error| format!("rewrite returned before the crash hook: {error}"))?;
+            return Err(String::from(
+                "rewrite completed without triggering the crash hook",
+            ));
+        }
+
+        for checkpoint in ["before_audit_commit", "before_publish", "after_publish"] {
+            let fixture = fixture()?;
+            let expected_source_artifact = fixture.source_artifact.clone();
+            let source_database_id = fixture
+                .source
+                .database_id()
+                .ok_or_else(|| String::from("source DatabaseId is missing"))?;
+            let source_revision = fixture.plan.source_snapshot_revision();
+            let child = Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(AREA_ENV, &fixture._area.0)
+                .env(CRASH_ENV, checkpoint)
+                .status()
+                .map_err(|error| format!("start crash child for {checkpoint}: {error}"))?;
+            if child.code() != Some(86) {
+                return Err(format!(
+                    "crash child at {checkpoint} exited with {:?}, expected 86",
+                    child.code()
+                ));
+            }
+
+            let reopened_source =
+                DatabaseLayout::open(fixture.source.root()).map_err(|error| error.to_string())?;
+            if reopened_source.database_id() != Some(source_database_id) {
+                return Err(format!("source DatabaseId changed after {checkpoint}"));
+            }
+            let source_lock = reopened_source
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let source_verify = StorageVerifier::new(reopened_source.clone())
+                .verify(&source_lock)
+                .map_err(|error| error.to_string())?;
+            if !source_verify.is_clean() {
+                return Err(format!("source is not clean after {checkpoint}"));
+            }
+            let source_head = WalPrepareLog::new(&reopened_source)
+                .commit_head(&source_lock)
+                .map_err(|error| error.to_string())?;
+            if source_head.revision() != source_revision {
+                return Err(format!("source revision changed after {checkpoint}"));
+            }
+            drop(source_lock);
+
+            let source_export = LogicalExport::decode(&expected_source_artifact)
+                .map_err(|error| error.to_string())?;
+            let scope = LogicalExportScope::new(
+                source_export.manifest().from_revision(),
+                source_export.manifest().through_revision(),
+                source_export.manifest().selected_history_spaces().to_vec(),
+                source_export.manifest().selected_record_kinds().to_vec(),
+            )
+            .map_err(|error| error.to_string())?;
+            let policy = fixture
+                .permissions
+                .select(
+                    AuthorizationMode::Now,
+                    id::<PrincipalId>(1)?,
+                    Revision::GENESIS,
+                )
+                .map_err(|error| error.to_string())?;
+            let source_after = LogicalExportManager::new(reopened_source)
+                .export(scope, policy)
+                .and_then(|export| export.encode())
+                .map_err(|error| error.to_string())?;
+            if source_after != expected_source_artifact {
+                return Err(format!("source artifact changed after {checkpoint}"));
+            }
+
+            let should_be_published = checkpoint == "after_publish";
+            if fixture.destination.exists() != should_be_published {
+                return Err(format!(
+                    "destination visibility after {checkpoint} did not match publication state"
+                ));
+            }
+            if !should_be_published {
+                continue;
+            }
+
+            let published =
+                DatabaseLayout::open(&fixture.destination).map_err(|error| error.to_string())?;
+            let destination_database_id = published
+                .database_id()
+                .ok_or_else(|| String::from("published DatabaseId is missing"))?;
+            if destination_database_id == source_database_id {
+                return Err(String::from(
+                    "published target reused the source DatabaseId",
+                ));
+            }
+            let destination_lock = published
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let verification = StorageVerifier::new(published.clone())
+                .verify(&destination_lock)
+                .map_err(|error| error.to_string())?;
+            if !verification.is_clean() {
+                return Err(String::from("published target is not clean after reopen"));
+            }
+            let audits = WalPrepareLog::new(&published)
+                .committed_required_audit_records(&destination_lock)
+                .map_err(|error| error.to_string())?;
+            let publication_audits = audits
+                .iter()
+                .filter(|entry| entry.record().action() == AuditAction::PurgePublication)
+                .collect::<Vec<_>>();
+            if publication_audits.len() != 1 {
+                return Err(format!(
+                    "expected one PurgePublication audit after reopen, found {}",
+                    publication_audits.len()
+                ));
+            }
+            drop(destination_lock);
+
+            let report = fs::read(fixture.destination.join(REPORT_FILE))
+                .map_err(|error| format!("read published PurgeReport: {error}"))?;
+            let minimum_report_len = REPORT_MAGIC.len() + 8 + 160 + 1 + 32;
+            if report.len() < minimum_report_len || !report.starts_with(REPORT_MAGIC) {
+                return Err(String::from(
+                    "published PurgeReport is missing or truncated",
+                ));
+            }
+            let payload_length_bytes = report
+                .get(REPORT_MAGIC.len()..REPORT_MAGIC.len() + 8)
+                .ok_or_else(|| String::from("PurgeReport payload length is truncated"))?;
+            let payload_len = usize::try_from(u64::from_le_bytes(
+                payload_length_bytes
+                    .try_into()
+                    .map_err(|_| String::from("PurgeReport payload length is malformed"))?,
+            ))
+            .map_err(|error| error.to_string())?;
+            let digest_offset = report
+                .len()
+                .checked_sub(32)
+                .ok_or_else(|| String::from("PurgeReport digest is truncated"))?;
+            if digest_offset != REPORT_MAGIC.len() + 8 + payload_len {
+                return Err(String::from(
+                    "PurgeReport payload length does not match file",
+                ));
+            }
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(REPORT_CONTEXT);
+            let report_body = report
+                .get(..digest_offset)
+                .ok_or_else(|| String::from("PurgeReport body is truncated"))?;
+            let report_digest = report
+                .get(digest_offset..)
+                .ok_or_else(|| String::from("PurgeReport digest is truncated"))?;
+            hasher.update(report_body);
+            if hasher.finalize().as_bytes().as_slice() != report_digest {
+                return Err(String::from("published PurgeReport digest is invalid"));
+            }
+            let claim_index = digest_offset - 1;
+            if report.get(claim_index).copied() != Some(0) {
+                return Err(String::from("PurgeReport claims secure erasure"));
+            }
+            if report.get(16..32) != Some(source_database_id.to_bytes().as_slice())
+                || report.get(32..48) != Some(destination_database_id.to_bytes().as_slice())
+            {
+                return Err(String::from("PurgeReport database identities do not match"));
+            }
+            let operation_id_bytes = report
+                .get(128..144)
+                .ok_or_else(|| String::from("PurgeReport operation id is truncated"))?;
+            let audit_record_id_bytes = report
+                .get(144..160)
+                .ok_or_else(|| String::from("PurgeReport audit id is truncated"))?;
+            let audit = publication_audits
+                .first()
+                .ok_or_else(|| String::from("PurgePublication audit disappeared"))?;
+            if audit.operation_id().to_bytes().as_slice() != operation_id_bytes
+                || audit.record().record_id().to_bytes().as_slice() != audit_record_id_bytes
+                || audit.revision()
+                    != source_revision
+                        .next_commit()
+                        .map_err(|error| error.to_string())?
+            {
+                return Err(String::from(
+                    "PurgeReport and PurgePublication audit disagree",
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[test]
