@@ -215,6 +215,21 @@ impl SchemaHistoryReferenceModel {
         self.latest_published
     }
 
+    /// Advances the shared revision when a committed batch contains no schema changes.
+    ///
+    /// This keeps `Current` schema snapshots aligned with the database head while
+    /// preserving the last effective definitions and all earlier historical views.
+    pub fn advance_to(&mut self, revision: Revision) -> Result<(), SchemaHistoryError> {
+        if revision <= self.latest_published {
+            return Err(SchemaHistoryError::RevisionNotIncreasing {
+                previous: self.latest_published,
+                requested: revision,
+            });
+        }
+        self.latest_published = revision;
+        Ok(())
+    }
+
     /// Publishes one immutable schema batch at a later shared revision.
     pub fn publish(
         &mut self,
@@ -522,6 +537,49 @@ mod tests {
             explicit.ok().map(|value| value.definitions().len()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn current_schema_tracks_data_only_shared_revisions_without_losing_history() {
+        let (Ok(entity_type_id), Ok(data_revision)) = (
+            id(8),
+            Revision::FIRST_COMMIT
+                .next_commit()
+                .and_then(Revision::next_commit),
+        ) else {
+            return;
+        };
+        let Some(definition) = entity_type(entity_type_id, "person", Revision::FIRST_COMMIT) else {
+            return;
+        };
+        let mut model = SchemaHistoryReferenceModel::new();
+        assert!(
+            model
+                .publish(Revision::FIRST_COMMIT, vec![definition])
+                .is_ok()
+        );
+        assert!(model.advance_to(data_revision).is_ok());
+
+        let current = model.schema_at(SchemaMode::Current, Revision::GENESIS);
+        let historical = model.schema_at(SchemaMode::Historical, data_revision);
+        assert_eq!(
+            current
+                .as_ref()
+                .ok()
+                .map(|snapshot| snapshot.schema_revision().revision()),
+            Some(data_revision)
+        );
+        assert_eq!(
+            historical
+                .as_ref()
+                .ok()
+                .map(|snapshot| snapshot.definitions().len()),
+            Some(1)
+        );
+        assert!(matches!(
+            model.advance_to(data_revision),
+            Err(SchemaHistoryError::RevisionNotIncreasing { .. })
+        ));
     }
 
     #[test]

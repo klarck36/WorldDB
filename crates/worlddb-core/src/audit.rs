@@ -156,6 +156,8 @@ pub enum AuditAction {
     PurgePublication,
     /// An audit configuration change.
     AuditConfigurationChange,
+    /// Creation or lifecycle update of a project schema definition.
+    SchemaManagement,
 }
 
 /// Closed object classes that can be named without copying sensitive payloads.
@@ -177,6 +179,8 @@ pub enum AuditObjectClass {
     RawReadScope,
     /// Audit retention or access configuration.
     AuditConfiguration,
+    /// EntityType, Predicate, or EventKind schema definition.
+    SchemaDefinition,
 }
 
 /// Safe public result class for an audited operation.

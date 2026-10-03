@@ -254,6 +254,7 @@ fn encode_action(value: AuditAction) -> u8 {
         AuditAction::RestorePublication => 7,
         AuditAction::PurgePublication => 8,
         AuditAction::AuditConfigurationChange => 9,
+        AuditAction::SchemaManagement => 10,
     }
 }
 
@@ -268,6 +269,7 @@ fn decode_action(bytes: &[u8]) -> Result<AuditAction, AuditCodecError> {
         [7] => Ok(AuditAction::RestorePublication),
         [8] => Ok(AuditAction::PurgePublication),
         [9] => Ok(AuditAction::AuditConfigurationChange),
+        [10] => Ok(AuditAction::SchemaManagement),
         _ => Err(invalid(AuditRecordKind::AuditRecord, 5)),
     }
 }
@@ -282,6 +284,7 @@ fn encode_object_class(value: AuditObjectClass) -> u8 {
         AuditObjectClass::Export => 6,
         AuditObjectClass::RawReadScope => 7,
         AuditObjectClass::AuditConfiguration => 8,
+        AuditObjectClass::SchemaDefinition => 9,
     }
 }
 
@@ -295,6 +298,7 @@ fn decode_object_class(bytes: &[u8]) -> Result<AuditObjectClass, AuditCodecError
         [6] => Ok(AuditObjectClass::Export),
         [7] => Ok(AuditObjectClass::RawReadScope),
         [8] => Ok(AuditObjectClass::AuditConfiguration),
+        [9] => Ok(AuditObjectClass::SchemaDefinition),
         _ => Err(invalid(AuditRecordKind::AuditRecord, 6)),
     }
 }
@@ -690,12 +694,13 @@ mod tests {
             (AuditAction::RestorePublication, 7),
             (AuditAction::PurgePublication, 8),
             (AuditAction::AuditConfigurationChange, 9),
+            (AuditAction::SchemaManagement, 10),
         ] {
             assert_eq!(encode_action(value), code);
             assert_eq!(decode_action(&[code]), Ok(value));
         }
         assert!(decode_action(&[0]).is_err());
-        assert!(decode_action(&[10]).is_err());
+        assert!(decode_action(&[11]).is_err());
 
         for (value, code) in [
             (AuditObjectClass::Database, 1),
@@ -706,12 +711,13 @@ mod tests {
             (AuditObjectClass::Export, 6),
             (AuditObjectClass::RawReadScope, 7),
             (AuditObjectClass::AuditConfiguration, 8),
+            (AuditObjectClass::SchemaDefinition, 9),
         ] {
             assert_eq!(encode_object_class(value), code);
             assert_eq!(decode_object_class(&[code]), Ok(value));
         }
         assert!(decode_object_class(&[0]).is_err());
-        assert!(decode_object_class(&[9]).is_err());
+        assert!(decode_object_class(&[10]).is_err());
 
         for (value, code) in [
             (AuditOutcome::Succeeded, 1),

@@ -30,6 +30,18 @@
         border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
         border-radius: 12px;
       }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+      .definition { border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); padding: 14px 0; }
+      .definition:first-child { border-top: 0; }
+      fieldset { border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; margin: 14px 0; padding: 14px; }
+      legend { font-weight: 650; padding: 0 6px; }
+      select, textarea { box-sizing: border-box; width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid color-mix(in srgb, CanvasText 25%, transparent); border-radius: 8px; font: inherit; background: Canvas; color: CanvasText; }
+      .inline { display: flex; align-items: center; gap: 8px; }
+      .inline input[type="checkbox"] { width: auto; min-height: 0; }
+      .inline label { margin: 0; }
+      .compact { margin: 6px 0; }
+      .schema-note { border-left: 3px solid color-mix(in srgb, Highlight 65%, transparent); padding-left: 12px; }
+      #schema-status { min-height: 1.5em; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
       label { display: block; font-weight: 600; margin-bottom: 7px; }
       input, button {
@@ -66,6 +78,148 @@
           <button id="close-project" type="button" disabled>Projekt schließen</button>
         </div>
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
+      <section id="schema-panel" class="card" aria-labelledby="schema-heading" hidden>
+        <h2 id="schema-heading">Schema-Verwaltung</h2>
+        <p class="muted">EntityTypes, Prädikate und Ereignistypen bilden die Regeln für Einträge. Jede Änderung erhält eine gemeinsame Revision; ältere Stände bleiben abrufbar.</p>
+        <div class="grid">
+          <div>
+            <label for="schema-view-mode">Ansicht</label>
+            <select id="schema-view-mode">
+              <option value="current">Aktueller Stand</option>
+              <option value="historical">Stand zu einer Datenrevision</option>
+              <option value="explicit">Genau diese Schematrevision</option>
+            </select>
+          </div>
+          <div id="schema-view-revision-wrap" hidden>
+            <label id="schema-view-revision-label" for="schema-view-revision">Revision</label>
+            <input id="schema-view-revision" type="number" min="0" step="1" value="1" />
+          </div>
+        </div>
+        <div class="actions"><button id="schema-refresh" type="button">Schema anzeigen</button></div>
+        <p id="schema-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="schema-definitions" aria-live="polite"></div>
+        <fieldset id="schema-editor">
+          <legend>Vorgemerkte Zustandsänderungen</legend>
+          <p class="muted">Mehrere Änderungen werden gemeinsam geprüft und in einer Revision veröffentlicht. Das ist nötig, wenn ein EntityType und seine abhängigen Definitionen zusammen stillgelegt werden.</p>
+          <div id="schema-lifecycle-pending" class="muted"></div>
+          <div class="actions"><button id="schema-lifecycle-publish" type="button" disabled>Änderungen veröffentlichen</button></div>
+        </fieldset>
+        <fieldset>
+          <legend>Schema-Definition anlegen</legend>
+          <p class="muted">Neue Definitionen starten im Zustand Aktiv. Die Anwendung vergibt die stabilen IDs.</p>
+          <div>
+            <label for="schema-family">Art</label>
+            <select id="schema-family">
+              <option value="entity_type">EntityType</option>
+              <option value="predicate">Prädikat</option>
+              <option value="event_kind">Ereignistyp</option>
+            </select>
+          </div>
+          <div>
+            <label for="schema-symbol">Symbol</label>
+            <input id="schema-symbol" autocomplete="off" placeholder="z. B. character_name" />
+          </div>
+          <div id="entity-type-fields">
+            <label for="schema-description">Beschreibung</label>
+            <input id="schema-description" autocomplete="off" />
+          </div>
+          <div id="predicate-fields" hidden>
+            <div class="grid">
+              <div>
+                <label for="schema-subject-type">Zulässiger EntityType als Subjekt</label>
+                <select id="schema-subject-type"></select>
+              </div>
+              <div>
+                <label for="schema-value-kind">Wertart</label>
+                <select id="schema-value-kind">
+                  <option value="bool">Boolesch</option><option value="int">Ganze Zahl</option><option value="uint">Positive Zahl</option>
+                  <option value="decimal">Dezimalzahl</option><option value="string">Text</option><option value="symbol">Symbol</option>
+                  <option value="entity">Entity-Verweis</option><option value="time">Zeitpunkt</option><option value="duration">Zeitdauer</option><option value="bytes">Binärdaten</option>
+                </select>
+              </div>
+              <div id="schema-object-type-wrap" hidden>
+                <label for="schema-object-type">Ziel-EntityType</label>
+                <select id="schema-object-type"></select>
+              </div>
+              <div>
+                <label for="schema-cardinality">Wertanzahl</label>
+                <select id="schema-cardinality"><option value="single">Einzelner Wert</option><option value="multi">Mehrere Werte</option></select>
+              </div>
+              <div>
+                <label for="schema-resolution">Auflösung gleichrangiger Werte</label>
+                <select id="schema-resolution"><option value="single_value_replace">Einzelwert ersetzen</option><option value="multi_value_overlay">Mehrere Werte überlagern</option><option value="multi_value_replace">Wertemenge ersetzen</option></select>
+              </div>
+            </div>
+            <fieldset>
+              <legend>Wertbeschränkung (optional)</legend>
+              <label for="schema-constraint-kind">Beschränkungsart</label>
+              <select id="schema-constraint-kind"><option value="none">Keine</option></select>
+              <div id="schema-constraint-fields" class="grid"></div>
+            </fieldset>
+            <fieldset id="schema-decimal-metadata">
+              <legend>Dezimaldarstellung (optional)</legend>
+              <div class="grid">
+                <div><label for="schema-display-precision">Anzeigestellen</label><input id="schema-display-precision" type="number" min="0" /></div>
+                <div><label for="schema-measurement-precision">Messgenauigkeit</label><input id="schema-measurement-precision" type="number" min="0" /></div>
+                <div><label for="schema-currency-scale">Währungsstellen</label><input id="schema-currency-scale" type="number" min="0" /></div>
+              </div>
+            </fieldset>
+          </div>
+          <div id="event-kind-fields" hidden>
+            <div class="grid">
+              <div>
+                <label for="event-time-form">Zulässige Ereigniszeit</label>
+                <select id="event-time-form"><option value="instant_only">Nur Zeitpunkt</option><option value="span_only">Zeitspanne</option><option value="instant_or_span">Zeitpunkt oder abgeschlossene Spanne</option><option value="open_span_allowed">Auch offene Zeitspanne</option></select>
+              </div>
+              <div class="inline" style="align-self:end; min-height: 40px"><input id="event-max-span-enabled" type="checkbox" /><label for="event-max-span-enabled">Maximale Kalenderdauer setzen</label></div>
+            </div>
+            <div id="event-max-span" class="grid" hidden>
+              <div><label for="event-max-years">Jahre</label><input id="event-max-years" type="number" min="0" value="0" /></div>
+              <div><label for="event-max-months">Monate (0–11)</label><input id="event-max-months" type="number" min="0" max="11" value="0" /></div>
+              <div><label for="event-max-days">Tage</label><input id="event-max-days" type="number" min="0" value="0" /></div>
+            </div>
+            <fieldset>
+              <legend>Ereignisrollen</legend>
+              <p class="muted">Rollen legen fest, welche EntityTypes am Ereignis teilnehmen dürfen und in welcher Anzahl.</p>
+              <div class="grid">
+                <div><label for="event-role-symbol">Rollenname</label><input id="event-role-symbol" autocomplete="off" /></div>
+                <div><label for="event-role-type">EntityType</label><select id="event-role-type"></select></div>
+                <div><label for="event-role-min">Mindestens</label><input id="event-role-min" type="number" min="0" value="0" /></div>
+                <div><label for="event-role-max">Höchstens</label><input id="event-role-max" type="number" min="0" placeholder="Unbegrenzt" /></div>
+              </div>
+              <div class="actions"><button id="add-event-role" type="button">Rolle hinzufügen</button></div>
+              <div id="event-role-list" class="muted"></div>
+            </fieldset>
+            <fieldset>
+              <legend>Ereignisattribute</legend>
+              <div class="grid">
+                <div><label for="event-attribute-symbol">Attributname</label><input id="event-attribute-symbol" autocomplete="off" /></div>
+                <div><label for="event-attribute-kind">Wertart</label><select id="event-attribute-kind"><option value="bool">Boolesch</option><option value="int">Ganze Zahl</option><option value="uint">Positive Zahl</option><option value="decimal">Dezimalzahl</option><option value="string">Text</option><option value="symbol">Symbol</option><option value="entity">Entity-Verweis</option><option value="time">Zeitpunkt</option><option value="duration">Zeitdauer</option><option value="bytes">Binärdaten</option></select></div>
+                <div id="event-attribute-type-wrap" hidden><label for="event-attribute-type">Ziel-EntityType</label><select id="event-attribute-type"></select></div>
+              </div>
+              <div class="inline compact"><input id="event-attribute-required" type="checkbox" /><label for="event-attribute-required">Dieses Attribut ist verpflichtend</label></div>
+              <fieldset>
+                <legend>Wertbeschränkung (optional)</legend>
+                <label for="event-attribute-constraint-kind">Beschränkungsart</label>
+                <select id="event-attribute-constraint-kind"><option value="none">Keine</option></select>
+                <div id="event-attribute-constraint-fields" class="grid"></div>
+              </fieldset>
+              <fieldset id="event-attribute-decimal-metadata">
+                <legend>Dezimaldarstellung (optional)</legend>
+                <div class="grid">
+                  <div><label for="event-attribute-display-precision">Anzeigestellen</label><input id="event-attribute-display-precision" type="number" min="0" /></div>
+                  <div><label for="event-attribute-measurement-precision">Messgenauigkeit</label><input id="event-attribute-measurement-precision" type="number" min="0" /></div>
+                  <div><label for="event-attribute-currency-scale">Währungsstellen</label><input id="event-attribute-currency-scale" type="number" min="0" /></div>
+                </div>
+              </fieldset>
+              <div class="actions"><button id="add-event-attribute" type="button">Attribut hinzufügen</button></div>
+              <div id="event-attribute-list" class="muted"></div>
+            </fieldset>
+          </div>
+          <div class="actions"><button id="schema-create" type="button">Definition anlegen</button></div>
+        </fieldset>
+        <p class="schema-note muted">Deprecated verlangt bei neuen Dateneinträgen Opt-in, die passende Berechtigung und eine typisierte Warnung. Retired blockiert neue Dateneinträge; historische Ansichten bleiben verfügbar. Änderungen an Struktur und Constraints laufen als Migration.</p>
       </section>
     </main>
     <script src="main.js"></script>

@@ -9,6 +9,14 @@ use worlddb_storage_file::{DatabaseLayout, WriterLock};
 
 mod project;
 pub use project::{ProjectAccess, ProjectError, create_project, open_project};
+mod schema;
+pub use schema::{
+    CalendarPeriodDraft, CardinalityDraft, ConstraintDraft, DecimalMetadataDraft,
+    EntityConstraintDraft, EventAttributeDraft, EventRoleDraft, EventTimeDraft, EventTimeFormDraft,
+    ResolutionPolicyDraft, SchemaCommand, SchemaDefinitionDraft, SchemaDefinitionView,
+    SchemaFamily, SchemaLifecycle, SchemaLifecycleUpdateDraft, SchemaModeInput,
+    SchemaPublicationView, SchemaResponse, SchemaSnapshotView, TimeBoundDraft, ValueKindDraft,
+};
 
 pub const MAX_STREAM_BYTES: u64 = 100 * 1024 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: u32 = 1024 * 1024;
@@ -28,6 +36,7 @@ pub struct EngineHost {
     _writer_lock: WriterLock,
     principal_id: Option<PrincipalId>,
     health: Mutex<()>,
+    schema_management: Mutex<()>,
     streams: Mutex<HashMap<[u8; 16], ActiveStream>>,
 }
 
@@ -62,6 +71,9 @@ pub enum Request {
         transfer_id: String,
         cancelled: bool,
     },
+    Schema {
+        command: SchemaCommand,
+    },
     Panic,
     Shutdown,
 }
@@ -90,6 +102,9 @@ pub enum Response {
         transfer_id: String,
         sequence: u64,
         bytes_received: u64,
+    },
+    Schema {
+        result: SchemaResponse,
     },
     Shutdown,
     Error {
@@ -185,6 +200,7 @@ pub struct StreamReport {
 pub enum EngineError {
     Storage(String),
     Stream(&'static str),
+    Schema(String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -192,6 +208,7 @@ impl std::fmt::Display for EngineError {
         match self {
             Self::Storage(message) => formatter.write_str(message),
             Self::Stream(code) => write!(formatter, "stream protocol error: {code}"),
+            Self::Schema(message) => formatter.write_str(message),
         }
     }
 }
@@ -214,6 +231,7 @@ impl EngineHost {
             _writer_lock: writer_lock,
             principal_id: None,
             health: Mutex::new(()),
+            schema_management: Mutex::new(()),
             streams: Mutex::new(HashMap::new()),
         })
     }
@@ -238,6 +256,7 @@ impl EngineHost {
                 _writer_lock: writer_lock,
                 principal_id: Some(principal_id),
                 health: Mutex::new(()),
+                schema_management: Mutex::new(()),
                 streams: Mutex::new(HashMap::new()),
             },
             access,

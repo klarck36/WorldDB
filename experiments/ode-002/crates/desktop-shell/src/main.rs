@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -14,7 +15,7 @@ use worlddb_ode_engine::EngineHost;
 use worlddb_ode_engine::Request;
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
-use worlddb_ode_engine::{Response, StreamPlan};
+use worlddb_ode_engine::{Response, SchemaCommand, SchemaResponse, StreamPlan};
 mod host_session;
 mod transfer;
 use host_session::{
@@ -162,7 +163,8 @@ fn run() -> Result<(), String> {
             project_status,
             create_project,
             open_project,
-            close_project
+            close_project,
+            manage_schema
         ])
         .run(tauri::generate_context!())
         .map_err(|error| error.to_string())
@@ -238,6 +240,20 @@ struct OpenProjectRequestV1 {
 #[serde(deny_unknown_fields)]
 struct CloseProjectRequestV1 {
     protocol_version: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchemaRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: SchemaCommand,
+}
+
+#[derive(Serialize)]
+struct SchemaResponseV1 {
+    protocol_version: u16,
+    result: SchemaResponse,
 }
 
 #[derive(Serialize)]
@@ -410,6 +426,39 @@ fn close_project(
         .map_err(map_project_error)
 }
 
+#[tauri::command]
+fn manage_schema(
+    window: tauri::WebviewWindow,
+    request: SchemaRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<SchemaResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let operation = schema_smoke_operation(&request.command);
+    match backend.schema(request.command) {
+        Ok(result) => {
+            record_schema_smoke(window.label(), operation, true, Some(&result))?;
+            Ok(SchemaResponseV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                result,
+            })
+        }
+        Err(_) => {
+            record_schema_smoke(window.label(), operation, false, None)?;
+            Err(IpcErrorV1::new("schema_rejected"))
+        }
+    }
+}
+
 async fn pick_project_parent(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -509,6 +558,92 @@ fn record_project_smoke(
         serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?,
     )
     .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+fn schema_smoke_operation(command: &SchemaCommand) -> &'static str {
+    match command {
+        SchemaCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Current,
+        } => "snapshot_current",
+        SchemaCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Historical { .. },
+        } => "snapshot_historical",
+        SchemaCommand::Snapshot {
+            mode: worlddb_ode_engine::SchemaModeInput::Explicit { .. },
+        } => "snapshot_explicit",
+        SchemaCommand::Create { .. } => "create",
+        SchemaCommand::SetLifecycle { .. } => "set_lifecycle",
+        SchemaCommand::SetLifecycleBatch { .. } => "set_lifecycle_batch",
+    }
+}
+
+fn record_schema_smoke(
+    window_label: &str,
+    operation: &str,
+    succeeded: bool,
+    result: Option<&SchemaResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_SCHEMA_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-schema-{window_label}.jsonl"));
+    let (revision, definition_count, definitions) =
+        result.map_or((None, None, serde_json::Value::Null), |response| {
+            let (revision, count, values) = match response {
+                SchemaResponse::Snapshot(snapshot) => (
+                    snapshot.revision,
+                    snapshot.definitions.len(),
+                    &snapshot.definitions,
+                ),
+                SchemaResponse::Published(publication) => (
+                    publication.revision,
+                    publication.definition_count,
+                    &publication.definitions,
+                ),
+            };
+            let definitions = values
+                .iter()
+                .map(|definition| {
+                    serde_json::json!({
+                        "family": definition.family,
+                        "identity": definition.identity,
+                        "symbol": definition.symbol,
+                        "lifecycle": definition.lifecycle,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (
+                Some(revision),
+                Some(count),
+                serde_json::Value::Array(definitions),
+            )
+        });
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "succeeded": succeeded,
+        "revision": revision,
+        "definition_count": definition_count,
+        "definitions": definitions,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
 }
 
 fn record_ipc_probe(window_label: &str) -> Result<(), IpcErrorV1> {
@@ -942,6 +1077,10 @@ impl Backend {
         Ok(())
     }
 
+    fn schema(&self, command: SchemaCommand) -> Result<SchemaResponse, String> {
+        self.with_engine(|engine| engine.schema(command))
+    }
+
     fn project_status_locked(
         &self,
         state: &mut BackendState,
@@ -1110,6 +1249,20 @@ enum EngineBackend {
 }
 
 impl EngineBackend {
+    fn schema(&self, command: SchemaCommand) -> Result<SchemaResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .schema(command)
+                .map_err(|_| "engine rejected schema operation".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .schema(command),
+        }
+    }
+
     fn health(&self) -> Result<Response, String> {
         match self {
             #[cfg(feature = "in-process")]
@@ -1383,6 +1536,14 @@ impl Sidecar {
 
     fn health(&mut self) -> Result<Response, String> {
         self.request(Request::Health)
+    }
+
+    fn schema(&mut self, command: SchemaCommand) -> Result<SchemaResponse, String> {
+        match self.request(Request::Schema { command })? {
+            Response::Schema { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected schema operation".to_owned()),
+            _ => Err("sidecar returned an unexpected schema response".to_owned()),
+        }
     }
 
     fn request(&mut self, request: Request) -> Result<Response, String> {

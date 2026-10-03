@@ -26,6 +26,8 @@ $primaryPath = Join-Path $testRoot 'ipc-primary.json'
 $secondaryPath = Join-Path $testRoot 'ipc-secondary.json'
 $primaryProjectPath = Join-Path $testRoot 'ipc-project-primary.json'
 $secondaryProjectPath = Join-Path $testRoot 'ipc-project-secondary.json'
+$primarySchemaPath = Join-Path $testRoot 'ipc-schema-primary.jsonl'
+$secondarySchemaPath = Join-Path $testRoot 'ipc-schema-secondary.jsonl'
 $process = $null
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -38,15 +40,40 @@ function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
             throw "Desktop process exited before both window IPC calls completed (exit $($Process.ExitCode)). $diagnostic"
         }
         if ([DateTime]::UtcNow -ge $deadline) {
-            throw 'Timed out waiting for the authenticated native-window IPC calls.'
+            $missing = @($Paths | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+            $stdoutPath = Join-Path $testRoot 'ipc.stdout.log'
+            $stderrPath = Join-Path $testRoot 'ipc.stderr.log'
+            $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+            $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+            throw "Timed out waiting for the authenticated native-window IPC calls. Missing: $($missing -join ', '). stdout: $stdout stderr: $stderr"
         }
         Start-Sleep -Milliseconds 100
     }
 }
 
+function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
+            $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $batchCount = @($primary | Where-Object { $_.operation -eq 'set_lifecycle_batch' }).Count
+            $currentReadCount = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
+            if ($batchCount -ge 2 -and $currentReadCount -ge 1) { return }
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $primaryEvents = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
+    $secondaryEvents = if (Test-Path -LiteralPath $SecondaryPath -PathType Leaf) { Get-Content -LiteralPath $SecondaryPath -Raw } else { '<missing>' }
+    throw "Timed out waiting for complete schema IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
+}
+
 try {
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_SCHEMA_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
     $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
@@ -61,12 +88,15 @@ try {
     $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
 
-    Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath)
+    Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
+    Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
     $primaryProject = Get-Content -LiteralPath $primaryProjectPath -Raw | ConvertFrom-Json
     $secondaryProject = Get-Content -LiteralPath $secondaryProjectPath -Raw | ConvertFrom-Json
+    $primarySchema = @(Get-Content -LiteralPath $primarySchemaPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $secondarySchema = @(Get-Content -LiteralPath $secondarySchemaPath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
@@ -74,12 +104,27 @@ try {
         }
     }
     foreach ($entry in @(@{ Value = $primaryProject; Label = 'primary' }, @{ Value = $secondaryProject; Label = 'secondary' })) {
-        if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or -not $entry.Value.project_open -or $entry.Value.revision -ne 1 -or $entry.Value.role -ne 'gm' -or [string]::IsNullOrWhiteSpace($entry.Value.snapshot_id) -or $null -eq $entry.Value.engine.engine_process_id) {
+        if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or -not $entry.Value.project_open -or $entry.Value.revision -lt 1 -or $entry.Value.role -ne 'gm' -or [string]::IsNullOrWhiteSpace($entry.Value.snapshot_id) -or $null -eq $entry.Value.engine.engine_process_id) {
             throw "The $($entry.Label) window did not complete the authenticated project open/create flow."
         }
     }
     if ($primaryProject.database_id -ne $secondaryProject.database_id) { throw 'Both windows did not resolve the same WorldDB project.' }
     if ($primaryProject.snapshot_id -eq $secondaryProject.snapshot_id) { throw 'The native windows received the same project snapshot identity.' }
+    if (@($primarySchema | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The primary window had a rejected schema IPC operation.' }
+    if (@($secondarySchema | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The secondary window had a rejected schema read.' }
+    $requiredSchemaOperations = @('snapshot_current', 'create', 'snapshot_historical', 'snapshot_explicit')
+    foreach ($operation in $requiredSchemaOperations) {
+        if (@($primarySchema | Where-Object { $_.operation -eq $operation }).Count -eq 0) {
+            throw "The primary window did not complete schema IPC operation '$operation'."
+        }
+    }
+    if (@($primarySchema | Where-Object { $_.operation -eq 'set_lifecycle_batch' }).Count -lt 2) {
+        $schemaOperations = $primarySchema | ConvertTo-Json -Compress -Depth 5
+        throw "The primary window did not complete both schema lifecycle transitions. Recorded: $schemaOperations"
+    }
+    if (@($secondarySchema | Where-Object { $_.operation -eq 'snapshot_current' }).Count -eq 0) {
+        throw 'The secondary window did not read the shared current schema.'
+    }
 
     $process.Refresh()
     $processIds = @([int]$process.Id)
@@ -103,6 +148,9 @@ try {
         primary_window_authenticated_health = 'PASS'
         secondary_window_authenticated_health = 'PASS'
         authenticated_project_bootstrap = 'PASS'
+        transactional_schema_create_and_lifecycle = 'PASS'
+        current_historical_and_explicit_schema_reads = 'PASS'
+        secondary_window_schema_read = 'PASS'
         shared_project_with_distinct_window_snapshots = 'PASS'
         versioned_ipc_protocol = 'PASS'
         invalid_session_rejected_in_both_windows = 'PASS'
@@ -114,7 +162,7 @@ try {
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {

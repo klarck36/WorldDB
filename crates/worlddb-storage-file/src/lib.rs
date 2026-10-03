@@ -23,6 +23,7 @@ mod recovery_manager;
 mod replay_payload;
 mod required_audit;
 mod salvage;
+mod schema_management;
 mod security_segment;
 mod segment;
 mod sharing_export;
@@ -101,6 +102,7 @@ pub use salvage::{
     SalvageError, SalvageInventorySource, SalvageManager, SalvageReport, SalvageSegmentOutcome,
     SalvageSegmentResult, SalvageSegmentSource, SalvageUnit,
 };
+pub use schema_management::{FileSchemaManager, SchemaManagementError, SchemaPublicationReceipt};
 pub use security_segment::{
     SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, SecurityPolicySegment,
     SecurityPolicySegmentReceipt, SecurityPolicyStorageError,
