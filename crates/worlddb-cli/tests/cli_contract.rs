@@ -14,14 +14,15 @@ use worlddb_core::{
 };
 #[cfg(windows)]
 use worlddb_core::{
-    JobBudget, MigrationCategory, MigrationId, MigrationPlan, MigrationPlanSpec, MigrationRunId,
-    MigrationStepId, MigrationStepTargetSchema, MigrationTargetSchema, MigrationTransformerVersion,
-    PredicateId, Record, SchemaDefinitionId, SchemaHistoryReferenceModel, SchemaIdentityTransition,
-    SchemaMode, SchemaRevision, SourceSchemaPrecondition, encode_record,
+    HistorySpaceDefinition, HistorySpaceId, JobBudget, MigrationCategory, MigrationId,
+    MigrationPlan, MigrationPlanSpec, MigrationRunId, MigrationStepId, MigrationStepTargetSchema,
+    MigrationTargetSchema, MigrationTransformerVersion, PredicateId, Record, SchemaDefinitionId,
+    SchemaHistoryReferenceModel, SchemaIdentityTransition, SchemaMode, SchemaRevision, Source,
+    SourceLocator, SourceMetadata, SourceSchemaPrecondition, Symbol, encode_record,
 };
 use worlddb_storage_file::{
-    DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, RawReadAuditWal,
-    WalPrepareLog, WriterLockError,
+    DatabaseLayout, ExactBackupManager, HistorySegmentStore, ManifestSnapshot, ManifestStore,
+    RawReadAuditWal, WalPrepareLog, WriterLockError,
 };
 
 #[cfg(windows)]
@@ -32,8 +33,8 @@ use worlddb_core::{
 };
 #[cfg(windows)]
 use worlddb_storage_file::{
-    FileStoreGuardedMigrationRun, ManifestSegmentKind, ManifestSegmentReference, RecoveryManager,
-    SecurityPolicyHistoryStore, StorageVerifier,
+    FileStoreGuardedMigrationRun, LogicalExport, ManifestSegmentKind, ManifestSegmentReference,
+    RecoveryManager, SecurityPolicyHistoryStore, SharingExport, StorageVerifier,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -316,6 +317,92 @@ fn create_host_policy_project(
 }
 
 #[cfg(windows)]
+fn install_cli_export_history(root: &Path) -> Result<HistorySpaceId, String> {
+    let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+    let lock = layout
+        .try_writer_lock()
+        .map_err(|error| error.to_string())?;
+    let current = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("export fixture is missing CURRENT"))?;
+    let policy_segment_ids = current
+        .segments()
+        .iter()
+        .filter(|reference| reference.kind() == ManifestSegmentKind::SecurityPolicy)
+        .map(|reference| reference.id())
+        .collect::<Vec<_>>();
+    let policy_history = SecurityPolicyHistoryStore::new(layout.clone())
+        .load_history(current.revision(), &policy_segment_ids)
+        .map_err(|error| error.to_string())?;
+    let current_policy_version = policy_history
+        .policy()
+        .versions()
+        .last()
+        .cloned()
+        .ok_or_else(|| String::from("export fixture is missing a current policy version"))?;
+    let current_audit_retention = policy_history
+        .audit_retention_at(current.revision())
+        .map_err(|error| error.to_string())?;
+    let space = domain_id::<HistorySpaceId>(90)?;
+    let source_id = domain_id::<worlddb_core::SourceId>(91)?;
+    let revision = Revision::new(2).map_err(|error| error.to_string())?;
+    let records = [
+        Record::HistorySpaceDefinition(
+            HistorySpaceDefinition::new(space, None, Revision::GENESIS)
+                .map_err(|error| error.to_string())?,
+        ),
+        Record::Source(Source::new(
+            source_id,
+            Symbol::new("fixture").map_err(|error| error.to_string())?,
+            Some(SourceLocator::new("hidden-locator-value").map_err(|error| error.to_string())?),
+            None,
+            SourceMetadata::default(),
+            revision,
+        )),
+    ];
+    let receipt = HistorySegmentStore::new(layout.clone())
+        .write_segment(&lock, &records)
+        .map_err(|error| error.to_string())?;
+    let continued_policy = SecurityPolicyVersion::new(
+        revision,
+        current_policy_version.epoch(),
+        current_policy_version.snapshot().clone(),
+    );
+    let continued_policy_receipt = SecurityPolicyHistoryStore::new(layout.clone())
+        .write_version(&lock, &continued_policy, None, current_audit_retention)
+        .map_err(|error| error.to_string())?;
+    let mut references = current.segments().to_vec();
+    references.push(ManifestSegmentReference::new(
+        ManifestSegmentKind::History,
+        receipt.id(),
+        receipt.content_digest(),
+        revision,
+    ));
+    references.push(ManifestSegmentReference::new(
+        ManifestSegmentKind::SecurityPolicy,
+        continued_policy_receipt.id(),
+        continued_policy_receipt.content_digest(),
+        revision,
+    ));
+    ManifestSnapshot::new(revision, references.clone()).map_err(|error| error.to_string())?;
+    WalPrepareLog::new(&layout)
+        .commit_manifest_snapshot(&lock, operation_id(92)?, references, &[])
+        .map_err(|error| error.to_string())?;
+    RecoveryManager::new(layout.clone())
+        .recover(&lock)
+        .map_err(|error| error.to_string())?;
+    let report = StorageVerifier::new(layout)
+        .verify(&lock)
+        .map_err(|error| error.to_string())?;
+    if !report.is_clean() || report.safe_revision() != revision {
+        return Err("export fixture did not verify cleanly".to_owned());
+    }
+    drop(lock);
+    Ok(space)
+}
+
+#[cfg(windows)]
 fn breaking_migration_plan_frame() -> Result<(Vec<u8>, MigrationStepId), String> {
     let step_id = domain_id::<MigrationStepId>(41)?;
     let source_predicate = domain_id::<PredicateId>(42)?;
@@ -354,6 +441,166 @@ fn breaking_migration_plan_frame() -> Result<(Vec<u8>, MigrationStepId), String>
     .map_err(|error| error.to_string())?;
     let frame = encode_record(&Record::MigrationPlan(plan)).map_err(|error| error.to_string())?;
     Ok((frame, step_id))
+}
+
+#[cfg(windows)]
+#[test]
+fn cli_export_import_roundtrip_applies_scope_manifest_and_sharing_rights() -> Result<(), String> {
+    let area = TempArea::create()?;
+    let source = area.path("export-source");
+    let _principal = create_host_policy_project(
+        &source,
+        &[
+            Capability::DataExport,
+            Capability::ProjectRead,
+            Capability::HistorySpaceRead,
+        ],
+    )?;
+    let space = install_cli_export_history(&source)?;
+    let destination = area.path("import-destination");
+    let _destination_principal = create_host_policy_project(
+        &destination,
+        &[Capability::ProjectRead, Capability::DataImport],
+    )?;
+
+    let source_arg = source.to_string_lossy().into_owned();
+    let destination_arg = destination.to_string_lossy().into_owned();
+    let logical_path = area.path("logical-export.bin");
+    let logical_arg = logical_path.to_string_lossy().into_owned();
+    let space_arg = space.to_string();
+    let logical = run(&[
+        "--format=jsonl",
+        "v1",
+        "export",
+        "logical",
+        &source_arg,
+        "--output",
+        &logical_arg,
+        "--from",
+        "0",
+        "--through",
+        "2",
+        "--history-space",
+        &space_arg,
+        "--class",
+        "HistorySpaceDefinition",
+        "--class",
+        "Source",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(
+        logical.status.success(),
+        "logical export failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&logical.stdout),
+        String::from_utf8_lossy(&logical.stderr)
+    );
+    let logical_text = String::from_utf8_lossy(&logical.stdout);
+    assert!(logical_text.contains("\"type\":\"logical_export\""));
+    assert!(logical_text.contains("\"omission_manifest\":{\"complete\":true"));
+    assert!(logical_text.contains(&format!("\"history_spaces\":[\"{space_arg}\"]")));
+    assert!(logical_text.contains("\"record_classes\":[\"HistorySpaceDefinition\",\"Source\"]"));
+    assert!(!logical_text.contains(&source_arg));
+    assert!(!logical_text.contains(&logical_arg));
+    let logical_bytes = fs::read(&logical_path).map_err(|error| error.to_string())?;
+    let decoded_logical =
+        LogicalExport::decode(&logical_bytes).map_err(|error| error.to_string())?;
+    assert_eq!(decoded_logical.records().len(), 2);
+    assert_eq!(
+        decoded_logical.manifest().selected_history_spaces(),
+        &[space]
+    );
+    assert_eq!(decoded_logical.manifest().selected_record_kinds().len(), 2);
+    assert_eq!(
+        decoded_logical.manifest().omitted_storage_classes().len(),
+        5
+    );
+
+    let sharing_path = area.path("sharing-export.bin");
+    let sharing_arg = sharing_path.to_string_lossy().into_owned();
+    let sharing = run(&[
+        "--format=jsonl",
+        "v1",
+        "export",
+        "share",
+        &source_arg,
+        "--output",
+        &sharing_arg,
+        "--from",
+        "0",
+        "--through",
+        "2",
+        "--history-space",
+        &space_arg,
+        "--class",
+        "HistorySpaceDefinition",
+        "--class",
+        "Source",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(sharing.status.success());
+    let sharing_text = String::from_utf8_lossy(&sharing.stdout);
+    assert!(sharing_text.contains("\"type\":\"sharing_export\""));
+    assert!(sharing_text.contains("\"omission_counts_disclosed\":false"));
+    assert!(sharing_text.contains(&format!("\"history_spaces\":[\"{space_arg}\"]")));
+    assert!(sharing_text.contains("\"record_classes\":[\"HistorySpaceDefinition\",\"Source\"]"));
+    assert!(!sharing_text.contains(&source_arg));
+    assert!(!sharing_text.contains(&sharing_arg));
+    let sharing_bytes = fs::read(&sharing_path).map_err(|error| error.to_string())?;
+    assert!(
+        !sharing_bytes
+            .windows(b"hidden-locator-value".len())
+            .any(|window| window == b"hidden-locator-value")
+    );
+    let decoded_sharing =
+        SharingExport::decode(&sharing_bytes).map_err(|error| error.to_string())?;
+    assert!(decoded_sharing.records().is_empty());
+
+    let target_space = domain_id::<HistorySpaceId>(93)?.to_string();
+    let mapping = format!("history-space:{space}=history-space:{target_space}");
+    let plan_path = area.path("logical-import-plan.bin");
+    let plan_arg = plan_path.to_string_lossy().into_owned();
+    let plan = run(&[
+        "--format=jsonl",
+        "v1",
+        "import",
+        "plan",
+        &destination_arg,
+        "--input",
+        &logical_arg,
+        "--output",
+        &plan_arg,
+        "--map",
+        &mapping,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(plan.status.success());
+    let plan_text = String::from_utf8_lossy(&plan.stdout);
+    assert!(plan_text.contains("\"type\":\"import_plan\""));
+    assert!(plan_text.contains("\"mapping_count\":\"1\""));
+    assert!(!plan_text.contains(&destination_arg));
+    assert!(!plan_text.contains(&plan_arg));
+
+    let prepared = run(&[
+        "--format=jsonl",
+        "v1",
+        "import",
+        "prepare",
+        &destination_arg,
+        "--input",
+        &logical_arg,
+        "--plan-file",
+        &plan_arg,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(prepared.status.success());
+    let prepared_text = String::from_utf8_lossy(&prepared.stdout);
+    assert!(prepared_text.contains("\"type\":\"import_prepare\""));
+    assert!(prepared_text.contains("\"mapping_count\":\"1\""));
+    assert!(prepared_text.contains("\"writes_database\":false"));
+    assert!(prepared_text.contains("\"record_count\":\"2\""));
+    assert!(!prepared_text.contains(&destination_arg));
+    assert!(!prepared_text.contains(&plan_arg));
+    Ok(())
 }
 
 #[cfg(windows)]

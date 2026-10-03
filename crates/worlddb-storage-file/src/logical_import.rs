@@ -53,6 +53,16 @@ pub enum LogicalImportIdentity {
 }
 
 impl LogicalImportIdentity {
+    /// Returns every durable identity defined by one record.
+    ///
+    /// A record may define several identities (for example, an event-kind schema
+    /// definition owns its role and attribute identities). Callers that build a
+    /// destination inventory should deduplicate these values across revisions.
+    #[must_use]
+    pub fn defined_by_record(record: &Record) -> Vec<Self> {
+        record_defined_identities(record)
+    }
+
     pub(crate) const fn tag(self) -> u8 {
         match self {
             Self::HistorySpace(_) => 1,

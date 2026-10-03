@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,23 +14,28 @@ use worlddb_core::{
     AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
     AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, AuthorizationDecision,
     AuthorizationMode, BreakingMigrationAdminAction, Bytes, Capability, DatabaseId, DomainId,
+    EntityId, EntityTypeId, EventAttributeId, EventKindId, EventRoleId, HistorySpaceId, LayerId,
     MigrationAdminDecision, MigrationCategory, MigrationDryRun, MigrationId,
     MigrationItemResolution, MigrationPlan, MigrationRunId, MigrationRunJournalState,
-    MigrationStepId, MigrationStepInput, MigrationTransformer, OperationId, PolicyTarget,
-    PrincipalId, Record, Revision, RevisionBackend, SchemaDefinition, SchemaHistoryReferenceModel,
-    SchemaMode, SchemaRevision, SecurityEpoch, UpgradePlanId, UpgradeRunId,
-    ValidatedMigrationDecisions, decode_record,
+    MigrationStepId, MigrationStepInput, MigrationTransformer, OperationId, PerspectiveId,
+    PolicyTarget, PredicateId, PrincipalId, Record, RecordKind, Revision, RevisionBackend,
+    SchemaDefinition, SchemaHistoryReferenceModel, SchemaMode, SchemaRevision, SecurityEpoch,
+    TimelineId, UpgradePlanId, UpgradeRunId, ValidatedMigrationDecisions, decode_record,
+    decode_record_ref,
 };
 use worlddb_storage_file::{
     BackupAuthenticity, BackupError, BackupProfile, BackupVerification, DatabaseLayout,
     ExactBackupManager, FileStoreGuardedMigrationRun, FormatProbeError, HistorySegmentStore,
-    Manifest, ManifestSegmentKind, ManifestStore, MigrationRestorePointError, RecoveryDisposition,
-    RecoveryError, RecoveryManager, RestoreError, RestoreManager, SalvageError,
-    SalvageInventorySource, SalvageManager, SalvageSegmentOutcome, SecurityPolicyHistorySnapshot,
-    SecurityPolicyHistoryStore, StorageDamageClass, StorageFileError, StorageUpgradeBudget,
-    StorageUpgradeManager, StorageUpgradeRestoreTargets, StorageVerifier, StorageVerifyAction,
-    StorageVerifyError, StorageVerifyReport, WalPrepareLog, WriterLock, WriterLockError,
-    verify_audit_complete_backup, verify_exact_backup,
+    LogicalExport, LogicalExportError, LogicalExportManager, LogicalExportScope,
+    LogicalImportDestinationInventory, LogicalImportError, LogicalImportIdMapping,
+    LogicalImportIdentity, LogicalImportManager, LogicalImportPlan, Manifest, ManifestSegmentKind,
+    ManifestStore, MigrationRestorePointError, RecoveryDisposition, RecoveryError, RecoveryManager,
+    RestoreError, RestoreManager, SalvageError, SalvageInventorySource, SalvageManager,
+    SalvageSegmentOutcome, SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore,
+    SharingExportError, SharingExportManager, SharingExportScope, StorageDamageClass,
+    StorageFileError, StorageUpgradeBudget, StorageUpgradeManager, StorageUpgradeRestoreTargets,
+    StorageVerifier, StorageVerifyAction, StorageVerifyError, StorageVerifyReport, WalPrepareLog,
+    WriterLock, WriterLockError, verify_audit_complete_backup, verify_exact_backup,
 };
 
 use crate::adapter_protocol::{
@@ -49,7 +54,11 @@ const EXIT_CANCELLED: u8 = 9;
 const EXIT_BUDGET_EXCEEDED: u8 = 10;
 const EXIT_INTERNAL: u8 = 70;
 
-const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 migration               Plan, preview, run, or resume a schema migration\n  v1 storage upgrade          Upgrade the storage format with restore proof\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
+const LOGICAL_ARTIFACT_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const LOGICAL_IMPORT_PLAN_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const LOGICAL_IMPORT_MAX_INVENTORY_IDENTITIES: usize = 2_000_000;
+
+const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 migration               Plan, preview, run, or resume a schema migration\n  v1 export logical|share    Export a declared, authorized scope\n  v1 import plan|prepare     Create or validate an explicit remap plan\n  v1 storage upgrade          Upgrade the storage format with restore proof\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
 
 const HELP_ADAPTER_RUN: &str = "Usage: worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\n\nThe manifest binds the operation, deterministic seed, ID mapping, protocol capabilities, and process budgets. The adapter receives only framed stdin/stdout data; the output file is written only after a clean adapter exit.";
 const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <database-directory>\n\nRuns read-only storage verification under a shared lock. The report includes safe_revision, disposition, observed damage classes, and safe next actions.";
@@ -60,6 +69,7 @@ const HELP_BACKUP: &str = "Usage: worlddb-cli [--format human|jsonl] v1 backup c
 const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore clone <backup-directory> --authorize-with <current-project-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nRestore checks the current host-bound BackupRestore capability in the authorization project. AuditComplete also requires AuditRead and AuditExport. The authorization project must be the database named by the backup. Same-identity disaster recovery is not supported by the storage contract.";
 const HELP_MIGRATION: &str = "Usage: worlddb-cli [--format human|jsonl] v1 migration plan|dry-run|run|resume <database-directory> --plan-file <canonical-MigrationPlan-record> [--run-id <uuid>] [--step <step-uuid> [--operation-id <uuid>] [--record <canonical-record-file>...]] [--omit <record-index>|--replace <record-index> <canonical-record-file>]... [--backup <exact-backup-directory> --restore <new-clone-directory> --confirm-breaking]\n\nPlan and dry-run are read-only. Every supplied record file contains exactly one canonical WorldDB record frame. Step groups must match the plan order. Run and resume require current MigrationExecute permission and stable run/step operation IDs. Breaking requires an exact backup, a real verified restore clone, and the explicit --confirm-breaking flag; resume uses the retained backup and a new restore-clone destination.";
 const HELP_STORAGE_UPGRADE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 storage upgrade <database-directory> --backup <new-exact-backup-directory> --restore <new-clone-directory> --confirm\n\nPrepares the supported CURRENT v1 to v2 upgrade, creates an exact backup, verifies a real clone restore, requires current StorageFormatUpgrade, BackupCreate, and BackupRestore permissions, then publishes the format upgrade. The --confirm flag is mandatory.";
+const HELP_EXPORT_IMPORT: &str = "Usage: worlddb-cli [--format human|jsonl] v1 export logical|share <database> --output <new-artifact> --from <revision> --through <revision> --history-space <uuid>... --class <RecordKind>...\n       worlddb-cli [--format human|jsonl] v1 import plan <destination> --input <logical-artifact> --output <new-plan> [--map <typed-identity>=<typed-identity>]...\n       worlddb-cli [--format human|jsonl] v1 import prepare <destination> --input <logical-artifact> --plan-file <canonical-plan>\n\nLogical export embeds the full scope and omission manifest. Sharing export filters records by current rights and never reports omission counts. Import plan uses explicit typed remaps such as entity:<uuid>=entity:<uuid> or record:7:<uuid>=record:7:<uuid>; prepare validates the plan against the current destination inventory and DataImport permission. Prepare does not publish records to the database. Valid remap families: history-space, layer, perspective, timeline, entity, entity-type, predicate, event-kind, event-role, event-attribute, and record:<RecordRef wire tag>.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -79,6 +89,7 @@ enum HelpScope {
     Restore,
     Migration,
     StorageUpgrade,
+    ExportImport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +138,68 @@ struct StorageUpgradeSummary {
     target_fingerprint: [u8; 32],
     pointer_digest: [u8; 32],
     resumed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ExportSummary {
+    sharing: bool,
+    database_id: Option<DatabaseId>,
+    snapshot_revision: Option<u64>,
+    from_revision: u64,
+    through_revision: u64,
+    history_space_count: usize,
+    record_kind_count: usize,
+    selected_history_spaces: Vec<String>,
+    selected_record_kinds: Vec<String>,
+    record_count: usize,
+    omitted_record_class_count: usize,
+    omitted_storage_class_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ImportPlanSummary {
+    source_database_id: DatabaseId,
+    destination_database_id: DatabaseId,
+    mapping_count: usize,
+    plan_digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ImportPrepareSummary {
+    source_database_id: DatabaseId,
+    destination_database_id: DatabaseId,
+    stream_fingerprint: [u8; 32],
+    mapping_count: usize,
+    record_count: usize,
+    from_revision: u64,
+    through_revision: u64,
+    history_space_count: usize,
+    record_kind_count: usize,
+    omitted_record_class_count: usize,
+    omitted_storage_class_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExportKind {
+    Logical,
+    Sharing,
+}
+
+impl ExportKind {
+    const fn is_sharing(self) -> bool {
+        matches!(self, Self::Sharing)
+    }
+}
+
+#[derive(Debug)]
+struct ExportCommandRequest {
+    kind: ExportKind,
+    database_path: PathBuf,
+    output_path: PathBuf,
+    from_revision: Revision,
+    through_revision: Revision,
+    history_spaces: Vec<HistorySpaceId>,
+    record_kinds: Vec<RecordKind>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,7 +392,7 @@ impl DamageSummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Success {
     Help(HelpScope),
     Version,
@@ -359,6 +432,9 @@ enum Success {
     },
     Migration(MigrationSummary),
     StorageUpgrade(StorageUpgradeSummary),
+    Export(ExportSummary),
+    ImportPlan(ImportPlanSummary),
+    ImportPrepared(ImportPrepareSummary),
     AdapterRun {
         protocol_major: u16,
         protocol_minor: u16,
@@ -573,6 +649,9 @@ fn parse_help_scope(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     if scope == "storage-upgrade" && arguments.is_empty() {
         return Ok(Success::Help(HelpScope::StorageUpgrade));
     }
+    if matches!(scope.to_str(), Some("export" | "import")) && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::ExportImport));
+    }
     Err(CliError::invalid_request())
 }
 
@@ -619,6 +698,12 @@ fn parse_v1_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     }
     if command == "storage" {
         return parse_storage_command(arguments);
+    }
+    if command == "export" {
+        return parse_export_command(arguments);
+    }
+    if command == "import" {
+        return parse_import_command(arguments);
     }
     Err(CliError::unsupported_operation())
 }
@@ -802,6 +887,252 @@ fn parse_backup_command(mut arguments: VecDeque<OsString>) -> Result<Success, Cl
         }
         Some(_) => Err(CliError::unsupported_operation()),
         None => Err(CliError::invalid_request()),
+    }
+}
+
+fn parse_export_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(kind) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::ExportImport));
+    };
+    if kind == "--help" || kind == "-h" || kind == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::ExportImport))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    let kind = match kind.to_str() {
+        Some("logical") => ExportKind::Logical,
+        Some("share") => ExportKind::Sharing,
+        Some(_) => return Err(CliError::unsupported_operation()),
+        None => return Err(CliError::invalid_request()),
+    };
+    let database_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    let mut output_path = None;
+    let mut from_revision = None;
+    let mut through_revision = None;
+    let mut history_spaces = Vec::new();
+    let mut record_kinds = Vec::new();
+    while let Some(option) = arguments.pop_front() {
+        match option.to_str() {
+            Some("--output") if output_path.is_none() => {
+                output_path = Some(PathBuf::from(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                ));
+            }
+            Some("--from") if from_revision.is_none() => {
+                from_revision = Some(parse_cli_id::<Revision>(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                )?);
+            }
+            Some("--through") if through_revision.is_none() => {
+                through_revision = Some(parse_cli_id::<Revision>(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                )?);
+            }
+            Some("--history-space") => {
+                history_spaces.push(parse_cli_id::<HistorySpaceId>(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                )?);
+            }
+            Some("--class") => {
+                let label = pop_cli_text(&mut arguments)?;
+                record_kinds.push(parse_record_kind(&label)?);
+            }
+            _ => return Err(CliError::invalid_request()),
+        }
+    }
+    let request = ExportCommandRequest {
+        kind,
+        database_path,
+        output_path: output_path.ok_or_else(CliError::invalid_request)?,
+        from_revision: from_revision.ok_or_else(CliError::invalid_request)?,
+        through_revision: through_revision.ok_or_else(CliError::invalid_request)?,
+        history_spaces,
+        record_kinds,
+    };
+    run_export_command(request)
+}
+
+fn parse_import_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(action) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::ExportImport));
+    };
+    if action == "--help" || action == "-h" || action == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::ExportImport))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    match action.to_str() {
+        Some("plan") => {
+            let destination_path = arguments
+                .pop_front()
+                .map(PathBuf::from)
+                .ok_or_else(CliError::invalid_request)?;
+            let mut input_path = None;
+            let mut output_path = None;
+            let mut mappings = Vec::new();
+            while let Some(option) = arguments.pop_front() {
+                match option.to_str() {
+                    Some("--input") if input_path.is_none() => {
+                        input_path = Some(PathBuf::from(
+                            arguments
+                                .pop_front()
+                                .ok_or_else(CliError::invalid_request)?,
+                        ));
+                    }
+                    Some("--output") if output_path.is_none() => {
+                        output_path = Some(PathBuf::from(
+                            arguments
+                                .pop_front()
+                                .ok_or_else(CliError::invalid_request)?,
+                        ));
+                    }
+                    Some("--map") => {
+                        mappings.push(parse_import_mapping(&pop_cli_text(&mut arguments)?)?);
+                        if mappings.len() > 1_000_000 {
+                            return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+                        }
+                    }
+                    _ => return Err(CliError::invalid_request()),
+                }
+            }
+            run_import_plan(
+                &destination_path,
+                &input_path.ok_or_else(CliError::invalid_request)?,
+                &output_path.ok_or_else(CliError::invalid_request)?,
+                mappings,
+            )
+        }
+        Some("prepare") => {
+            let destination_path = arguments
+                .pop_front()
+                .map(PathBuf::from)
+                .ok_or_else(CliError::invalid_request)?;
+            if !take_option(&mut arguments, "--input") {
+                return Err(CliError::invalid_request());
+            }
+            let input_path = arguments
+                .pop_front()
+                .map(PathBuf::from)
+                .ok_or_else(CliError::invalid_request)?;
+            if !take_option(&mut arguments, "--plan-file") {
+                return Err(CliError::invalid_request());
+            }
+            let plan_path = arguments
+                .pop_front()
+                .map(PathBuf::from)
+                .ok_or_else(CliError::invalid_request)?;
+            if !arguments.is_empty() {
+                return Err(CliError::invalid_request());
+            }
+            run_import_prepare(&destination_path, &input_path, &plan_path)
+        }
+        Some(_) => Err(CliError::unsupported_operation()),
+        None => Err(CliError::invalid_request()),
+    }
+}
+
+fn pop_cli_text(arguments: &mut VecDeque<OsString>) -> Result<String, CliError> {
+    arguments
+        .pop_front()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(CliError::invalid_request)
+}
+
+fn parse_record_kind(value: &str) -> Result<RecordKind, CliError> {
+    RecordKind::ALL
+        .into_iter()
+        .find(|kind| record_kind_label(*kind) == value)
+        .ok_or_else(CliError::invalid_request)
+}
+
+fn parse_import_mapping(value: &str) -> Result<LogicalImportIdMapping, CliError> {
+    let Some((source, target)) = value.split_once('=') else {
+        return Err(CliError::invalid_request());
+    };
+    if target.contains('=') {
+        return Err(CliError::invalid_request());
+    }
+    LogicalImportIdMapping::new(
+        parse_import_identity(source)?,
+        parse_import_identity(target)?,
+    )
+    .map_err(|_| CliError::invalid_request())
+}
+
+fn parse_import_identity(value: &str) -> Result<LogicalImportIdentity, CliError> {
+    let mut parts = value.split(':');
+    let family = parts.next().ok_or_else(CliError::invalid_request)?;
+    let first = parts.next().ok_or_else(CliError::invalid_request)?;
+    match (family, parts.next()) {
+        ("history-space", None) => Ok(LogicalImportIdentity::HistorySpace(parse_cli_id::<
+            HistorySpaceId,
+        >(
+            OsString::from(first),
+        )?)),
+        ("layer", None) => Ok(LogicalImportIdentity::Layer(parse_cli_id::<LayerId>(
+            OsString::from(first),
+        )?)),
+        ("perspective", None) => Ok(LogicalImportIdentity::Perspective(parse_cli_id::<
+            PerspectiveId,
+        >(
+            OsString::from(first)
+        )?)),
+        ("timeline", None) => Ok(LogicalImportIdentity::Timeline(parse_cli_id::<TimelineId>(
+            OsString::from(first),
+        )?)),
+        ("entity", None) => Ok(LogicalImportIdentity::Entity(parse_cli_id::<EntityId>(
+            OsString::from(first),
+        )?)),
+        ("entity-type", None) => Ok(LogicalImportIdentity::EntityType(parse_cli_id::<
+            EntityTypeId,
+        >(
+            OsString::from(first)
+        )?)),
+        ("predicate", None) => Ok(LogicalImportIdentity::Predicate(
+            parse_cli_id::<PredicateId>(OsString::from(first))?,
+        )),
+        ("event-kind", None) => Ok(LogicalImportIdentity::EventKind(
+            parse_cli_id::<EventKindId>(OsString::from(first))?,
+        )),
+        ("event-role", None) => Ok(LogicalImportIdentity::EventRole(
+            parse_cli_id::<EventRoleId>(OsString::from(first))?,
+        )),
+        ("event-attribute", None) => Ok(LogicalImportIdentity::EventAttribute(parse_cli_id::<
+            EventAttributeId,
+        >(
+            OsString::from(first),
+        )?)),
+        ("record", Some(identity)) if parts.next().is_none() => {
+            let tag = first
+                .parse::<u16>()
+                .ok()
+                .and_then(|tag| u8::try_from(tag).ok())
+                .filter(|tag| *tag > 0)
+                .ok_or_else(CliError::invalid_request)?;
+            let id = parse_cli_id::<DatabaseId>(OsString::from(identity))?;
+            let mut bytes = Vec::with_capacity(17);
+            bytes.push(tag);
+            bytes.extend_from_slice(&id.to_bytes());
+            decode_record_ref(&bytes)
+                .map(LogicalImportIdentity::Record)
+                .map_err(|_| CliError::invalid_request())
+        }
+        _ => Err(CliError::invalid_request()),
     }
 }
 
@@ -2119,6 +2450,222 @@ fn run_restore_clone(
     })
 }
 
+fn run_export_command(request: ExportCommandRequest) -> Result<Success, CliError> {
+    let logical_scope = LogicalExportScope::new(
+        request.from_revision,
+        request.through_revision,
+        request.history_spaces.clone(),
+        request.record_kinds.clone(),
+    )
+    .map_err(map_logical_export_error)?;
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project(&request.database_path)?;
+    let layout = project.layout.clone();
+    let policy_revision = project.manifest.revision();
+    let database_id = layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let policy_history = project.policy_history.policy().clone();
+    drop(project);
+    reject_restore_target_within_project(&request.output_path, layout.root())?;
+    ensure_new_output_target(&request.output_path)?;
+    let policy = policy_history
+        .select(AuthorizationMode::Now, principal, policy_revision)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+
+    if request.kind.is_sharing() {
+        let scope = SharingExportScope::new(
+            request.from_revision,
+            request.through_revision,
+            request.history_spaces,
+            request.record_kinds,
+        )
+        .map_err(map_sharing_export_error)?;
+        let export = SharingExportManager::new(layout)
+            .export(scope.clone(), policy)
+            .map_err(map_sharing_export_error)?;
+        let bytes = export.encode().map_err(map_sharing_export_error)?;
+        write_new_output(&request.output_path, &bytes)?;
+        return Ok(Success::Export(ExportSummary {
+            sharing: true,
+            database_id: None,
+            snapshot_revision: None,
+            from_revision: export.from_revision().value(),
+            through_revision: export.through_revision().value(),
+            history_space_count: export.history_spaces().len(),
+            record_kind_count: scope.record_kinds().len(),
+            selected_history_spaces: scope
+                .history_spaces()
+                .iter()
+                .map(|id| id.to_canonical_string())
+                .collect(),
+            selected_record_kinds: scope
+                .record_kinds()
+                .iter()
+                .map(|kind| record_kind_label(*kind).to_owned())
+                .collect(),
+            record_count: export.records().len(),
+            omitted_record_class_count: 0,
+            omitted_storage_class_count: 0,
+        }));
+    }
+
+    let export = LogicalExportManager::new(layout)
+        .export(logical_scope, policy)
+        .map_err(map_logical_export_error)?;
+    let bytes = export.encode().map_err(map_logical_export_error)?;
+    let manifest = export.manifest();
+    let summary = ExportSummary {
+        sharing: false,
+        database_id: Some(manifest.database_id()),
+        snapshot_revision: Some(manifest.snapshot_revision().value()),
+        from_revision: manifest.from_revision().value(),
+        through_revision: manifest.through_revision().value(),
+        history_space_count: manifest.selected_history_spaces().len(),
+        record_kind_count: manifest.selected_record_kinds().len(),
+        selected_history_spaces: manifest
+            .selected_history_spaces()
+            .iter()
+            .map(|id| id.to_canonical_string())
+            .collect(),
+        selected_record_kinds: manifest
+            .selected_record_kinds()
+            .iter()
+            .map(|kind| record_kind_label(*kind).to_owned())
+            .collect(),
+        record_count: export.records().len(),
+        omitted_record_class_count: manifest
+            .classes()
+            .iter()
+            .filter(|entry| !entry.selected())
+            .count(),
+        omitted_storage_class_count: manifest.omitted_storage_classes().len(),
+    };
+    if manifest.database_id() != database_id {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    write_new_output(&request.output_path, &bytes)?;
+    Ok(Success::Export(summary))
+}
+
+fn run_import_plan(
+    destination_path: &Path,
+    input_path: &Path,
+    output_path: &Path,
+    mappings: Vec<LogicalImportIdMapping>,
+) -> Result<Success, CliError> {
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project(destination_path)?;
+    let policy = project
+        .policy_history
+        .policy()
+        .select(
+            AuthorizationMode::Now,
+            principal,
+            project.manifest.revision(),
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    authorize_cli_capability(policy, Capability::ProjectRead, PolicyTarget::default())?;
+    authorize_cli_capability(policy, Capability::DataImport, PolicyTarget::default())?;
+    let destination_database_id = project
+        .layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    reject_restore_target_within_project(output_path, project.layout.root())?;
+    ensure_new_output_target(output_path)?;
+    drop(project);
+
+    let source_artifact = read_bounded_file(input_path, LOGICAL_ARTIFACT_MAX_BYTES)?;
+    let plan = LogicalImportPlan::new(&source_artifact, destination_database_id, mappings)
+        .map_err(map_logical_import_error)?;
+    let mapping_count = plan.mappings().len();
+    let source_database_id = plan.source_database_id();
+    let plan_bytes = plan.encode().map_err(map_logical_import_error)?;
+    let plan_digest = *blake3::hash(&plan_bytes).as_bytes();
+    write_new_output(output_path, &plan_bytes)?;
+    Ok(Success::ImportPlan(ImportPlanSummary {
+        source_database_id,
+        destination_database_id,
+        mapping_count,
+        plan_digest,
+    }))
+}
+
+fn run_import_prepare(
+    destination_path: &Path,
+    input_path: &Path,
+    plan_path: &Path,
+) -> Result<Success, CliError> {
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project(destination_path)?;
+    let destination_database_id = project
+        .layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let policy = project
+        .policy_history
+        .policy()
+        .select(
+            AuthorizationMode::Now,
+            principal,
+            project.manifest.revision(),
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    authorize_cli_capability(policy, Capability::ProjectRead, PolicyTarget::default())?;
+    authorize_cli_capability(policy, Capability::DataImport, PolicyTarget::default())?;
+
+    let source_artifact = read_bounded_file(input_path, LOGICAL_ARTIFACT_MAX_BYTES)?;
+    let plan_bytes = read_bounded_file(plan_path, LOGICAL_IMPORT_PLAN_MAX_BYTES)?;
+    let _source = LogicalExport::decode(&source_artifact)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let _plan = LogicalImportPlan::decode(&plan_bytes).map_err(map_logical_import_error)?;
+    let store = HistorySegmentStore::new(project.layout.clone());
+    let mut identities = std::collections::BTreeSet::new();
+    for reference in project
+        .manifest
+        .segments()
+        .iter()
+        .filter(|reference| reference.kind() == ManifestSegmentKind::History)
+    {
+        let segment = store
+            .read_segment(reference.id())
+            .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+        if segment.content_digest() != reference.content_digest() {
+            return Err(CliError::new(PublicCode::CORRUPT_DATA));
+        }
+        for decoded in segment.records() {
+            identities.extend(LogicalImportIdentity::defined_by_record(decoded.record()));
+            if identities.len() > LOGICAL_IMPORT_MAX_INVENTORY_IDENTITIES {
+                return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+            }
+        }
+    }
+    let inventory = LogicalImportDestinationInventory::new(destination_database_id, identities)
+        .map_err(map_logical_import_error)?;
+    let prepared = LogicalImportManager::prepare(&source_artifact, &plan_bytes, &inventory)
+        .map_err(map_logical_import_error)?;
+    let manifest = prepared.source().manifest();
+    let summary = ImportPrepareSummary {
+        source_database_id: manifest.database_id(),
+        destination_database_id,
+        stream_fingerprint: prepared.stream_fingerprint(),
+        mapping_count: prepared.plan().mappings().len(),
+        record_count: prepared.records().len(),
+        from_revision: manifest.from_revision().value(),
+        through_revision: manifest.through_revision().value(),
+        history_space_count: manifest.selected_history_spaces().len(),
+        record_kind_count: manifest.selected_record_kinds().len(),
+        omitted_record_class_count: manifest
+            .classes()
+            .iter()
+            .filter(|entry| !entry.selected())
+            .count(),
+        omitted_storage_class_count: manifest.omitted_storage_classes().len(),
+    };
+    drop(project);
+    Ok(Success::ImportPrepared(summary))
+}
+
 struct CurrentPolicyProject {
     layout: DatabaseLayout,
     _lock: WriterLock,
@@ -2343,6 +2890,96 @@ fn write_output(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let mut file = File::create(path).map_err(|_| CliError::new(PublicCode::INTERNAL))?;
     file.write_all(bytes)
         .map_err(|_| CliError::new(PublicCode::INTERNAL))
+}
+
+fn write_new_output(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                CliError::invalid_request()
+            } else {
+                CliError::new(PublicCode::INTERNAL)
+            }
+        })?;
+    if file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(CliError::new(PublicCode::INTERNAL));
+    }
+    Ok(())
+}
+
+fn ensure_new_output_target(path: &Path) -> Result<(), CliError> {
+    let candidate = canonical_target_candidate(path)?;
+    match fs::symlink_metadata(candidate) {
+        Ok(_) => Err(CliError::invalid_request()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(CliError::new(PublicCode::STORAGE_READ)),
+    }
+}
+
+fn map_logical_export_error(error: LogicalExportError) -> CliError {
+    match error {
+        LogicalExportError::AuthorizationDenied
+        | LogicalExportError::ProjectAuthorizationDenied => CliError::new(PublicCode::UNAUTHORIZED),
+        LogicalExportError::InvalidScope
+        | LogicalExportError::DuplicateHistorySpace
+        | LogicalExportError::DuplicateRecordKind => CliError::invalid_request(),
+        LogicalExportError::UnknownHistorySpace => CliError::new(PublicCode::NOT_FOUND),
+        LogicalExportError::UnsupportedRecordKind => CliError::unsupported_operation(),
+        LogicalExportError::ResourceLimit | LogicalExportError::AllocationFailed => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+        LogicalExportError::InvalidEncoding
+        | LogicalExportError::DigestMismatch
+        | LogicalExportError::NonCanonicalEncoding
+        | LogicalExportError::RevisionlessRecord
+        | LogicalExportError::MissingDependency
+        | LogicalExportError::DatabaseIdentityMissing
+        | LogicalExportError::SnapshotMismatch => CliError::new(PublicCode::CORRUPT_DATA),
+        _ => CliError::new(PublicCode::STORAGE_READ),
+    }
+}
+
+fn map_sharing_export_error(error: SharingExportError) -> CliError {
+    match error {
+        SharingExportError::AuthorizationDenied => CliError::new(PublicCode::UNAUTHORIZED),
+        SharingExportError::ResourceLimit | SharingExportError::AllocationFailed => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+        SharingExportError::LogicalExport(error) => map_logical_export_error(error),
+        SharingExportError::ImplicitHistorySpaceDependency => CliError::invalid_request(),
+        SharingExportError::DuplicateRecordIdentity
+        | SharingExportError::AuditReceiptMissing
+        | SharingExportError::SnapshotMismatch
+        | SharingExportError::InvalidEncoding
+        | SharingExportError::DigestMismatch
+        | SharingExportError::NonCanonicalEncoding => CliError::new(PublicCode::CORRUPT_DATA),
+        _ => CliError::new(PublicCode::STORAGE_READ),
+    }
+}
+
+fn map_logical_import_error(error: LogicalImportError) -> CliError {
+    match error {
+        LogicalImportError::Export(error) => map_logical_export_error(error),
+        LogicalImportError::ResourceLimit | LogicalImportError::AllocationFailed => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+        LogicalImportError::InvalidPlanEncoding
+        | LogicalImportError::PlanDigestMismatch
+        | LogicalImportError::NonCanonicalPlan
+        | LogicalImportError::SourceArtifactMismatch
+        | LogicalImportError::DuplicateImportedRecordIdentity(_)
+        | LogicalImportError::Record(_) => CliError::new(PublicCode::CORRUPT_DATA),
+        _ => CliError::invalid_request(),
+    }
 }
 
 fn map_adapter_error(error: AdapterProtocolError) -> CliError {
@@ -2655,6 +3292,7 @@ fn write_success<W: Write>(
             Success::Help(HelpScope::StorageUpgrade) => {
                 writeln!(writer, "{HELP_STORAGE_UPGRADE}")
             }
+            Success::Help(HelpScope::ExportImport) => writeln!(writer, "{HELP_EXPORT_IMPORT}"),
             Success::Version => writeln!(
                 writer,
                 "worlddb-cli {} (CLI protocol {}.{})",
@@ -2794,8 +3432,111 @@ fn write_success<W: Write>(
                 fingerprint_hex(&summary.pointer_digest),
                 summary.resumed
             ),
+            Success::Export(summary) => write_human_export(writer, summary),
+            Success::ImportPlan(summary) => writeln!(
+                writer,
+                "import plan created: source_database_id={}, destination_database_id={}, remappings={}, plan_digest={}",
+                summary.source_database_id.to_canonical_string(),
+                summary.destination_database_id.to_canonical_string(),
+                summary.mapping_count,
+                fingerprint_hex(&summary.plan_digest)
+            ),
+            Success::ImportPrepared(summary) => writeln!(
+                writer,
+                "import prepared: source_database_id={}, destination_database_id={}, records={}, remappings={}, stream_fingerprint={}, from_revision={}, through_revision={}, history_spaces={}, record_classes={}, omitted_record_classes={}, omitted_storage_classes={}, writes_database=false",
+                summary.source_database_id.to_canonical_string(),
+                summary.destination_database_id.to_canonical_string(),
+                summary.record_count,
+                summary.mapping_count,
+                fingerprint_hex(&summary.stream_fingerprint),
+                summary.from_revision,
+                summary.through_revision,
+                summary.history_space_count,
+                summary.record_kind_count,
+                summary.omitted_record_class_count,
+                summary.omitted_storage_class_count
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
+    }
+}
+
+fn write_human_export<W: Write>(writer: &mut W, summary: ExportSummary) -> io::Result<()> {
+    let selected_history_spaces = summary.selected_history_spaces.join(",");
+    let selected_record_kinds = summary.selected_record_kinds.join(",");
+    if summary.sharing {
+        writeln!(
+            writer,
+            "sharing export completed: from_revision={}, through_revision={}, history_spaces={}, selected_history_spaces=[{}], record_classes={}, selected_record_classes=[{}], included_records={}, omission_counts=withheld, source_audit_committed=true",
+            summary.from_revision,
+            summary.through_revision,
+            summary.history_space_count,
+            selected_history_spaces,
+            summary.record_kind_count,
+            selected_record_kinds,
+            summary.record_count
+        )
+    } else {
+        let database_id = summary
+            .database_id
+            .map_or_else(|| String::from("unknown"), DatabaseId::to_canonical_string);
+        let snapshot_revision = summary
+            .snapshot_revision
+            .map_or_else(|| String::from("unknown"), |value| value.to_string());
+        writeln!(
+            writer,
+            "logical export completed: database_id={database_id}, snapshot_revision={snapshot_revision}, from_revision={}, through_revision={}, history_spaces={}, selected_history_spaces=[{}], record_classes={}, selected_record_classes=[{}], records={}, omitted_record_classes={}, omitted_storage_classes={}",
+            summary.from_revision,
+            summary.through_revision,
+            summary.history_space_count,
+            selected_history_spaces,
+            summary.record_kind_count,
+            selected_record_kinds,
+            summary.record_count,
+            summary.omitted_record_class_count,
+            summary.omitted_storage_class_count
+        )
+    }
+}
+
+fn record_kind_label(kind: RecordKind) -> &'static str {
+    match kind {
+        RecordKind::HistorySpaceDefinition => "HistorySpaceDefinition",
+        RecordKind::Entity => "Entity",
+        RecordKind::EntityRetirement => "EntityRetirement",
+        RecordKind::PerspectiveDefinitionRevision => "PerspectiveDefinitionRevision",
+        RecordKind::PerspectiveRetirement => "PerspectiveRetirement",
+        RecordKind::LayerDefinition => "LayerDefinition",
+        RecordKind::LayerSchemaSnapshot => "LayerSchemaSnapshot",
+        RecordKind::EntityTypeDefinition => "EntityTypeDefinition",
+        RecordKind::PredicateDefinition => "PredicateDefinition",
+        RecordKind::EventKindDefinition => "EventKindDefinition",
+        RecordKind::MigrationPlan => "MigrationPlan",
+        RecordKind::MigrationRun => "MigrationRun",
+        RecordKind::MigrationStepCommitIdentity => "MigrationStepCommitIdentity",
+        RecordKind::Assertion => "Assertion",
+        RecordKind::AssertionValidityClosure => "AssertionValidityClosure",
+        RecordKind::AssertionRetraction => "AssertionRetraction",
+        RecordKind::Mask => "Mask",
+        RecordKind::MaskValidityClosure => "MaskValidityClosure",
+        RecordKind::MaskRetraction => "MaskRetraction",
+        RecordKind::ReplacementBoundary => "ReplacementBoundary",
+        RecordKind::ReplacementBoundaryValidityClosure => "ReplacementBoundaryValidityClosure",
+        RecordKind::ReplacementBoundaryRetraction => "ReplacementBoundaryRetraction",
+        RecordKind::ArchiveTransition => "ArchiveTransition",
+        RecordKind::Event => "Event",
+        RecordKind::EventMask => "EventMask",
+        RecordKind::EventSpanClosure => "EventSpanClosure",
+        RecordKind::EventRetraction => "EventRetraction",
+        RecordKind::EventMaskRetraction => "EventMaskRetraction",
+        RecordKind::EventRelation => "EventRelation",
+        RecordKind::EventRelationRetraction => "EventRelationRetraction",
+        RecordKind::Source => "Source",
+        RecordKind::Evidence => "Evidence",
+        RecordKind::Provenance => "Provenance",
+        RecordKind::EvidenceRetraction => "EvidenceRetraction",
+        RecordKind::ProvenanceRetraction => "ProvenanceRetraction",
+        RecordKind::TransferLineage => "TransferLineage",
     }
 }
 
@@ -2808,7 +3549,7 @@ fn write_json_success<W: Write>(
     match success {
         Success::Help(HelpScope::Root) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 migration\",\"v1 storage upgrade\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 migration\",\"v1 export logical|share\",\"v1 import plan|prepare\",\"v1 storage upgrade\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
         ),
         Success::Help(HelpScope::AdapterRun) => writeln!(
             writer,
@@ -2845,6 +3586,10 @@ fn write_json_success<W: Write>(
         Success::Help(HelpScope::StorageUpgrade) => writeln!(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"storage_upgrade\",\"usage\":\"v1 storage upgrade <database> --backup <new-directory> --restore <new-directory> --confirm\",\"confirmation_required\":true}}}}}}"
+        ),
+        Success::Help(HelpScope::ExportImport) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"export_import\",\"usage\":\"v1 export logical|share; v1 import plan|prepare\",\"paths_in_results\":false,\"prepare_publishes_records\":false}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -3014,6 +3759,74 @@ fn write_json_success<W: Write>(
             )?;
             writer.write_all(b"}}}\n")
         }
+        Success::Export(summary) => {
+            if summary.sharing {
+                write!(
+                    writer,
+                    "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"sharing_export\",\"data\":{{\"status\":\"completed\",\"scope\":{{\"from_revision\":\"{}\",\"through_revision\":\"{}\",\"history_space_count\":\"{}\",\"history_spaces\":",
+                    summary.from_revision, summary.through_revision, summary.history_space_count
+                )?;
+                write_json_string_array(writer, &summary.selected_history_spaces)?;
+                write!(
+                    writer,
+                    ",\"record_class_count\":\"{}\",\"record_classes\":",
+                    summary.record_kind_count
+                )?;
+                write_json_string_array(writer, &summary.selected_record_kinds)?;
+                writeln!(
+                    writer,
+                    "}},\"included_record_count\":\"{}\",\"omission_counts_disclosed\":false,\"source_audit_committed\":true,\"source_modified\":true}}}}}}",
+                    summary.record_count
+                )
+            } else {
+                let database_id = summary
+                    .database_id
+                    .map_or_else(|| String::from("unknown"), DatabaseId::to_canonical_string);
+                let snapshot_revision = summary.snapshot_revision.unwrap_or_default();
+                write!(
+                    writer,
+                    "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"logical_export\",\"data\":{{\"status\":\"completed\",\"database_id\":\"{database_id}\",\"snapshot_revision\":\"{snapshot_revision}\",\"scope\":{{\"from_revision\":\"{}\",\"through_revision\":\"{}\",\"history_space_count\":\"{}\",\"history_spaces\":",
+                    summary.from_revision, summary.through_revision, summary.history_space_count
+                )?;
+                write_json_string_array(writer, &summary.selected_history_spaces)?;
+                write!(
+                    writer,
+                    ",\"record_class_count\":\"{}\",\"record_classes\":",
+                    summary.record_kind_count
+                )?;
+                write_json_string_array(writer, &summary.selected_record_kinds)?;
+                writeln!(
+                    writer,
+                    "}},\"record_count\":\"{}\",\"omission_manifest\":{{\"complete\":true,\"record_classes_omitted\":\"{}\",\"storage_classes_omitted\":\"{}\"}},\"source_modified\":false}}}}}}",
+                    summary.record_count,
+                    summary.omitted_record_class_count,
+                    summary.omitted_storage_class_count
+                )
+            }
+        }
+        Success::ImportPlan(summary) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"import_plan\",\"data\":{{\"status\":\"created\",\"source_database_id\":\"{}\",\"destination_database_id\":\"{}\",\"mapping_count\":\"{}\",\"plan_digest\":\"{}\",\"writes_database\":false}}}}}}",
+            summary.source_database_id.to_canonical_string(),
+            summary.destination_database_id.to_canonical_string(),
+            summary.mapping_count,
+            fingerprint_hex(&summary.plan_digest)
+        ),
+        Success::ImportPrepared(summary) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"import_prepare\",\"data\":{{\"status\":\"prepared\",\"source_database_id\":\"{}\",\"destination_database_id\":\"{}\",\"stream_fingerprint\":\"{}\",\"mapping_count\":\"{}\",\"record_count\":\"{}\",\"scope\":{{\"from_revision\":\"{}\",\"through_revision\":\"{}\",\"history_space_count\":\"{}\",\"record_class_count\":\"{}\"}},\"omission_manifest\":{{\"complete\":true,\"record_classes_omitted\":\"{}\",\"storage_classes_omitted\":\"{}\"}},\"writes_database\":false}}}}}}",
+            summary.source_database_id.to_canonical_string(),
+            summary.destination_database_id.to_canonical_string(),
+            fingerprint_hex(&summary.stream_fingerprint),
+            summary.mapping_count,
+            summary.record_count,
+            summary.from_revision,
+            summary.through_revision,
+            summary.history_space_count,
+            summary.record_kind_count,
+            summary.omitted_record_class_count,
+            summary.omitted_storage_class_count
+        ),
     }
 }
 
@@ -3025,6 +3838,31 @@ fn write_json_damage_counts<W: Write>(writer: &mut W, damage: DamageSummary) -> 
         write!(writer, "\"{}\":\"{}\"", damage_class_label(index), count)?;
     }
     Ok(())
+}
+
+fn write_json_string_array<W: Write>(writer: &mut W, values: &[String]) -> io::Result<()> {
+    writer.write_all(b"[")?;
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            writer.write_all(b",")?;
+        }
+        writer.write_all(b"\"")?;
+        for character in value.chars() {
+            match character {
+                '"' => writer.write_all(b"\\\"")?,
+                '\\' => writer.write_all(b"\\\\")?,
+                '\u{08}' => writer.write_all(b"\\b")?,
+                '\u{0c}' => writer.write_all(b"\\f")?,
+                '\n' => writer.write_all(b"\\n")?,
+                '\r' => writer.write_all(b"\\r")?,
+                '\t' => writer.write_all(b"\\t")?,
+                control if control <= '\u{1f}' => write!(writer, "\\u{:04x}", u32::from(control))?,
+                _ => write!(writer, "{character}")?,
+            }
+        }
+        writer.write_all(b"\"")?;
+    }
+    writer.write_all(b"]")
 }
 
 fn write_json_safe_actions<W: Write>(writer: &mut W, damage: DamageSummary) -> io::Result<()> {
@@ -3087,7 +3925,7 @@ mod tests {
     use super::{
         CliError, EXIT_BUDGET_EXCEEDED, EXIT_CANCELLED, EXIT_CORRUPT_DATA, EXIT_INTERNAL,
         EXIT_INVALID_REQUEST, EXIT_NOT_FOUND, EXIT_STATE_INVALIDATED, EXIT_STORAGE_READ,
-        EXIT_UNAUTHORIZED, EXIT_UNSUPPORTED_OPERATION,
+        EXIT_UNAUTHORIZED, EXIT_UNSUPPORTED_OPERATION, LogicalImportIdentity,
     };
     use worlddb_core::api::v1::PublicCode;
 
@@ -3155,5 +3993,33 @@ mod tests {
         assert!(text.contains("\"output_bytes\":\"42\""));
         assert!(!text.contains("path"));
         assert!(!text.contains("process_id"));
+    }
+
+    #[test]
+    fn import_mapping_parser_accepts_typed_record_refs_and_rejects_cross_family_maps() {
+        let mapping = super::parse_import_mapping(
+            "record:1:01234567-89ab-7cde-8f01-23456789abcd=record:1:01234567-89ab-7cde-8f01-23456789abce",
+        );
+        assert!(mapping.is_ok());
+        let Some(mapping) = mapping.ok() else {
+            return;
+        };
+        assert!(matches!(
+            mapping.source(),
+            LogicalImportIdentity::Record(reference) if reference.wire_tag().value() == 1
+        ));
+        assert!(matches!(
+            mapping.target(),
+            LogicalImportIdentity::Record(reference) if reference.wire_tag().value() == 1
+        ));
+
+        assert!(super::parse_import_mapping(
+            "record:1:01234567-89ab-7cde-8f01-23456789abcd=record:2:01234567-89ab-7cde-8f01-23456789abce"
+        )
+        .is_err());
+        assert!(super::parse_import_mapping(
+            "entity:01234567-89ab-7cde-8f01-23456789abcd=layer:01234567-89ab-7cde-8f01-23456789abce"
+        )
+        .is_err());
     }
 }
