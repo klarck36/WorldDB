@@ -22,4 +22,4 @@ Die JSON- und IPC-Codierung sowie die konkrete Datei-Engine-Session werden in M8
 - `cargo clippy -p worlddb-core --all-targets -- -D warnings`: **PASS**.
 - `cargo xtask verify`: **38 PASS, 1 erwarteter M0-14-`ci-matrix`-SKIP, 0 FAIL**. Windows-Storage-/Crashvertrag: **86 PASS, 0 FAIL, 1 ignorierter manueller Langlauf**. Plancheck und Sourcecheck: **PASS**.
 
-Linux-/macOS-Abnahmen bleiben wie vereinbart M9-07 zugeordnet. Öffentliche Rust-Datei: 1.991 Zeilen einschließlich Modul-Dokumentation und Tests.
+Linux-/macOS-Abnahmen bleiben wie vereinbart M9-07 zugeordnet. Öffentliche Rust-Datei: 1.991 nichtleere Quelltextzeilen (2.166 physische Zeilen), einschließlich Modul-Dokumentation und Tests.
