@@ -9,6 +9,7 @@ Der Import bleibt bis zum nachgelagerten Adapter-/Storage-Vertrag nicht persiste
 ## Gezielte Fälle
 
 - `logical_export::tests::logical_import_requires_and_replays_explicit_collision_remaps`: Kollision ohne Plan wird abgewiesen; gleicher Export und Plan ergeben wiederholt denselben Fingerprint; Record-Remap ist typisiert.
+- `logical_export::tests::logical_import_rejects_cross_family_and_record_variant_remaps`: Ein Entity→Layer-Mapping und ein Event→EntityRetirement-RecordRef-Mapping werden wegen unterschiedlicher Identitätsfamilien abgewiesen.
 - `logical_export::tests::logical_import_rejects_unlisted_or_occupied_remap_targets`: Quelle außerhalb des Exports und belegtes Remap-Ziel werden abgewiesen.
 - `logical_export::tests::logical_import_rejects_missing_schema_references`: ein importiertes Entity ohne vorhandene oder mitimportierte EntityType-Definition wird abgewiesen.
 

@@ -1816,10 +1816,10 @@ mod tests {
     use worlddb_core::{
         AuthorizationMode, Capability, CapabilityGrant, CapabilityRule, DatabaseId, DomainId,
         Entity, EntityId, EntityRetirement, EntityRetirementId, EntityTypeDefinition, EntityTypeId,
-        GrantEffect, HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, Lifecycle,
-        OperationId, PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId, PolicyScope,
-        PolicySubject, Principal, PrincipalId, Record, RecordKind, RecordRef, Revision,
-        SchemaRevision, SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot,
+        EventId, GrantEffect, HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId,
+        Lifecycle, OperationId, PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId,
+        PolicyScope, PolicySubject, Principal, PrincipalId, Record, RecordKind, RecordRef,
+        Revision, SchemaRevision, SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot,
         SecurityPolicyVersion, Symbol,
     };
 
@@ -2590,6 +2590,27 @@ mod tests {
             Some(RecordRef::EntityRetirement(id::<EntityRetirementId>(43)?))
         );
         assert_eq!(first.records().len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn logical_import_rejects_cross_family_and_record_variant_remaps() -> Result<(), String> {
+        let entity = LogicalImportIdentity::Entity(id::<EntityId>(91)?);
+        let layer = LogicalImportIdentity::Layer(id::<LayerId>(92)?);
+        assert!(matches!(
+            LogicalImportIdMapping::new(entity, layer),
+            Err(LogicalImportError::IdentityFamilyMismatch)
+        ));
+
+        let entity_record = LogicalImportIdentity::Record(RecordRef::Event(id::<EventId>(93)?));
+        let retirement_record =
+            LogicalImportIdentity::Record(RecordRef::EntityRetirement(id::<EntityRetirementId>(
+                94,
+            )?));
+        assert!(matches!(
+            LogicalImportIdMapping::new(entity_record, retirement_record),
+            Err(LogicalImportError::IdentityFamilyMismatch)
+        ));
         Ok(())
     }
 

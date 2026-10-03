@@ -14,7 +14,7 @@
 
 MigrationPlan-Feld 13 enthält den optionalen Kalender-Shift nur, wenn er gesetzt ist. Bestehende M7-01-Pläne ohne Shift behalten ihre v1-Fingerprints und exakt dieselben Wire-Bytes; der bereits festgelegte Golden-Vektor bleibt unverändert. Pläne mit Shift verwenden die v2-Fingerprintdomäne und einen eigenen Golden-Vektor. Das geschlossene Decoderformat weist unbekannte Profile, ungültige Perioden und unvollständige Nested-Felder als Fehler auf Feld 13 zurück.
 
-Der Dry-Run-Prüfsink und die kompatible Step-Ausführung verwenden inzwischen denselben versionierten Transformer; M7-05 schließt dafür WDB-MIG-010 ab. Der M7-05-Executor lässt Restrictive-/Breaking-Pläne fail-closed nicht committen; der ausführbare Gate mit validierten Adminentscheidungen bleibt M7-10a. WDB-MIG-012 bleibt für Adminfreigabe und kanonische AI-Plan-Grenzen offen; WDB-MIG-011 ist mit diesem Task belegt.
+Der Dry-Run-Prüfsink und die kompatible Step-Ausführung verwenden denselben versionierten Transformer; M7-05 schließt dafür WDB-MIG-010 ab. Der M7-05-Executor lässt Restrictive-/Breaking-Pläne fail-closed nicht committen. M7-10a integriert validierte Adminentscheidungen in den guarded Commitpfad und verlangt für Breaking zusätzlich den geprüften Restorepoint. Zusammen mit der kanonischen Plan-Wire-Prüfung, den Versionssperren und den Negativtests schließt M7-10a WDB-MIG-012. Der Core-Commitpfad besitzt keine AI-Callback-Schnittstelle: ein Vorschlag kann nur über einen typisierten, fingerprint- und versionsgebundenen `MigrationPlan` eingehen. WDB-MIG-011 ist mit diesem Task belegt.
 
 ## Nachweise
 
