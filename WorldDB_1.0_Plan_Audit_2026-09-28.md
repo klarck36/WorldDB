@@ -82,3 +82,7 @@ Der abschließende Verify-Lauf nach dem Eintragen von Gateprotokoll, Taskregiste
 Der diagnostische `--gate-precheck M1` deckte veraltete PLANNED-Primärstatus und fehlende paarbezogene M1-17d-Nachweise auf, obwohl die zugehörigen Tasks und Tests bereits abgeschlossen waren. Die Matrix wurde auf die tatsächlich ausgeführten LayerId-, RecordRef-, Provenance- und Decoder-Tests abgestimmt; ihre Folgebelege enthalten jetzt konkrete Testnamen, PASS-Ergebnis und Prüfzeitpunkt. Für WDB-PRO-001 ergänzte M1-09 einen negativen Projektionstest und ordnet den noch ausstehenden schema-aware Value-Vergleich M2-07/M2-17 zu.
 
 Nach der Korrektur bestehen regulärer Plancheck und Workspace-Tests (146 PASS, 0 FAIL; der Stunden-Fuzzer bleibt als einziger Test ignoriert). Der M1-Precheck meldet nur noch M1-18 und WDB-WIR-003/005. Diese bleiben offen, bis die erfolgreichen Fuzzläufe an den Source-Commit gebunden werden können; dadurch wird das M1-Gate nicht vorzeitig freigegeben.
+
+## Aufgabenzerlegung M8-14 am 4. Oktober 2026
+
+M8-14 umfasste Persistenz, validierte Engine-/IPC-Eingabe, Query-Auflösung und Desktop-Bedienung, während der vorhandene ODE keine Assertion-/Mask-/Boundary-Erfassung bereitstellte. Entsprechend §2.1 wurde vor Produktcode die ursprüngliche Abnahme in M8-14a (dauerhafte Eingabe), M8-14b (Auflösungsvorschau) und M8-14c (Oberfläche) geteilt. Die bereits vorhandene Korrektur-Task wurde zu M8-14d verschoben. Invarianten-Folgebelege und Gateabhängigkeiten sind aktualisiert; keine normative Semantik wurde geändert. Details: docs/M8-14-split.md.
