@@ -86,3 +86,7 @@ Nach der Korrektur bestehen regulärer Plancheck und Workspace-Tests (146 PASS, 
 ## Aufgabenzerlegung M8-14 am 4. Oktober 2026
 
 M8-14 umfasste Persistenz, validierte Engine-/IPC-Eingabe, Query-Auflösung und Desktop-Bedienung, während der vorhandene ODE keine Assertion-/Mask-/Boundary-Erfassung bereitstellte. Entsprechend §2.1 wurde vor Produktcode die ursprüngliche Abnahme in M8-14a (dauerhafte Eingabe), M8-14b (Auflösungsvorschau) und M8-14c (Oberfläche) geteilt. Die bereits vorhandene Korrektur-Task wurde zu M8-14d verschoben. Invarianten-Folgebelege und Gateabhängigkeiten sind aktualisiert; keine normative Semantik wurde geändert. Details: docs/M8-14-split.md.
+
+## ADR-032-Voraussetzung in M8-14 am 4. Oktober 2026
+
+Vor Produktcode wurde festgestellt, dass ADR-032, Abschnitt 2 (Masterplan-Zeilen 2452–2475), bereits verbindliche versionierte Timeline-/TimeUnit-Schema-Records und exakte Nanosekunden-Normalisierung verlangt. Der aktuelle Core-Schema-/Record-Code enthält weder TimelineDefinition noch TimeUnitDefinition, obwohl der Assertion-Writevalidator registrierte Definitionen verlangt. Die M8-14-Folge wurde deshalb vorgezogen um M8-14a (Core-/Wire-/Storage-Register) und M8-14b (ODE-Verwaltung) erweitert; Assertion-Persistenz, Query-Vorschau, ursprüngliche M8-14-Oberfläche und Korrekturen rücken zu M8-14c–f. WDB-TIM-001–003-Folgebelege wurden ergänzt. Es wurde keine neue Produktregel beschlossen. Details: docs/M8-14-split.md.

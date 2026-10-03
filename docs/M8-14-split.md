@@ -2,27 +2,27 @@
 
 Stand: 4. Oktober 2026
 
-Die ursprüngliche Abnahme M8-14 erfordert drei noch nicht vorhandene Bausteine: dauerhafte, autorisierte Erfassung; eine persistenzgebundene Auflösungsvorschau; und eine Desktop-Oberfläche. Nach §2.1 des Arbeitsplans wurde vor jeder Produktcode-Implementierung zerlegt. Die fachliche Abnahme bleibt unverändert und liegt in M8-14c.
+Die ursprüngliche Abnahme M8-14 erfordert autorisierte, dauerhafte Assertion-/Mask-/Boundary-Erfassung, eine Auflösungsvorschau und Desktop-Eingaben. Vor Produktcode ergab die Quellenprüfung zusätzlich, dass ADR-032 projektweite, revisionierte Timeline- und TimeUnit-Schemaregister zwingend für die exakte Zeitprüfung verlangt; entsprechende Typen und Records fehlen im aktuellen Code. M8-14 wurde daher vorgezogen um diese bereits normative Voraussetzung erweitert. Die ursprüngliche M8-14-Abnahme liegt in M8-14e.
 
 | Task | Inhalt | Voraussetzung |
 |---|---|---|
-| M8-14 | Planung/Abdeckung der Zerlegung; genau die erste Untertask freigeben | M8-13a |
-| M8-14a | WAL-/Manifest-gebundene Assertion-, Mask- und Boundary-Erfassung mit Validierung; policy-geforderter AuditRecord im selben Commit | M8-14 |
-| M8-14b | Auflösungsvorschau mit Known/Unknown/Conflict, technischen Fehlern und explizit leerer Menge | M8-14a |
-| M8-14c | Windows-Desktop-Formulare und getrennte Darstellung der Auflösungsergebnisse; vollständige ursprüngliche Abnahme | M8-14b |
-| M8-14d | Die zuvor geplante Korrektur-, Archive- und Retraction-Oberfläche | M8-14c |
+| M8-14 | Planung/Abdeckung; genau die erste Untertask freigeben | M8-13a |
+| M8-14a | Core-Schema, Wireformat, Lifecycle und persistente Timeline-/TimeUnit-Register nach ADR-032 | M8-14 |
+| M8-14b | Autorisierte Schema-API und Desktop-Eingabe für Timeline-/TimeUnit-Definitionen | M8-14a |
+| M8-14c | WAL-/Manifest-gebundene, autorisierte Assertion-, Mask- und Boundary-Erfassung; policy-required Audit im selben Commit | M8-14b |
+| M8-14d | Auflösungsvorschau mit Known/Unknown/Conflict, technischen Fehlern und explizit leerer Menge | M8-14c |
+| M8-14e | Windows-Desktop-Formulare und getrennte Darstellung der Ergebnisse; vollständige ursprüngliche M8-14-Abnahme | M8-14d |
+| M8-14f | Die zuvor geplante Korrektur-, Archive- und Retraction-Oberfläche | M8-14e |
 
 Es wurden keine Produktsemantik und keine Invariante geändert. Die bestätigten Entscheidungen bleiben maßgeblich: Symbolgrammatik [a-z][a-z0-9_]*, TransferLineage als eigener Record, WorldTimeSelector für alle Zeiten oder einen Zeitpunkt sowie strikt nachgelagerte ArchiveTransitionen. Linux/macOS-Nachweise folgen wie vereinbart M9-07.
 
+Die ADR-032-Voraussetzung steht in docs/contract/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md, Abschnitt 2, Zeilen 2452–2475. Dort sind TimelineDefinition und TimeUnitDefinition als unveränderliche, revisionierte Records festgelegt; der aktuelle SchemaDefinition- und Record-Code kennt diese Familien noch nicht. Der Core-Writevalidator verlangt jedoch registrierte Timeline- und Unit-Definitionen.
+
 Prüfbelege vom 4. Oktober 2026:
 
-- python -X utf8 WorldDB_1.0_Plancheck.py — PASS: 255 Tasks, 11 Milestones, 253 Invarianten, 224 Folgebelegpaare; DAG und Referenzen gültig.
+- python -X utf8 WorldDB_1.0_Plancheck.py — PASS: 257 Tasks, 11 Milestones, 253 Invarianten, 230 Folgebelegpaare; DAG und Referenzen gültig.
 - python -X utf8 WorldDB_1.0_Sourcecheck.py — PASS: gleiche Planstruktur; alle sechs Quellenkopien und das Audit-ZIP bytegenau bestätigt.
 - git diff --check — PASS.
+- Keine Produkttests ausgeführt, da diese Planungs-Task keinen Produktcode ändert. M8-14a ist die einzige READY-Task.
 
-Es wurden keine Produkttests ausgeführt, da diese Planungs-Task keinen Produktcode ändert. M8-14a ist nachweislich die einzige READY-Task.
-
-Veröffentlichung:
-
-- Commit: 65f4bf0b428b4caf0e24352358f79cb889c9b195 (docs: split M8-14 into implementation tasks).
-- Push zu origin/codex/worlddb-project-integration erfolgreich; der anschließende Remote-Head-Abgleich lieferte denselben vollständigen Commit-Hash.
+Die erste Planfassung wurde in 65f4bf0b428b4caf0e24352358f79cb889c9b195 erfasst. Die Dokumentation des Pushs steht in 9cd251b; die Policy-required-Audit-Klarstellung in 9aae209.

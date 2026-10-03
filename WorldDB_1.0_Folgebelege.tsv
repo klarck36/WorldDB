@@ -48,7 +48,7 @@ WDB-AST-002	M2-05	DONE	artifact:docs/M2-05-verification.md;test:assertion_projec
 WDB-AST-002	M2-15c	DONE	test:assertion_correction::tests::correction_prepares_exactly_three_records_at_one_commit_revision;test:assertion_correction::tests::correction_rejects_wrong_slot_or_context_without_returning_any_record	PASS	2026-09-30T16:08:10+02:00	Assertion Correct prepares new Assertion, explicit target Retraction, and Corrects edge at one revision; invalid slot/context exposes no bundle.
 WDB-AST-002	M4-05	DONE	artifact:docs/M4-05-verification.md;test:write_reference_validation::tests::mixed_schema_domain_event_evidence_and_provenance_publish_once	PASS	2026-10-01T12:19:07+02:00	A newly written Assertion participates in the one-revision mixed batch; invalid references reject the complete candidate.
 WDB-AST-002	M4-05d	DONE	artifact:docs/M4-05d-verification.md;test:assertion_correction::tests::correction_commit_publishes_only_the_exact_three_record_effect	PASS	2026-10-01T12:19:07+02:00	Correction publishes exactly a new Assertion, explicit target Retraction, and Corrects edge in one revision.
-WDB-AST-002	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-AST-002	M8-14f	PLANNED				Evidence is due when M8-14f completes.
 WDB-REF-001	M1-17d	DONE	test:wire_records::tests::every_record_ref_roundtrips_and_unknown_noncanonical_or_malformed_refs_are_rejected;test:wire_records::tests::runtime_record_ref_tags_match_the_complete_policy_registry	PASS	2026-09-30T00:17:43+02:00	All 24 RecordRef wire variants roundtrip with fixed tags; unknown, noncanonical, and malformed refs fail closed.
 WDB-REF-001	M3-09	DONE	artifact:docs/M3-09-verification.md;test:reference_query::tests::raw_rows_sort_by_fixed_typed_tag_then_id_and_reject_duplicate_identity;test:reference_query::tests::resolved_view_orders_contributors_and_rejects_duplicates	PASS	2026-09-30T21:32:00+02:00	Owned ports retain closed typed RecordRef identities and reject duplicate/noncanonical result identity order.
 WDB-REF-001	M7-13	DONE	artifact:docs/M7-13-verification.md;test:logical_export::tests::logical_import_requires_and_replays_explicit_collision_remaps;test:logical_export::tests::logical_import_rejects_cross_family_and_record_variant_remaps;test:wire_records::tests::every_record_ref_roundtrips_and_unknown_noncanonical_or_malformed_refs_are_rejected	PASS	2026-10-03T08:57:11+02:00	Import remaps a concrete EntityRetirement RecordRef and applies one typed mapping table. Unknown wire refs and attempts to map between Event and EntityRetirement variants fail closed.
@@ -209,17 +209,23 @@ WDB-PRG-002	M7-16g	DONE	artifact:docs/M7-15-verification.md;artifact:docs/M7-16g
 WDB-MIG-005	M7-16h	DONE	artifact:docs/M7-16h-versioned-fixture-baseline.md;artifact:crates/worlddb-storage-file/tests/fixtures/m7-16h/storage/FORMAT;test:m7_16h_fixture_baseline::versioned_pre_alpha_fixture_baseline;test:m7_07_format_upgrade_contract::initial_v1_format_fixture_opens_without_rewriting_the_probe;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T08:33:55+02:00	The guarded schema migration advances the fixture from revision 2 to 4 while the storage FORMAT bytes remain identical; format-upgrade compatibility has its own fixed M7-07 fixture and contract test.
 WDB-MIG-023	M7-16h	DONE	artifact:docs/M7-16h-versioned-fixture-baseline.md;artifact:crates/worlddb-storage-file/tests/fixtures/m7-16h/storage/FORMAT;test:m7_16h_fixture_baseline::versioned_pre_alpha_fixture_baseline;test:m7_07_format_upgrade_contract::initial_v1_format_fixture_opens_without_rewriting_the_probe;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T08:33:55+02:00	Storage-format compatibility remains a separate protocol: guarded schema steps preserve the probe byte for byte, and the versioned format fixture opens without rewriting it.
 WDB-API-008	M8-13a	DONE	artifact:docs/M8-13a-verification.md;test:query_engine::tests::changed_security_epoch_invalidates_and_releases_a_page_cursor;test:schema_management::security_policy::tests::policy_read_and_management_capabilities_are_independent;test:project::tests::creator_policy_is_role_based_and_does_not_grant_raw_admin;run:native Windows IPC smoke PASS in-process and sidecar	PASS	2026-10-04T00:55:15+02:00	Durable rights administration advances SecurityEpoch and invalidates/releases an active cursor; denied policy writes publish no revision or epoch, and GM does not imply AdminRawRead.
-WDB-AST-001	M8-14a	PLANNED				Evidence is due when M8-14a completes.
-WDB-MSK-001	M8-14a	PLANNED				Evidence is due when M8-14a completes.
-WDB-MSK-002	M8-14b	PLANNED				Evidence is due when M8-14b completes.
-WDB-MSK-003	M8-14a	PLANNED				Evidence is due when M8-14a completes.
-WDB-MSK-004	M8-14b	PLANNED				Evidence is due when M8-14b completes.
-WDB-MSK-004	M8-14c	PLANNED				Evidence is due when M8-14c completes.
-WDB-RES-001	M8-14b	PLANNED				Evidence is due when M8-14b completes.
-WDB-RES-001	M8-14c	PLANNED				Evidence is due when M8-14c completes.
-WDB-RES-003	M8-14b	PLANNED				Evidence is due when M8-14b completes.
-WDB-RES-004	M8-14a	PLANNED				Evidence is due when M8-14a completes.
-WDB-RES-005	M8-14b	PLANNED				Evidence is due when M8-14b completes.
-WDB-RES-005	M8-14c	PLANNED				Evidence is due when M8-14c completes.
-WDB-SCH-008	M8-14a	PLANNED				Evidence is due when M8-14a completes.
-WDB-TX-003	M8-14a	PLANNED				Evidence is due when M8-14a completes.
+WDB-AST-001	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-MSK-001	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-MSK-002	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-MSK-003	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-MSK-004	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-MSK-004	M8-14e	PLANNED				Evidence is due when M8-14e completes.
+WDB-RES-001	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-RES-001	M8-14e	PLANNED				Evidence is due when M8-14e completes.
+WDB-RES-003	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-RES-004	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-RES-005	M8-14d	PLANNED				Evidence is due when M8-14d completes.
+WDB-RES-005	M8-14e	PLANNED				Evidence is due when M8-14e completes.
+WDB-SCH-008	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-TX-003	M8-14c	PLANNED				Evidence is due when M8-14c completes.
+WDB-TIM-001	M8-14a	PLANNED				Evidence is due when M8-14a completes.
+WDB-TIM-001	M8-14b	PLANNED				Evidence is due when M8-14b completes.
+WDB-TIM-002	M8-14a	PLANNED				Evidence is due when M8-14a completes.
+WDB-TIM-002	M8-14b	PLANNED				Evidence is due when M8-14b completes.
+WDB-TIM-003	M8-14a	PLANNED				Evidence is due when M8-14a completes.
+WDB-TIM-003	M8-14b	PLANNED				Evidence is due when M8-14b completes.
