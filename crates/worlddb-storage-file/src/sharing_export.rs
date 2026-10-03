@@ -27,6 +27,15 @@ const SHARING_EXPORT_MAX_SPACES: usize = 65_536;
 const HEADER_BYTES: usize = 8 + 8;
 const DIGEST_BYTES: usize = 32;
 
+#[cfg(test)]
+fn crash_if_requested(checkpoint: &str) {
+    if std::env::var("WORLDDB_M7_16F_SHARING_CRASH_AT")
+        .is_ok_and(|requested| requested == checkpoint)
+    {
+        std::process::exit(86);
+    }
+}
+
 /// The caller's explicit HistorySpace, Transaction-Time and record-class selection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SharingExportScope {
@@ -292,6 +301,8 @@ impl SharingExportManager {
         let logical = LogicalExportManager::new(self.layout.clone())
             .export(scope.logical.clone(), policy)
             .map_err(SharingExportError::LogicalExport)?;
+        #[cfg(test)]
+        crash_if_requested("after_logical_return");
         let export = filtered_export(&scope.logical, &logical, policy)?;
         let bytes = export.encode()?;
         if bytes.is_empty() {
@@ -305,6 +316,8 @@ impl SharingExportManager {
             audit_operation_id,
             AuditAction::ExportCompletion,
         )?;
+        #[cfg(test)]
+        crash_if_requested("after_completion_commit");
         Ok(export)
     }
 }
@@ -1872,23 +1885,34 @@ mod tests {
     fn process_crash_after_authorization_commit_recovers_only_that_audit_boundary()
     -> Result<(), String> {
         const ROOT_ENV: &str = "WORLDDB_M7_12_CRASH_ROOT";
+        const ARTIFACT_ENV: &str = "WORLDDB_M7_16F_AUTH_ARTIFACT";
         const TEST_NAME: &str = "sharing_export::tests::process_crash_after_authorization_commit_recovers_only_that_audit_boundary";
         if let Ok(root) = env::var(ROOT_ENV) {
             let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
             let space = id::<HistorySpaceId>(1)?;
             let source_id = id::<worlddb_core::SourceId>(2)?;
             let history = policy(space, source_id, None)?;
-            let _ = SharingExportManager::new(layout)
+            let export = SharingExportManager::new(layout)
                 .export(scope(space, Revision::FIRST_COMMIT)?, view(&history)?);
-            return Err(String::from(
-                "child returned instead of crashing after the authorization commit",
-            ));
+            let export = export.map_err(|error| error.to_string())?;
+            fs::write(
+                env::var(ARTIFACT_ENV).map_err(|error| error.to_string())?,
+                export.encode().map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            return Err(String::from("child returned and wrote a sharing artifact"));
         }
 
         let (_area, layout, _, _) = fixture()?;
+        let area_root = layout
+            .root()
+            .parent()
+            .ok_or_else(|| String::from("fixture root has no parent"))?;
+        let artifact_path = area_root.join("authorization-crash.wdbse");
         let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
             .args(["--exact", TEST_NAME, "--nocapture"])
             .env(ROOT_ENV, layout.root())
+            .env(ARTIFACT_ENV, &artifact_path)
             .env("WORLDDB_M7_12_CRASH_AFTER_AUTH_COMMIT", "1")
             .status()
             .map_err(|error| error.to_string())?;
@@ -1898,6 +1922,7 @@ mod tests {
                 status.code()
             ));
         }
+        assert!(!artifact_path.exists());
 
         let reopened = DatabaseLayout::open(layout.root()).map_err(|error| error.to_string())?;
         let lock = reopened
@@ -1925,6 +1950,108 @@ mod tests {
             record.record().outcome(),
             worlddb_core::AuditOutcome::Succeeded
         );
+        Ok(())
+    }
+
+    #[test]
+    fn process_crash_after_logical_return_or_completion_commits_no_incomplete_artifact()
+    -> Result<(), String> {
+        const ROOT_ENV: &str = "WORLDDB_M7_16F_SHARING_ROOT";
+        const ARTIFACT_ENV: &str = "WORLDDB_M7_16F_SHARING_ARTIFACT";
+        const TEST_NAME: &str = "sharing_export::tests::process_crash_after_logical_return_or_completion_commits_no_incomplete_artifact";
+        if let Ok(root) = env::var(ROOT_ENV) {
+            let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+            let space = id::<HistorySpaceId>(1)?;
+            let source_id = id::<worlddb_core::SourceId>(2)?;
+            let history = policy(space, source_id, None)?;
+            let export = SharingExportManager::new(layout)
+                .export(scope(space, Revision::FIRST_COMMIT)?, view(&history)?)
+                .map_err(|error| error.to_string())?;
+            fs::write(
+                env::var(ARTIFACT_ENV).map_err(|error| error.to_string())?,
+                export.encode().map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            return Err(String::from(
+                "child returned and wrote a sharing artifact instead of crashing",
+            ));
+        }
+
+        for (checkpoint, expected_audits) in [
+            ("after_logical_return", 1_usize),
+            ("after_completion_commit", 2_usize),
+        ] {
+            let (_area, layout, _, _) = fixture()?;
+            let area_root = layout
+                .root()
+                .parent()
+                .ok_or_else(|| String::from("fixture root has no parent"))?;
+            let artifact_path = area_root.join(format!("{checkpoint}.wdbse"));
+            let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, layout.root())
+                .env(ARTIFACT_ENV, &artifact_path)
+                .env("WORLDDB_M7_16F_SHARING_CRASH_AT", checkpoint)
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.code() != Some(86) {
+                return Err(format!(
+                    "sharing-export child at {checkpoint} exited with {:?}, expected 86",
+                    status.code()
+                ));
+            }
+            assert!(
+                !artifact_path.exists(),
+                "no sharing artifact is published after process exit at {checkpoint}"
+            );
+
+            let reopened =
+                DatabaseLayout::open(layout.root()).map_err(|error| error.to_string())?;
+            let lock = reopened
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let recovered = RecoveryManager::new(reopened.clone())
+                .recover(&lock)
+                .map_err(|error| error.to_string())?;
+            assert!(recovered.report().is_clean());
+            drop(lock);
+            let audits = export_audits(&reopened)?;
+            match audits.as_slice() {
+                [authorization] => {
+                    assert_eq!(expected_audits, 1);
+                    assert_eq!(authorization.action(), AuditAction::ExportAuthorization);
+                }
+                [authorization, completion] => {
+                    assert_eq!(expected_audits, 2);
+                    assert_eq!(authorization.action(), AuditAction::ExportAuthorization);
+                    assert_eq!(completion.action(), AuditAction::ExportCompletion);
+                    assert_eq!(
+                        authorization.audit_operation_id(),
+                        completion.audit_operation_id()
+                    );
+                }
+                _ => {
+                    return Err(format!(
+                        "unexpected sharing audit count after {checkpoint}: {}",
+                        audits.len()
+                    ));
+                }
+            }
+            let pin_directory = reopened.staging_directory().join("backup-pins");
+            let remaining_pins = match fs::read_dir(pin_directory) {
+                Ok(entries) => entries
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| error.to_string())?
+                    .len(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+                Err(error) => return Err(error.to_string()),
+            };
+            assert_eq!(
+                remaining_pins, 0,
+                "logical export pins are released after return"
+            );
+            assert!(!artifact_path.exists());
+        }
         Ok(())
     }
 }

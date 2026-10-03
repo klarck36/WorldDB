@@ -487,6 +487,8 @@ impl LogicalExportManager {
             .pin_export_snapshot(&lock, references)
             .map_err(LogicalExportError::Compaction)?;
         drop(lock);
+        #[cfg(test)]
+        crash_if_requested("pin_acquired");
 
         let mut records = Vec::new();
         let history_store = HistorySegmentStore::new(layout);
@@ -508,7 +510,10 @@ impl LogicalExportManager {
                 return Err(LogicalExportError::ResourceLimit);
             }
         }
-        build_export(database_id, head.revision(), &scope, records)
+        let export = build_export(database_id, head.revision(), &scope, records)?;
+        #[cfg(test)]
+        crash_if_requested("before_return");
+        Ok(export)
     }
 
     pub(crate) fn export_locked(
@@ -570,6 +575,15 @@ impl LogicalExportManager {
             }
         }
         build_export(database_id, head.revision(), &scope, records)
+    }
+}
+
+#[cfg(test)]
+fn crash_if_requested(checkpoint: &str) {
+    if std::env::var("WORLDDB_M7_16F_LOGICAL_CRASH_AT")
+        .is_ok_and(|requested| requested == checkpoint)
+    {
+        std::process::exit(86);
     }
 }
 
@@ -1797,6 +1811,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
     use worlddb_core::{
         AuthorizationMode, Capability, CapabilityGrant, CapabilityRule, DatabaseId, DomainId,
@@ -2401,6 +2416,89 @@ mod tests {
             .reclaim_retired(&compaction_lock, &history_references)
             .map_err(|error| error.to_string())?;
         assert_eq!(reclaimed.reclaimed(), history_references);
+        Ok(())
+    }
+
+    #[test]
+    fn process_crash_during_logical_export_returns_no_artifact_and_reclaims_stale_pin()
+    -> Result<(), String> {
+        const ROOT_ENV: &str = "WORLDDB_M7_16F_LOGICAL_ROOT";
+        const ARTIFACT_ENV: &str = "WORLDDB_M7_16F_LOGICAL_ARTIFACT";
+        const TEST_NAME: &str = "logical_export::tests::process_crash_during_logical_export_returns_no_artifact_and_reclaims_stale_pin";
+        if let Ok(root) = env::var(ROOT_ENV) {
+            let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+            let permissions = policy(None)?;
+            let export = LogicalExportManager::new(layout)
+                .export(
+                    scope(id::<HistorySpaceId>(7)?, Revision::FIRST_COMMIT)
+                        .map_err(|error| error.to_string())?,
+                    policy_view(&permissions)?,
+                )
+                .map_err(|error| error.to_string())?;
+            let bytes = export.encode().map_err(|error| error.to_string())?;
+            fs::write(
+                env::var(ARTIFACT_ENV).map_err(|error| error.to_string())?,
+                bytes,
+            )
+            .map_err(|error| error.to_string())?;
+            return Err(String::from(
+                "child returned and wrote a logical artifact instead of crashing",
+            ));
+        }
+
+        for checkpoint in ["pin_acquired", "before_return"] {
+            let area = TestArea::create()?;
+            let layout = area.layout()?;
+            install_two_segment_history(&layout)?;
+            let artifact_path = area.0.join(format!("{checkpoint}.wdblex"));
+            let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, layout.root())
+                .env(ARTIFACT_ENV, &artifact_path)
+                .env("WORLDDB_M7_16F_LOGICAL_CRASH_AT", checkpoint)
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.code() != Some(86) {
+                return Err(format!(
+                    "logical-export child at {checkpoint} exited with {:?}, expected 86",
+                    status.code()
+                ));
+            }
+            assert!(
+                !artifact_path.exists(),
+                "no artifact is published after process exit at {checkpoint}"
+            );
+
+            let reopened =
+                DatabaseLayout::open(layout.root()).map_err(|error| error.to_string())?;
+            let lock = reopened
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let recovered = RecoveryManager::new(reopened.clone())
+                .recover(&lock)
+                .map_err(|error| error.to_string())?;
+            assert!(recovered.report().is_clean());
+            let manifest = ManifestStore::new(reopened.clone())
+                .read_current()
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| String::from("logical-export fixture manifest is missing"))?;
+            let history_references = manifest
+                .segments()
+                .iter()
+                .copied()
+                .filter(|reference| reference.kind() == ManifestSegmentKind::History)
+                .collect::<Vec<_>>();
+            assert_eq!(history_references.len(), 2);
+            let compacted = CompactionManager::new(reopened)
+                .compact_history(&lock)
+                .map_err(|error| error.to_string())?;
+            assert!(compacted.compacted());
+            assert_eq!(compacted.reclamation().reclaimed(), history_references);
+            assert!(
+                !artifact_path.exists(),
+                "no incomplete artifact is visible after reopening"
+            );
+        }
         Ok(())
     }
 
