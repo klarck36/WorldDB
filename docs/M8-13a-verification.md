@@ -3,6 +3,7 @@
 **Ergebnis:** PASS auf Windows
 **Plattform-Folgeprüfung:** Linux/macOS bleibt bis M9-07 zurückgestellt
 **Vertrag:** `docs/architecture/M8-13a-security-policy-management-contract.md`
+**Implementierungs-Commit:** `422712d7d3d48d0cf9c462231f28f7b4f6cf79ce`
 **Normative Grundlage:** `docs/contract/ADR-033-security-policy.md`, `docs/contract/ADR-043-project-host-binding.md`
 
 ## Gelieferte Funktionen
