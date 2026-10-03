@@ -403,6 +403,93 @@ fn install_cli_export_history(root: &Path) -> Result<HistorySpaceId, String> {
 }
 
 #[cfg(windows)]
+fn install_cli_purge_history(root: &Path) -> Result<(HistorySpaceId, HistorySpaceId), String> {
+    let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+    let lock = layout
+        .try_writer_lock()
+        .map_err(|error| error.to_string())?;
+    let current = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("purge fixture is missing CURRENT"))?;
+    let policy_segment_ids = current
+        .segments()
+        .iter()
+        .filter(|reference| reference.kind() == ManifestSegmentKind::SecurityPolicy)
+        .map(|reference| reference.id())
+        .collect::<Vec<_>>();
+    let policy_history = SecurityPolicyHistoryStore::new(layout.clone())
+        .load_history(current.revision(), &policy_segment_ids)
+        .map_err(|error| error.to_string())?;
+    let current_policy_version = policy_history
+        .policy()
+        .versions()
+        .last()
+        .cloned()
+        .ok_or_else(|| String::from("purge fixture has no current policy version"))?;
+    let current_audit_retention = policy_history
+        .audit_retention_at(current.revision())
+        .map_err(|error| error.to_string())?;
+    let root_space = domain_id::<HistorySpaceId>(90)?;
+    let target_space = domain_id::<HistorySpaceId>(91)?;
+    let dependant_space = domain_id::<HistorySpaceId>(92)?;
+    let revision = Revision::new(2).map_err(|error| error.to_string())?;
+    let records = [
+        Record::HistorySpaceDefinition(
+            HistorySpaceDefinition::new(root_space, None, Revision::GENESIS)
+                .map_err(|error| error.to_string())?,
+        ),
+        Record::HistorySpaceDefinition(
+            HistorySpaceDefinition::new(target_space, Some(root_space), Revision::GENESIS)
+                .map_err(|error| error.to_string())?,
+        ),
+        Record::HistorySpaceDefinition(
+            HistorySpaceDefinition::new(dependant_space, Some(target_space), Revision::GENESIS)
+                .map_err(|error| error.to_string())?,
+        ),
+    ];
+    let history_receipt = HistorySegmentStore::new(layout.clone())
+        .write_segment(&lock, &records)
+        .map_err(|error| error.to_string())?;
+    let continued_policy = SecurityPolicyVersion::new(
+        revision,
+        current_policy_version.epoch(),
+        current_policy_version.snapshot().clone(),
+    );
+    let policy_receipt = SecurityPolicyHistoryStore::new(layout.clone())
+        .write_version(&lock, &continued_policy, None, current_audit_retention)
+        .map_err(|error| error.to_string())?;
+    let mut references = current.segments().to_vec();
+    references.push(ManifestSegmentReference::new(
+        ManifestSegmentKind::History,
+        history_receipt.id(),
+        history_receipt.content_digest(),
+        revision,
+    ));
+    references.push(ManifestSegmentReference::new(
+        ManifestSegmentKind::SecurityPolicy,
+        policy_receipt.id(),
+        policy_receipt.content_digest(),
+        revision,
+    ));
+    ManifestSnapshot::new(revision, references.clone()).map_err(|error| error.to_string())?;
+    WalPrepareLog::new(&layout)
+        .commit_manifest_snapshot(&lock, operation_id(93)?, references, &[])
+        .map_err(|error| error.to_string())?;
+    RecoveryManager::new(layout.clone())
+        .recover(&lock)
+        .map_err(|error| error.to_string())?;
+    let report = StorageVerifier::new(layout)
+        .verify(&lock)
+        .map_err(|error| error.to_string())?;
+    if !report.is_clean() || report.safe_revision() != revision {
+        return Err("purge fixture did not verify cleanly".to_owned());
+    }
+    drop(lock);
+    Ok((target_space, dependant_space))
+}
+
+#[cfg(windows)]
 fn breaking_migration_plan_frame() -> Result<(Vec<u8>, MigrationStepId), String> {
     let step_id = domain_id::<MigrationStepId>(41)?;
     let source_predicate = domain_id::<PredicateId>(42)?;
@@ -1582,5 +1669,258 @@ fn authorized_cli_backup_and_restore_clone_cover_both_profiles() -> Result<(), S
     assert!(audit_restored_text.contains("\"target_verified\":true"));
     assert!(!audit_restored_text.contains(&source_arg));
     assert!(!audit_restored_text.contains(&audit_destination_arg));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn cli_purge_plan_requires_explicit_cascade_confirmation_and_preserves_source() -> Result<(), String>
+{
+    let area = TempArea::create()?;
+    let source = area.path("purge-source");
+    create_host_policy_project(
+        &source,
+        &[
+            Capability::DataExport,
+            Capability::ProjectRead,
+            Capability::Purge,
+        ],
+    )?;
+    let (target_space, dependant_space) = install_cli_purge_history(&source)?;
+    let source_arg = source.to_string_lossy().into_owned();
+    let target_identity = format!("history-space:{target_space}");
+    let destination = area.path("purge-destination");
+    let destination_arg = destination.to_string_lossy().into_owned();
+    let external_copy = format!("exact-backup:{}", "11".repeat(32));
+
+    let rejected_report = area.path("purge-reject-plan.json");
+    let rejected_report_arg = rejected_report.to_string_lossy().into_owned();
+    let rejected_plan = run(&[
+        "v1",
+        "purge",
+        "plan",
+        &source_arg,
+        "--destination",
+        &destination_arg,
+        "--report",
+        &rejected_report_arg,
+        "--target",
+        &target_identity,
+        "--mode",
+        "reject-if-referenced",
+        "--external-inventory",
+        "incomplete",
+        "--known-copy",
+        &external_copy,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(rejected_plan.status.success());
+    let rejected_summary = String::from_utf8_lossy(&rejected_plan.stdout);
+    assert!(rejected_summary.contains("approval_possible=false"));
+    assert!(rejected_summary.contains("dependants=1"));
+    let rejected_fingerprint = rejected_summary
+        .split("plan_fingerprint=")
+        .nth(1)
+        .and_then(|tail| tail.split(',').next())
+        .ok_or_else(|| String::from("reject plan did not report its fingerprint"))?;
+    let rejected_report_bytes = fs::read(&rejected_report).map_err(|error| error.to_string())?;
+    let rejected_report_text = String::from_utf8_lossy(&rejected_report_bytes);
+    assert!(rejected_report_text.contains("\"approval_possible\":false"));
+    assert!(rejected_report_text.contains(&format!("history-space:{dependant_space}")));
+    assert!(rejected_report_text.contains("\"kind\":\"exact-backup\""));
+    assert!(!rejected_report_text.contains(&source_arg));
+    assert!(!rejected_report_text.contains(&destination_arg));
+    assert!(!rejected_report_text.contains(&rejected_report_arg));
+    assert!(!destination.exists());
+
+    let reject_run = run(&[
+        "v1",
+        "purge",
+        "run",
+        &source_arg,
+        "--destination",
+        &destination_arg,
+        "--confirm-plan",
+        rejected_fingerprint,
+        "--target",
+        &target_identity,
+        "--mode",
+        "reject-if-referenced",
+        "--external-inventory",
+        "incomplete",
+        "--known-copy",
+        &external_copy,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(!reject_run.status.success());
+    assert!(String::from_utf8_lossy(&reject_run.stderr).contains("InvalidRequest"));
+    assert!(!destination.exists());
+
+    let cascade_report = area.path("purge-cascade-plan.json");
+    let cascade_report_arg = cascade_report.to_string_lossy().into_owned();
+    let cascade_plan = run(&[
+        "v1",
+        "purge",
+        "plan",
+        &source_arg,
+        "--destination",
+        &destination_arg,
+        "--report",
+        &cascade_report_arg,
+        "--target",
+        &target_identity,
+        "--mode",
+        "cascade",
+        "--external-inventory",
+        "incomplete",
+        "--known-copy",
+        &external_copy,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(cascade_plan.status.success());
+    let cascade_summary = String::from_utf8_lossy(&cascade_plan.stdout);
+    assert!(cascade_summary.contains("approval_possible=true"));
+    assert!(cascade_summary.contains("dependants=1"));
+    let fingerprint = cascade_summary
+        .split("plan_fingerprint=")
+        .nth(1)
+        .and_then(|tail| tail.split(',').next())
+        .ok_or_else(|| String::from("cascade plan did not report its fingerprint"))?
+        .to_owned();
+    let cascade_report_bytes = fs::read(&cascade_report).map_err(|error| error.to_string())?;
+    let cascade_report_text = String::from_utf8_lossy(&cascade_report_bytes);
+    assert!(cascade_report_text.contains("\"approval_possible\":true"));
+    assert!(cascade_report_text.contains(&format!("\"plan_fingerprint\":\"{fingerprint}\"")));
+    assert!(cascade_report_text.contains(&format!("history-space:{target_space}")));
+    assert!(cascade_report_text.contains(&format!("history-space:{dependant_space}")));
+    assert!(cascade_report_text.contains("\"index_families_to_rebuild\":["));
+    assert!(cascade_report_text.contains("\"secure_erase_claimed\":false"));
+
+    let before_source = snapshot_tree(&source)?;
+    let source_layout = DatabaseLayout::open(&source).map_err(|error| error.to_string())?;
+    let source_database_id = source_layout
+        .database_id()
+        .ok_or_else(|| String::from("purge source DatabaseId is missing"))?;
+    let source_revision = ManifestStore::new(source_layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| String::from("purge source CURRENT is missing"))?
+        .revision();
+
+    let run = run(&[
+        "--format=jsonl",
+        "v1",
+        "purge",
+        "run",
+        &source_arg,
+        "--destination",
+        &destination_arg,
+        "--confirm-plan",
+        &fingerprint,
+        "--target",
+        &target_identity,
+        "--mode",
+        "cascade",
+        "--external-inventory",
+        "incomplete",
+        "--known-copy",
+        &external_copy,
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(
+        run.status.success(),
+        "purge run failed: stdout={}, stderr={}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let run_text = String::from_utf8_lossy(&run.stdout);
+    assert!(run_text.contains("\"type\":\"purge_run\""));
+    assert!(run_text.contains(&format!("\"plan_fingerprint\":\"{fingerprint}\"")));
+    assert!(run_text.contains("\"source_modified\":false"));
+    assert!(run_text.contains("\"secure_erase_claimed\":false"));
+    assert!(!run_text.contains(&source_arg));
+    assert!(!run_text.contains(&destination_arg));
+    assert_eq!(snapshot_tree(&source)?, before_source);
+
+    let destination_layout =
+        DatabaseLayout::open(&destination).map_err(|error| error.to_string())?;
+    let destination_database_id = destination_layout
+        .database_id()
+        .ok_or_else(|| String::from("purge destination DatabaseId is missing"))?;
+    assert_ne!(destination_database_id, source_database_id);
+    let destination_lock = destination_layout
+        .try_read_only_lock()
+        .map_err(|error| error.to_string())?;
+    let verify = StorageVerifier::new(destination_layout.clone())
+        .verify(&destination_lock)
+        .map_err(|error| error.to_string())?;
+    assert!(verify.is_clean());
+    assert_eq!(verify.safe_revision().value(), source_revision.value() + 1);
+    let purge_report =
+        fs::read(destination.join("PURGE_REPORT")).map_err(|error| error.to_string())?;
+    assert!(purge_report.starts_with(b"WDBPRG\0\x01"));
+    let report_digest = blake3::hash(&purge_report);
+    assert!(run_text.contains(&format!("\"report_digest\":\"{}\"", report_digest.to_hex())));
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn cli_purge_requires_current_purge_permission_and_rejects_in_place_destination()
+-> Result<(), String> {
+    let area = TempArea::create()?;
+    let source = area.path("purge-unauthorized-source");
+    create_host_policy_project(&source, &[Capability::DataExport, Capability::ProjectRead])?;
+    install_cli_purge_history(&source)?;
+    let source_arg = source.to_string_lossy().into_owned();
+    let destination = area.path("purge-unauthorized-destination");
+    let destination_arg = destination.to_string_lossy().into_owned();
+    let report = area.path("purge-unauthorized-plan.json");
+    let report_arg = report.to_string_lossy().into_owned();
+    let target = format!("history-space:{}", domain_id::<HistorySpaceId>(91)?);
+    let before_source = snapshot_tree(&source)?;
+    let denied = run(&[
+        "v1",
+        "purge",
+        "plan",
+        &source_arg,
+        "--destination",
+        &destination_arg,
+        "--report",
+        &report_arg,
+        "--target",
+        &target,
+        "--mode",
+        "cascade",
+        "--external-inventory",
+        "incomplete",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("Unauthorized"));
+    assert!(!report.exists());
+    assert!(!destination.exists());
+
+    let in_place = run(&[
+        "v1",
+        "purge",
+        "plan",
+        &source_arg,
+        "--destination",
+        &source_arg,
+        "--report",
+        &report_arg,
+        "--target",
+        &target,
+        "--mode",
+        "cascade",
+        "--external-inventory",
+        "incomplete",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(!in_place.status.success());
+    assert!(String::from_utf8_lossy(&in_place.stderr).contains("InvalidRequest"));
+    assert!(!report.exists());
+    assert_eq!(snapshot_tree(&source)?, before_source);
     Ok(())
 }

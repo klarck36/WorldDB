@@ -909,8 +909,32 @@ fn verify_rewritten_records(
     source: &LogicalExport,
     plan: &PurgePlan,
 ) -> Result<(), PurgeRewriteError> {
+    // A purged HistorySpace no longer has a definition in the rewritten database, so it cannot
+    // remain explicitly selected for the verification export. Keep every source selection that
+    // still has a retained definition; dependency closure guarantees retained child spaces keep
+    // their ancestry definitions too.
+    let mut retained_history_spaces = std::collections::BTreeSet::new();
+    for entry in source.records() {
+        if !plan
+            .is_affected(entry.record())
+            .map_err(PurgeRewriteError::PurgePlan)?
+        {
+            for identity in LogicalImportIdentity::defined_by_record(entry.record().record()) {
+                if let LogicalImportIdentity::HistorySpace(id) = identity {
+                    retained_history_spaces.insert(id);
+                }
+            }
+        }
+    }
+    let verification_scope = LogicalExportScope::new(
+        scope.from_revision(),
+        scope.through_revision(),
+        retained_history_spaces.into_iter().collect(),
+        scope.record_kinds().to_vec(),
+    )
+    .map_err(PurgeRewriteError::Export)?;
     let rewritten = LogicalExportManager::new(layout.clone())
-        .export_locked(scope.clone(), policy, lock)
+        .export_locked(verification_scope, policy, lock)
         .map_err(PurgeRewriteError::Export)?;
     let mut expected = Vec::new();
     for entry in source.records() {

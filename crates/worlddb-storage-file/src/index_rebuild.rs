@@ -421,7 +421,11 @@ impl IndexGenerationStore {
         Self::inventory_all_locked(layout, &writer_lock)
     }
 
-    pub(crate) fn inventory_all_locked(
+    /// Scans all generations while the caller holds the database writer lock.
+    ///
+    /// The lock must belong to `layout`; the scan fails closed on unknown files, malformed
+    /// pointers, links, corrupt generations, and dangling references.
+    pub fn inventory_all_locked(
         layout: &DatabaseLayout,
         writer_lock: &WriterLock,
     ) -> Result<IndexStorageInventory, IndexRebuildError> {

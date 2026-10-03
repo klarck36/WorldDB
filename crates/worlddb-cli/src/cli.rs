@@ -14,28 +14,31 @@ use worlddb_core::{
     AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
     AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, AuthorizationDecision,
     AuthorizationMode, BreakingMigrationAdminAction, Bytes, Capability, DatabaseId, DomainId,
-    EntityId, EntityTypeId, EventAttributeId, EventKindId, EventRoleId, HistorySpaceId, LayerId,
-    MigrationAdminDecision, MigrationCategory, MigrationDryRun, MigrationId,
+    EntityId, EntityTypeId, EventAttributeId, EventKindId, EventRoleId, HistorySpaceId,
+    IndexFamily, LayerId, MigrationAdminDecision, MigrationCategory, MigrationDryRun, MigrationId,
     MigrationItemResolution, MigrationPlan, MigrationRunId, MigrationRunJournalState,
     MigrationStepId, MigrationStepInput, MigrationTransformer, OperationId, PerspectiveId,
     PolicyTarget, PredicateId, PrincipalId, Record, RecordKind, Revision, RevisionBackend,
     SchemaDefinition, SchemaHistoryReferenceModel, SchemaMode, SchemaRevision, SecurityEpoch,
     TimelineId, UpgradePlanId, UpgradeRunId, ValidatedMigrationDecisions, decode_record,
-    decode_record_ref,
+    decode_record_ref, encode_record_ref,
 };
 use worlddb_storage_file::{
     BackupAuthenticity, BackupError, BackupProfile, BackupVerification, DatabaseLayout,
     ExactBackupManager, FileStoreGuardedMigrationRun, FormatProbeError, HistorySegmentStore,
-    LogicalExport, LogicalExportError, LogicalExportManager, LogicalExportScope,
-    LogicalImportDestinationInventory, LogicalImportError, LogicalImportIdMapping,
-    LogicalImportIdentity, LogicalImportManager, LogicalImportPlan, Manifest, ManifestSegmentKind,
-    ManifestStore, MigrationRestorePointError, RecoveryDisposition, RecoveryError, RecoveryManager,
-    RestoreError, RestoreManager, SalvageError, SalvageInventorySource, SalvageManager,
-    SalvageSegmentOutcome, SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore,
-    SharingExportError, SharingExportManager, SharingExportScope, StorageDamageClass,
-    StorageFileError, StorageUpgradeBudget, StorageUpgradeManager, StorageUpgradeRestoreTargets,
-    StorageVerifier, StorageVerifyAction, StorageVerifyError, StorageVerifyReport, WalPrepareLog,
-    WriterLock, WriterLockError, verify_audit_complete_backup, verify_exact_backup,
+    IndexGenerationStore, LogicalExport, LogicalExportError, LogicalExportManager,
+    LogicalExportScope, LogicalImportDestinationInventory, LogicalImportError,
+    LogicalImportIdMapping, LogicalImportIdentity, LogicalImportManager, LogicalImportPlan,
+    Manifest, ManifestSegmentKind, ManifestStore, MigrationRestorePointError, PurgeCascadePlan,
+    PurgeError, PurgeExternalArtifact, PurgeExternalArtifactKind, PurgePlan, PurgePlanManager,
+    PurgeRecordId, PurgeRewriteError, PurgeRewriteManager, PurgeRewriteRequest,
+    PurgeSidecarInventory, RecoveryDisposition, RecoveryError, RecoveryManager, RestoreError,
+    RestoreManager, SalvageError, SalvageInventorySource, SalvageManager, SalvageSegmentOutcome,
+    SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, SharingExportError,
+    SharingExportManager, SharingExportScope, StorageDamageClass, StorageFileError,
+    StorageUpgradeBudget, StorageUpgradeManager, StorageUpgradeRestoreTargets, StorageVerifier,
+    StorageVerifyAction, StorageVerifyError, StorageVerifyReport, WalPrepareLog, WriterLock,
+    WriterLockError, verify_audit_complete_backup, verify_exact_backup,
 };
 
 use crate::adapter_protocol::{
@@ -57,8 +60,9 @@ const EXIT_INTERNAL: u8 = 70;
 const LOGICAL_ARTIFACT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const LOGICAL_IMPORT_PLAN_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const LOGICAL_IMPORT_MAX_INVENTORY_IDENTITIES: usize = 2_000_000;
+const PURGE_PLAN_REPORT_MAX_BYTES: usize = 512 * 1024 * 1024;
 
-const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 migration               Plan, preview, run, or resume a schema migration\n  v1 export logical|share    Export a declared, authorized scope\n  v1 import plan|prepare     Create or validate an explicit remap plan\n  v1 storage upgrade          Upgrade the storage format with restore proof\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
+const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 migration               Plan, preview, run, or resume a schema migration\n  v1 export logical|share    Export a declared, authorized scope\n  v1 import plan|prepare     Create or validate an explicit remap plan\n  v1 purge plan|run          Review and publish a purge as a new database\n  v1 storage upgrade          Upgrade the storage format with restore proof\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
 
 const HELP_ADAPTER_RUN: &str = "Usage: worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\n\nThe manifest binds the operation, deterministic seed, ID mapping, protocol capabilities, and process budgets. The adapter receives only framed stdin/stdout data; the output file is written only after a clean adapter exit.";
 const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <database-directory>\n\nRuns read-only storage verification under a shared lock. The report includes safe_revision, disposition, observed damage classes, and safe next actions.";
@@ -70,6 +74,7 @@ const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore
 const HELP_MIGRATION: &str = "Usage: worlddb-cli [--format human|jsonl] v1 migration plan|dry-run|run|resume <database-directory> --plan-file <canonical-MigrationPlan-record> [--run-id <uuid>] [--step <step-uuid> [--operation-id <uuid>] [--record <canonical-record-file>...]] [--omit <record-index>|--replace <record-index> <canonical-record-file>]... [--backup <exact-backup-directory> --restore <new-clone-directory> --confirm-breaking]\n\nPlan and dry-run are read-only. Every supplied record file contains exactly one canonical WorldDB record frame. Step groups must match the plan order. Run and resume require current MigrationExecute permission and stable run/step operation IDs. Breaking requires an exact backup, a real verified restore clone, and the explicit --confirm-breaking flag; resume uses the retained backup and a new restore-clone destination.";
 const HELP_STORAGE_UPGRADE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 storage upgrade <database-directory> --backup <new-exact-backup-directory> --restore <new-clone-directory> --confirm\n\nPrepares the supported CURRENT v1 to v2 upgrade, creates an exact backup, verifies a real clone restore, requires current StorageFormatUpgrade, BackupCreate, and BackupRestore permissions, then publishes the format upgrade. The --confirm flag is mandatory.";
 const HELP_EXPORT_IMPORT: &str = "Usage: worlddb-cli [--format human|jsonl] v1 export logical|share <database> --output <new-artifact> --from <revision> --through <revision> --history-space <uuid>... --class <RecordKind>...\n       worlddb-cli [--format human|jsonl] v1 import plan <destination> --input <logical-artifact> --output <new-plan> [--map <typed-identity>=<typed-identity>]...\n       worlddb-cli [--format human|jsonl] v1 import prepare <destination> --input <logical-artifact> --plan-file <canonical-plan>\n\nLogical export embeds the full scope and omission manifest. Sharing export filters records by current rights and never reports omission counts. Import plan uses explicit typed remaps such as entity:<uuid>=entity:<uuid> or record:7:<uuid>=record:7:<uuid>; prepare validates the plan against the current destination inventory and DataImport permission. Prepare does not publish records to the database. Valid remap families: history-space, layer, perspective, timeline, entity, entity-type, predicate, event-kind, event-role, event-attribute, and record:<RecordRef wire tag>.";
+const HELP_PURGE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 purge plan <database> --destination <new-database-dir> --report <new-report.json> --target <typed-identity>... --mode reject-if-referenced|cascade --external-inventory complete|incomplete [--known-copy <kind>:<blake3-hex>]...\n       worlddb-cli [--format human|jsonl] v1 purge run <database> --destination <new-database-dir> --confirm-plan <fingerprint> --target <typed-identity>... --mode reject-if-referenced|cascade --external-inventory complete|incomplete [--known-copy <kind>:<blake3-hex>]...\n\nPlan inventories every HistorySpace, revision-bearing record class, local index generation, and declared external copy. Its report lists every target and dependant record. Run rebuilds the same approved scope and requires the exact plan fingerprint. It publishes only a new DatabaseId, stores PURGE_REPORT in the destination, and never overwrites the source or an existing destination. Known-copy kinds: exact-backup, audit-complete-backup, logical-export, sharing-export. Typed targets use the same family:<uuid> and record:<RecordRef wire tag>:<uuid> syntax as import mappings. External-copy completeness is an explicit operator declaration; purge never claims secure erasure.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -90,6 +95,7 @@ enum HelpScope {
     Migration,
     StorageUpgrade,
     ExportImport,
+    Purge,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,6 +183,62 @@ struct ImportPrepareSummary {
     record_kind_count: usize,
     omitted_record_class_count: usize,
     omitted_storage_class_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PurgeMode {
+    RejectIfReferenced,
+    Cascade,
+}
+
+impl PurgeMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::RejectIfReferenced => "reject-if-referenced",
+            Self::Cascade => "cascade",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PurgeCommandRequest {
+    database_path: PathBuf,
+    destination_path: PathBuf,
+    report_path: Option<PathBuf>,
+    targets: Vec<LogicalImportIdentity>,
+    mode: PurgeMode,
+    known_external_artifacts: Vec<PurgeExternalArtifact>,
+    external_inventory_complete: bool,
+    confirmation: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PurgePlanSummary {
+    source_database_id: DatabaseId,
+    source_revision: u64,
+    mode: PurgeMode,
+    target_count: usize,
+    target_record_count: usize,
+    dependant_count: usize,
+    approval_possible: bool,
+    fingerprint: [u8; 32],
+    report_digest: [u8; 32],
+    external_inventory_complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PurgeRunSummary {
+    source_database_id: DatabaseId,
+    destination_database_id: DatabaseId,
+    source_revision: u64,
+    destination_revision: u64,
+    mode: PurgeMode,
+    removed_record_count: usize,
+    plan_fingerprint: [u8; 32],
+    report_digest: [u8; 32],
+    operation_id: OperationId,
+    audit_record_id: worlddb_core::AuditRecordId,
+    external_inventory_complete: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -435,6 +497,8 @@ enum Success {
     Export(ExportSummary),
     ImportPlan(ImportPlanSummary),
     ImportPrepared(ImportPrepareSummary),
+    PurgePlan(PurgePlanSummary),
+    PurgeRun(PurgeRunSummary),
     AdapterRun {
         protocol_major: u16,
         protocol_minor: u16,
@@ -652,6 +716,9 @@ fn parse_help_scope(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     if matches!(scope.to_str(), Some("export" | "import")) && arguments.is_empty() {
         return Ok(Success::Help(HelpScope::ExportImport));
     }
+    if scope == "purge" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Purge));
+    }
     Err(CliError::invalid_request())
 }
 
@@ -704,6 +771,9 @@ fn parse_v1_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     }
     if command == "import" {
         return parse_import_command(arguments);
+    }
+    if command == "purge" {
+        return parse_purge_command(arguments);
     }
     Err(CliError::unsupported_operation())
 }
@@ -1043,6 +1113,161 @@ fn parse_import_command(mut arguments: VecDeque<OsString>) -> Result<Success, Cl
         }
         Some(_) => Err(CliError::unsupported_operation()),
         None => Err(CliError::invalid_request()),
+    }
+}
+
+fn parse_purge_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(action) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::Purge));
+    };
+    if action == "--help" || action == "-h" || action == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::Purge))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    let plan_action = match action.to_str() {
+        Some("plan") => true,
+        Some("run") => false,
+        Some(_) => return Err(CliError::unsupported_operation()),
+        None => return Err(CliError::invalid_request()),
+    };
+    let database_path = arguments
+        .pop_front()
+        .map(PathBuf::from)
+        .ok_or_else(CliError::invalid_request)?;
+    let mut destination_path = None;
+    let mut report_path = None;
+    let mut targets = Vec::new();
+    let mut mode = None;
+    let mut known_external_artifacts = Vec::new();
+    let mut external_inventory_complete = None;
+    let mut confirmation = None;
+    while let Some(option) = arguments.pop_front() {
+        match option.to_str() {
+            Some("--destination") if destination_path.is_none() => {
+                destination_path = Some(PathBuf::from(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                ));
+            }
+            Some("--report") if plan_action && report_path.is_none() => {
+                report_path = Some(PathBuf::from(
+                    arguments
+                        .pop_front()
+                        .ok_or_else(CliError::invalid_request)?,
+                ));
+            }
+            Some("--target") => {
+                targets.push(parse_import_identity(&pop_cli_text(&mut arguments)?)?);
+                if targets.len() > 1_000_000 {
+                    return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+                }
+            }
+            Some("--mode") if mode.is_none() => {
+                mode = Some(parse_purge_mode(&pop_cli_text(&mut arguments)?)?);
+            }
+            Some("--known-copy") => {
+                known_external_artifacts.push(parse_purge_external_artifact(&pop_cli_text(
+                    &mut arguments,
+                )?)?);
+                if known_external_artifacts.len() > 1_000_000 {
+                    return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+                }
+            }
+            Some("--external-inventory") if external_inventory_complete.is_none() => {
+                external_inventory_complete = Some(match pop_cli_text(&mut arguments)?.as_str() {
+                    "complete" => true,
+                    "incomplete" => false,
+                    _ => return Err(CliError::invalid_request()),
+                });
+            }
+            Some("--confirm-plan") if !plan_action && confirmation.is_none() => {
+                confirmation = Some(parse_fingerprint_hex(&pop_cli_text(&mut arguments)?)?);
+            }
+            _ => return Err(CliError::invalid_request()),
+        }
+    }
+    if targets.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+    let request = PurgeCommandRequest {
+        database_path,
+        destination_path: destination_path.ok_or_else(CliError::invalid_request)?,
+        report_path,
+        targets,
+        mode: mode.ok_or_else(CliError::invalid_request)?,
+        known_external_artifacts,
+        external_inventory_complete: external_inventory_complete
+            .ok_or_else(CliError::invalid_request)?,
+        confirmation,
+    };
+    if plan_action {
+        if request.confirmation.is_some() {
+            return Err(CliError::invalid_request());
+        }
+        run_purge_plan(request)
+    } else {
+        if request.report_path.is_some() || request.confirmation.is_none() {
+            return Err(CliError::invalid_request());
+        }
+        run_purge(request)
+    }
+}
+
+fn parse_purge_mode(value: &str) -> Result<PurgeMode, CliError> {
+    match value {
+        "reject-if-referenced" => Ok(PurgeMode::RejectIfReferenced),
+        "cascade" => Ok(PurgeMode::Cascade),
+        _ => Err(CliError::invalid_request()),
+    }
+}
+
+fn parse_purge_external_artifact(value: &str) -> Result<PurgeExternalArtifact, CliError> {
+    let (kind, digest) = value
+        .split_once(':')
+        .ok_or_else(CliError::invalid_request)?;
+    let kind = match kind {
+        "exact-backup" => PurgeExternalArtifactKind::ExactBackup,
+        "audit-complete-backup" => PurgeExternalArtifactKind::AuditCompleteBackup,
+        "logical-export" => PurgeExternalArtifactKind::LogicalExport,
+        "sharing-export" => PurgeExternalArtifactKind::SharingExport,
+        _ => return Err(CliError::invalid_request()),
+    };
+    Ok(PurgeExternalArtifact::new(
+        kind,
+        parse_fingerprint_hex(digest)?,
+    ))
+}
+
+fn parse_fingerprint_hex(value: &str) -> Result<[u8; 32], CliError> {
+    if value.len() != 64 {
+        return Err(CliError::invalid_request());
+    }
+    let mut digest = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high_byte = pair
+            .first()
+            .copied()
+            .ok_or_else(CliError::invalid_request)?;
+        let low_byte = pair.get(1).copied().ok_or_else(CliError::invalid_request)?;
+        let high = parse_lower_hex_nibble(high_byte).ok_or_else(CliError::invalid_request)?;
+        let low = parse_lower_hex_nibble(low_byte).ok_or_else(CliError::invalid_request)?;
+        let slot = digest
+            .get_mut(index)
+            .ok_or_else(CliError::invalid_request)?;
+        *slot = (high << 4) | low;
+    }
+    Ok(digest)
+}
+
+fn parse_lower_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -2203,6 +2428,94 @@ fn map_migration_restore_point_error(error: MigrationRestorePointError) -> CliEr
     }
 }
 
+fn map_purge_error(error: PurgeError) -> CliError {
+    match error {
+        PurgeError::Export(error) => map_logical_export_error(error),
+        PurgeError::UnknownTarget => CliError::new(PublicCode::NOT_FOUND),
+        PurgeError::InvalidTargets
+        | PurgeError::DuplicateTarget
+        | PurgeError::ReferencesRemain
+        | PurgeError::CascadePlanMismatch
+        | PurgeError::DuplicateCascadeRecord => CliError::invalid_request(),
+        PurgeError::IncompleteLogicalExport
+        | PurgeError::MissingReference
+        | PurgeError::RecordHasNoIdentity
+        | PurgeError::DuplicateRecordIdentity
+        | PurgeError::InventoryInconsistent
+        | PurgeError::InvalidIndexInventory
+        | PurgeError::IndexDatabaseMismatch
+        | PurgeError::IndexInventoryIncomplete
+        | PurgeError::Record(_) => CliError::new(PublicCode::CORRUPT_DATA),
+        PurgeError::Identity(error) => map_logical_import_error(error),
+        PurgeError::ResourceLimit => CliError::new(PublicCode::BUDGET_EXCEEDED),
+    }
+}
+
+fn map_index_rebuild_error(error: worlddb_storage_file::IndexRebuildError) -> CliError {
+    match error {
+        worlddb_storage_file::IndexRebuildError::WriterLock(error) => map_writer_lock_error(error),
+        worlddb_storage_file::IndexRebuildError::ResourceLimitExceeded { .. } => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+        worlddb_storage_file::IndexRebuildError::Io { .. }
+        | worlddb_storage_file::IndexRebuildError::FileChangedDuringRead => {
+            CliError::new(PublicCode::STORAGE_READ)
+        }
+        worlddb_storage_file::IndexRebuildError::Source { .. } => {
+            CliError::new(PublicCode::STORAGE_READ)
+        }
+        _ => CliError::new(PublicCode::CORRUPT_DATA),
+    }
+}
+
+fn map_purge_rewrite_error(error: PurgeRewriteError) -> CliError {
+    match error {
+        PurgeRewriteError::AuthorizationDenied => CliError::new(PublicCode::UNAUTHORIZED),
+        PurgeRewriteError::ApprovalMissing
+        | PurgeRewriteError::SourceArtifactMismatch
+        | PurgeRewriteError::SourceIdentityMismatch
+        | PurgeRewriteError::SidecarInventoryChanged
+        | PurgeRewriteError::PlanFingerprintMismatch
+        | PurgeRewriteError::IdentityCollision
+        | PurgeRewriteError::InvalidTarget
+        | PurgeRewriteError::TargetAlreadyExists
+        | PurgeRewriteError::TargetParentMissing => CliError::invalid_request(),
+        PurgeRewriteError::SourceNotClean
+        | PurgeRewriteError::SecurityHistoryMissing
+        | PurgeRewriteError::SecurityHistoryInvalid
+        | PurgeRewriteError::PolicySnapshotMismatch
+        | PurgeRewriteError::DestinationVerification
+        | PurgeRewriteError::RequiredAuditMissing
+        | PurgeRewriteError::ReportVerification
+        | PurgeRewriteError::DatabaseIdentityMissing => CliError::new(PublicCode::CORRUPT_DATA),
+        PurgeRewriteError::SourceSnapshotChanged => CliError::new(PublicCode::SNAPSHOT_EXPIRED),
+        PurgeRewriteError::ResourceLimit => CliError::new(PublicCode::BUDGET_EXCEEDED),
+        PurgeRewriteError::InjectedBeforeAuditCommit | PurgeRewriteError::InjectedBeforePublish => {
+            CliError::new(PublicCode::CANCELLED)
+        }
+        PurgeRewriteError::PublishedOutcomeUnknown { .. }
+        | PurgeRewriteError::StagingNameExhausted
+        | PurgeRewriteError::Identity(_)
+        | PurgeRewriteError::Revision(_)
+        | PurgeRewriteError::AuditSequence(_) => CliError::new(PublicCode::INTERNAL),
+        PurgeRewriteError::Io { .. }
+        | PurgeRewriteError::IndexInventory(_)
+        | PurgeRewriteError::StorageFile(_)
+        | PurgeRewriteError::WriterLock(_)
+        | PurgeRewriteError::Manifest(_)
+        | PurgeRewriteError::Segment(_)
+        | PurgeRewriteError::SecuritySegment(_)
+        | PurgeRewriteError::Recovery(_)
+        | PurgeRewriteError::Wal(_)
+        | PurgeRewriteError::RequiredAudit(_)
+        | PurgeRewriteError::SnapshotCommit(_) => CliError::new(PublicCode::STORAGE_READ),
+        PurgeRewriteError::PurgePlan(error) => map_purge_error(error),
+        PurgeRewriteError::Export(error) => map_logical_export_error(error),
+        PurgeRewriteError::StorageVerify(error) => map_storage_verify_error(error),
+        PurgeRewriteError::Record(_) => CliError::new(PublicCode::CORRUPT_DATA),
+    }
+}
+
 fn map_storage_upgrade_error(error: worlddb_storage_file::StorageUpgradeError) -> CliError {
     match error {
         worlddb_storage_file::StorageUpgradeError::AuthorizationDenied { .. }
@@ -2666,6 +2979,448 @@ fn run_import_prepare(
     Ok(Success::ImportPrepared(summary))
 }
 
+fn run_purge_plan(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    let report_path = request
+        .report_path
+        .as_deref()
+        .ok_or_else(CliError::invalid_request)?;
+    validate_purge_destinations(
+        &request.destination_path,
+        Some(report_path),
+        &canonical_project_root(&request.database_path)?,
+    )?;
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project_for_purge(&request.database_path)?;
+    let policy = select_current_policy(&project, principal)?;
+    authorize_cli_capability(policy, Capability::ProjectRead, PolicyTarget::default())?;
+    authorize_cli_capability(policy, Capability::Purge, PolicyTarget::default())?;
+    let (plan, _source_artifact, approval_possible) =
+        prepare_purge_plan(&project, policy, &request)?;
+    let report_bytes = encode_purge_plan_report(&plan, request.mode, approval_possible)?;
+    write_new_output(report_path, &report_bytes)?;
+    Ok(Success::PurgePlan(PurgePlanSummary {
+        source_database_id: plan.source_database_id(),
+        source_revision: plan.source_snapshot_revision().value(),
+        mode: request.mode,
+        target_count: plan.targets().len(),
+        target_record_count: plan.target_records().len(),
+        dependant_count: plan.dependants().len(),
+        approval_possible,
+        fingerprint: plan.fingerprint(),
+        report_digest: *blake3::hash(&report_bytes).as_bytes(),
+        external_inventory_complete: plan.external_inventory_complete(),
+    }))
+}
+
+fn run_purge(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    let confirmation = request.confirmation.ok_or_else(CliError::invalid_request)?;
+    validate_purge_destinations(
+        &request.destination_path,
+        None,
+        &canonical_project_root(&request.database_path)?,
+    )?;
+    let expected_destination = canonical_target_candidate(&request.destination_path)?;
+    let principal = current_host_principal()?;
+    let project = open_current_policy_project_for_purge(&request.database_path)?;
+    let policy = select_current_policy(&project, principal)?;
+    authorize_cli_capability(policy, Capability::ProjectRead, PolicyTarget::default())?;
+    authorize_cli_capability(policy, Capability::Purge, PolicyTarget::default())?;
+    let (plan, source_artifact, approval_possible) =
+        prepare_purge_plan(&project, policy, &request)?;
+    if !approval_possible || plan.fingerprint() != confirmation {
+        return Err(CliError::invalid_request());
+    }
+    let policy_fingerprint = AuditPolicyFingerprint::new(Bytes::new(
+        policy
+            .current_snapshot()
+            .effective_capability_fingerprint(principal, PolicyTarget::default())
+            .to_vec(),
+    ))
+    .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let source_database_id = plan.source_database_id();
+    let source_revision = plan.source_snapshot_revision().value();
+    let source_root = project.layout.root().to_path_buf();
+    let destination_path = request.destination_path.clone();
+    let CurrentPolicyProject {
+        layout: _,
+        _lock,
+        manifest: _,
+        policy_history,
+    } = project;
+    drop(_lock);
+    let policy = policy_history
+        .policy()
+        .select(
+            AuthorizationMode::Now,
+            principal,
+            Revision::new(source_revision).map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?,
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let receipt = PurgeRewriteManager::new()
+        .rewrite(PurgeRewriteRequest {
+            source_root: &source_root,
+            source_artifact: &source_artifact,
+            plan: &plan,
+            known_external_artifacts: &request.known_external_artifacts,
+            external_inventory_complete: request.external_inventory_complete,
+            destination: &destination_path,
+            policy,
+            policy_target: PolicyTarget::default(),
+            policy_fingerprint,
+        })
+        .map_err(map_purge_rewrite_error)?;
+    let report = receipt.report();
+    if report.source_database_id() != source_database_id
+        || report.destination_database_id() == source_database_id
+        || report.source_revision().value() != source_revision
+        || report.plan_fingerprint() != plan.fingerprint()
+        || report.removed_records().len() != plan.affected_records().len()
+        || report.external_inventory_complete() != request.external_inventory_complete
+        || receipt.destination() != expected_destination
+    {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    let report_bytes = report.encode().map_err(map_purge_rewrite_error)?;
+    let persisted_report = read_bounded_file(
+        &receipt.destination().join("PURGE_REPORT"),
+        u64::try_from(PURGE_PLAN_REPORT_MAX_BYTES)
+            .map_err(|_| CliError::new(PublicCode::BUDGET_EXCEEDED))?,
+    )?;
+    if persisted_report != report_bytes {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    Ok(Success::PurgeRun(PurgeRunSummary {
+        source_database_id,
+        destination_database_id: report.destination_database_id(),
+        source_revision,
+        destination_revision: report.destination_revision().value(),
+        mode: request.mode,
+        removed_record_count: report.removed_records().len(),
+        plan_fingerprint: report.plan_fingerprint(),
+        report_digest: *blake3::hash(&report_bytes).as_bytes(),
+        operation_id: report.operation_id(),
+        audit_record_id: report.audit_record_id(),
+        external_inventory_complete: report.external_inventory_complete(),
+    }))
+}
+
+fn validate_purge_destinations(
+    destination: &Path,
+    report: Option<&Path>,
+    source_root: &Path,
+) -> Result<(), CliError> {
+    reject_restore_target_within_project(destination, source_root)?;
+    ensure_new_output_target(destination)?;
+    let destination_candidate = canonical_target_candidate(destination)?;
+    if let Some(report) = report {
+        reject_restore_target_within_project(report, source_root)?;
+        ensure_new_output_target(report)?;
+        let report_candidate = canonical_target_candidate(report)?;
+        if destination_candidate.starts_with(&report_candidate)
+            || report_candidate.starts_with(&destination_candidate)
+        {
+            return Err(CliError::invalid_request());
+        }
+    }
+    Ok(())
+}
+
+fn select_current_policy(
+    project: &CurrentPolicyProject,
+    principal: PrincipalId,
+) -> Result<worlddb_core::SecurityPolicyView<'_>, CliError> {
+    project
+        .policy_history
+        .policy()
+        .select(
+            AuthorizationMode::Now,
+            principal,
+            project.manifest.revision(),
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))
+}
+
+fn prepare_purge_plan(
+    project: &CurrentPolicyProject,
+    policy: worlddb_core::SecurityPolicyView<'_>,
+    request: &PurgeCommandRequest,
+) -> Result<(PurgePlan, Vec<u8>, bool), CliError> {
+    validate_purge_external_artifacts(&request.known_external_artifacts)?;
+    let history_store = HistorySegmentStore::new(project.layout.clone());
+    let mut history_spaces = std::collections::BTreeSet::new();
+    for reference in project
+        .manifest
+        .segments()
+        .iter()
+        .filter(|reference| reference.kind() == ManifestSegmentKind::History)
+    {
+        let segment = history_store
+            .read_segment(reference.id())
+            .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+        if segment.content_digest() != reference.content_digest() {
+            return Err(CliError::new(PublicCode::CORRUPT_DATA));
+        }
+        for decoded in segment.records() {
+            for identity in LogicalImportIdentity::defined_by_record(decoded.record()) {
+                if let LogicalImportIdentity::HistorySpace(id) = identity {
+                    history_spaces.insert(id);
+                    if history_spaces.len() > 65_536 {
+                        return Err(CliError::new(PublicCode::BUDGET_EXCEEDED));
+                    }
+                }
+            }
+        }
+    }
+    let record_kinds = RecordKind::ALL
+        .into_iter()
+        .filter(|kind| {
+            !matches!(
+                kind,
+                RecordKind::MigrationPlan
+                    | RecordKind::MigrationRun
+                    | RecordKind::MigrationStepCommitIdentity
+            )
+        })
+        .collect();
+    let source_revision = project.manifest.revision();
+    let scope = LogicalExportScope::new(
+        Revision::GENESIS,
+        source_revision,
+        history_spaces.into_iter().collect(),
+        record_kinds,
+    )
+    .map_err(map_logical_export_error)?;
+    let export = LogicalExportManager::new(project.layout.clone())
+        .export_locked(scope, policy, &project._lock)
+        .map_err(map_logical_export_error)?;
+    if export.manifest().database_id()
+        != project
+            .layout
+            .database_id()
+            .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?
+        || export.manifest().snapshot_revision() != source_revision
+    {
+        return Err(CliError::new(PublicCode::SNAPSHOT_EXPIRED));
+    }
+    let source_artifact = export.encode().map_err(map_logical_export_error)?;
+    let index_inventory =
+        IndexGenerationStore::inventory_all_locked(&project.layout, &project._lock)
+            .map_err(map_index_rebuild_error)?;
+    let sidecars = PurgeSidecarInventory::new(
+        index_inventory,
+        request.known_external_artifacts.clone(),
+        request.external_inventory_complete,
+    )
+    .map_err(map_purge_error)?;
+    let preview = PurgePlanManager::preview(&source_artifact, request.targets.clone(), sidecars)
+        .map_err(map_purge_error)?;
+    let (plan, approval_possible) = match request.mode {
+        PurgeMode::RejectIfReferenced if preview.dependants().is_empty() => (
+            preview
+                .approve_reject_if_referenced()
+                .map_err(map_purge_error)?,
+            true,
+        ),
+        PurgeMode::RejectIfReferenced => (preview, false),
+        PurgeMode::Cascade => {
+            let cascade =
+                PurgeCascadePlan::new(preview.dependants().to_vec()).map_err(map_purge_error)?;
+            (
+                preview.approve_cascade(&cascade).map_err(map_purge_error)?,
+                true,
+            )
+        }
+    };
+    Ok((plan, source_artifact, approval_possible))
+}
+
+fn validate_purge_external_artifacts(artifacts: &[PurgeExternalArtifact]) -> Result<(), CliError> {
+    let mut sorted = artifacts.to_vec();
+    sorted.sort_by_key(|artifact| (artifact.kind(), artifact.digest()));
+    if sorted.windows(2).any(|pair| {
+        matches!(pair, [left, right] if left.kind() == right.kind() && left.digest() == right.digest())
+    }) {
+        return Err(CliError::invalid_request());
+    }
+    Ok(())
+}
+
+fn encode_purge_plan_report(
+    plan: &PurgePlan,
+    mode: PurgeMode,
+    approval_possible: bool,
+) -> Result<Vec<u8>, CliError> {
+    let mut output = Vec::new();
+    write!(
+        output,
+        "{{\"schema\":\"WorldDB.PurgePlanReport.v1\",\"source_database_id\":\"{}\",\"source_revision\":\"{}\",\"source_artifact_digest\":\"{}\",\"mode\":\"{}\",\"plan_fingerprint\":\"{}\",\"approval_possible\":{},\"external_inventory_complete\":{},\"index_inventory_complete\":{},\"targets\":[",
+        plan.source_database_id().to_canonical_string(),
+        plan.source_snapshot_revision().value(),
+        fingerprint_hex(&plan.source_artifact_digest()),
+        mode.label(),
+        fingerprint_hex(&plan.fingerprint()),
+        approval_possible,
+        plan.external_inventory_complete(),
+        plan.index_inventory_complete()
+    )
+    .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+    for (index, target) in plan.targets().iter().copied().enumerate() {
+        if index > 0 {
+            output.push(b',');
+        }
+        write_json_string(&mut output, &format_logical_import_identity(target)?)
+            .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        ensure_purge_report_within_budget(&output)?;
+    }
+    output.extend_from_slice(b"],\"target_records\":[");
+    write_purge_record_list(&mut output, plan.target_records())?;
+    output.extend_from_slice(b"],\"dependants\":[");
+    write_purge_record_list(&mut output, plan.dependants())?;
+    output.extend_from_slice(b"],\"affected_records\":[");
+    let affected = plan.affected_records();
+    write_purge_record_list(&mut output, &affected)?;
+    output.extend_from_slice(b"],\"index_generations\":[");
+    for (index, generation) in plan.index_generations().iter().enumerate() {
+        if index > 0 {
+            output.push(b',');
+        }
+        write!(
+            output,
+            "{{\"family\":\"{}\",\"generation_id\":\"{}\",\"file_digest\":\"{}\",\"current\":{}}}",
+            index_family_label(generation.family()),
+            generation.generation_id(),
+            fingerprint_hex(&generation.file_digest()),
+            generation.current()
+        )
+        .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        ensure_purge_report_within_budget(&output)?;
+    }
+    output.extend_from_slice(b"],\"known_external_artifacts\":[");
+    for (index, artifact) in plan.retained_external_artifacts().iter().enumerate() {
+        if index > 0 {
+            output.push(b',');
+        }
+        write!(
+            output,
+            "{{\"kind\":\"{}\",\"digest\":\"{}\"}}",
+            purge_external_artifact_label(artifact.kind()),
+            fingerprint_hex(&artifact.digest())
+        )
+        .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        ensure_purge_report_within_budget(&output)?;
+    }
+    output.extend_from_slice(b"],\"index_families_to_rebuild\":[");
+    for (index, family) in PurgePlan::index_families_to_rebuild()
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        if index > 0 {
+            output.push(b',');
+        }
+        write_json_string(&mut output, index_family_label(family))
+            .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+    }
+    output.extend_from_slice(b"],\"secure_erase_claimed\":false}\n");
+    ensure_purge_report_within_budget(&output)?;
+    Ok(output)
+}
+
+fn write_purge_record_list(
+    output: &mut Vec<u8>,
+    records: &[PurgeRecordId],
+) -> Result<(), CliError> {
+    for (index, record) in records.iter().enumerate() {
+        if index > 0 {
+            output.push(b',');
+        }
+        output.extend_from_slice(b"{\"identity\":");
+        write_json_string(output, &format_logical_import_identity(record.identity())?)
+            .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        write!(
+            output,
+            ",\"content_digest\":\"{}\"}}",
+            fingerprint_hex(&record.content_digest())
+        )
+        .map_err(|_| CliError::new(PublicCode::INTERNAL))?;
+        ensure_purge_report_within_budget(output)?;
+    }
+    Ok(())
+}
+
+fn ensure_purge_report_within_budget(output: &[u8]) -> Result<(), CliError> {
+    if output.len() > PURGE_PLAN_REPORT_MAX_BYTES {
+        Err(CliError::new(PublicCode::BUDGET_EXCEEDED))
+    } else {
+        Ok(())
+    }
+}
+
+fn format_logical_import_identity(identity: LogicalImportIdentity) -> Result<String, CliError> {
+    let value = match identity {
+        LogicalImportIdentity::HistorySpace(id) => {
+            format!("history-space:{}", id.to_canonical_string())
+        }
+        LogicalImportIdentity::Layer(id) => format!("layer:{}", id.to_canonical_string()),
+        LogicalImportIdentity::Perspective(id) => {
+            format!("perspective:{}", id.to_canonical_string())
+        }
+        LogicalImportIdentity::Timeline(id) => format!("timeline:{}", id.to_canonical_string()),
+        LogicalImportIdentity::Entity(id) => format!("entity:{}", id.to_canonical_string()),
+        LogicalImportIdentity::EntityType(id) => {
+            format!("entity-type:{}", id.to_canonical_string())
+        }
+        LogicalImportIdentity::Predicate(id) => format!("predicate:{}", id.to_canonical_string()),
+        LogicalImportIdentity::EventKind(id) => format!("event-kind:{}", id.to_canonical_string()),
+        LogicalImportIdentity::EventRole(id) => format!("event-role:{}", id.to_canonical_string()),
+        LogicalImportIdentity::EventAttribute(id) => {
+            format!("event-attribute:{}", id.to_canonical_string())
+        }
+        LogicalImportIdentity::Record(reference) => {
+            let encoded = encode_record_ref(reference)
+                .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+            let id_bytes = encoded
+                .get(1..)
+                .filter(|bytes| bytes.len() == 16)
+                .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+            let id_bytes: &[u8; 16] = id_bytes
+                .try_into()
+                .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+            format!(
+                "record:{}:{}",
+                reference.wire_tag().value(),
+                format_uuid_bytes(id_bytes)
+            )
+        }
+    };
+    Ok(value)
+}
+
+fn purge_external_artifact_label(kind: PurgeExternalArtifactKind) -> &'static str {
+    match kind {
+        PurgeExternalArtifactKind::ExactBackup => "exact-backup",
+        PurgeExternalArtifactKind::AuditCompleteBackup => "audit-complete-backup",
+        PurgeExternalArtifactKind::LogicalExport => "logical-export",
+        PurgeExternalArtifactKind::SharingExport => "sharing-export",
+    }
+}
+
+fn index_family_label(family: IndexFamily) -> &'static str {
+    match family {
+        IndexFamily::RecordId => "RecordId",
+        IndexFamily::OperationId => "OperationId",
+        IndexFamily::SchemaIdRevision => "SchemaIdRevision",
+        IndexFamily::Lifecycle => "Lifecycle",
+        IndexFamily::AssertionPointHistory => "AssertionPointHistory",
+        IndexFamily::AssertionValidity => "AssertionValidity",
+        IndexFamily::MaskScopeContextPrecedence => "MaskScopeContextPrecedence",
+        IndexFamily::EventSearch => "EventSearch",
+        IndexFamily::EventRelation => "EventRelation",
+        IndexFamily::EventMask => "EventMask",
+        IndexFamily::ProvenanceAdjacency => "ProvenanceAdjacency",
+    }
+}
+
 struct CurrentPolicyProject {
     layout: DatabaseLayout,
     _lock: WriterLock,
@@ -2677,6 +3432,20 @@ fn open_current_policy_project(path: &Path) -> Result<CurrentPolicyProject, CliE
     let root = canonical_project_root(path)?;
     let layout = DatabaseLayout::open(root).map_err(map_storage_file_error)?;
     let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
+    read_current_policy_project(layout, lock)
+}
+
+fn open_current_policy_project_for_purge(path: &Path) -> Result<CurrentPolicyProject, CliError> {
+    let root = canonical_project_root(path)?;
+    let layout = DatabaseLayout::open(root).map_err(map_storage_file_error)?;
+    let lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
+    read_current_policy_project(layout, lock)
+}
+
+fn read_current_policy_project(
+    layout: DatabaseLayout,
+    lock: WriterLock,
+) -> Result<CurrentPolicyProject, CliError> {
     let report = StorageVerifier::new(layout.clone())
         .verify(&lock)
         .map_err(map_storage_verify_error)?;
@@ -3156,6 +3925,19 @@ fn fingerprint_hex(fingerprint: &[u8; 32]) -> String {
         })
 }
 
+fn format_uuid_bytes(bytes: &[u8; 16]) -> String {
+    bytes
+        .iter()
+        .enumerate()
+        .fold(String::with_capacity(36), |mut output, (index, byte)| {
+            if matches!(index, 4 | 6 | 8 | 10) {
+                output.push('-');
+            }
+            let _ = write!(&mut output, "{byte:02x}");
+            output
+        })
+}
+
 fn damage_class_index(class: StorageDamageClass) -> usize {
     match class {
         StorageDamageClass::Bitflip => 0,
@@ -3260,16 +4042,7 @@ fn new_request_id() -> Result<RequestId, ()> {
 }
 
 fn format_request_id(request_id: RequestId) -> String {
-    request_id.as_bytes().into_iter().enumerate().fold(
-        String::with_capacity(36),
-        |mut output, (index, byte)| {
-            if matches!(index, 4 | 6 | 8 | 10) {
-                output.push('-');
-            }
-            let _ = write!(&mut output, "{byte:02x}");
-            output
-        },
-    )
+    format_uuid_bytes(&request_id.as_bytes())
 }
 
 fn write_success<W: Write>(
@@ -3293,6 +4066,7 @@ fn write_success<W: Write>(
                 writeln!(writer, "{HELP_STORAGE_UPGRADE}")
             }
             Success::Help(HelpScope::ExportImport) => writeln!(writer, "{HELP_EXPORT_IMPORT}"),
+            Success::Help(HelpScope::Purge) => writeln!(writer, "{HELP_PURGE}"),
             Success::Version => writeln!(
                 writer,
                 "worlddb-cli {} (CLI protocol {}.{})",
@@ -3456,6 +4230,35 @@ fn write_success<W: Write>(
                 summary.omitted_record_class_count,
                 summary.omitted_storage_class_count
             ),
+            Success::PurgePlan(summary) => writeln!(
+                writer,
+                "purge plan: source_database_id={}, source_revision={}, mode={}, targets={}, target_records={}, dependants={}, approval_possible={}, plan_fingerprint={}, report_digest={}, external_inventory_complete={}, writes_database=false",
+                summary.source_database_id.to_canonical_string(),
+                summary.source_revision,
+                summary.mode.label(),
+                summary.target_count,
+                summary.target_record_count,
+                summary.dependant_count,
+                summary.approval_possible,
+                fingerprint_hex(&summary.fingerprint),
+                fingerprint_hex(&summary.report_digest),
+                summary.external_inventory_complete
+            ),
+            Success::PurgeRun(summary) => writeln!(
+                writer,
+                "purge completed: source_database_id={}, destination_database_id={}, source_revision={}, destination_revision={}, mode={}, removed_records={}, plan_fingerprint={}, report_digest={}, operation_id={}, audit_record_id={}, external_inventory_complete={}, target_verified=true, report_persisted=true, source_modified=false, secure_erase_claimed=false",
+                summary.source_database_id.to_canonical_string(),
+                summary.destination_database_id.to_canonical_string(),
+                summary.source_revision,
+                summary.destination_revision,
+                summary.mode.label(),
+                summary.removed_record_count,
+                fingerprint_hex(&summary.plan_fingerprint),
+                fingerprint_hex(&summary.report_digest),
+                summary.operation_id.to_canonical_string(),
+                summary.audit_record_id.to_canonical_string(),
+                summary.external_inventory_complete
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
     }
@@ -3549,7 +4352,7 @@ fn write_json_success<W: Write>(
     match success {
         Success::Help(HelpScope::Root) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 migration\",\"v1 export logical|share\",\"v1 import plan|prepare\",\"v1 storage upgrade\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 migration\",\"v1 export logical|share\",\"v1 import plan|prepare\",\"v1 purge plan|run\",\"v1 storage upgrade\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
         ),
         Success::Help(HelpScope::AdapterRun) => writeln!(
             writer,
@@ -3590,6 +4393,10 @@ fn write_json_success<W: Write>(
         Success::Help(HelpScope::ExportImport) => writeln!(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"export_import\",\"usage\":\"v1 export logical|share; v1 import plan|prepare\",\"paths_in_results\":false,\"prepare_publishes_records\":false}}}}}}"
+        ),
+        Success::Help(HelpScope::Purge) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"purge\",\"usage\":\"v1 purge plan|run <database> --destination <new-dir> --mode reject-if-referenced|cascade --target <typed-identity>...\",\"requires_plan_fingerprint\":true,\"publishes_new_database_id\":true,\"source_modified\":false}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -3827,6 +4634,35 @@ fn write_json_success<W: Write>(
             summary.omitted_record_class_count,
             summary.omitted_storage_class_count
         ),
+        Success::PurgePlan(summary) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"purge_plan\",\"data\":{{\"status\":\"previewed\",\"source_database_id\":\"{}\",\"source_revision\":\"{}\",\"mode\":\"{}\",\"target_count\":\"{}\",\"target_record_count\":\"{}\",\"dependant_count\":\"{}\",\"approval_possible\":{},\"plan_fingerprint\":\"{}\",\"report_digest\":\"{}\",\"external_inventory_complete\":{},\"writes_database\":false}}}}}}",
+            summary.source_database_id.to_canonical_string(),
+            summary.source_revision,
+            summary.mode.label(),
+            summary.target_count,
+            summary.target_record_count,
+            summary.dependant_count,
+            summary.approval_possible,
+            fingerprint_hex(&summary.fingerprint),
+            fingerprint_hex(&summary.report_digest),
+            summary.external_inventory_complete
+        ),
+        Success::PurgeRun(summary) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"purge_run\",\"data\":{{\"status\":\"completed\",\"source_database_id\":\"{}\",\"destination_database_id\":\"{}\",\"source_revision\":\"{}\",\"destination_revision\":\"{}\",\"mode\":\"{}\",\"removed_record_count\":\"{}\",\"plan_fingerprint\":\"{}\",\"report_digest\":\"{}\",\"operation_id\":\"{}\",\"audit_record_id\":\"{}\",\"external_inventory_complete\":{},\"target_verified\":true,\"report_persisted\":true,\"source_modified\":false,\"secure_erase_claimed\":false}}}}}}",
+            summary.source_database_id.to_canonical_string(),
+            summary.destination_database_id.to_canonical_string(),
+            summary.source_revision,
+            summary.destination_revision,
+            summary.mode.label(),
+            summary.removed_record_count,
+            fingerprint_hex(&summary.plan_fingerprint),
+            fingerprint_hex(&summary.report_digest),
+            summary.operation_id.to_canonical_string(),
+            summary.audit_record_id.to_canonical_string(),
+            summary.external_inventory_complete
+        ),
     }
 }
 
@@ -3840,27 +4676,31 @@ fn write_json_damage_counts<W: Write>(writer: &mut W, damage: DamageSummary) -> 
     Ok(())
 }
 
+fn write_json_string<W: Write>(writer: &mut W, value: &str) -> io::Result<()> {
+    writer.write_all(b"\"")?;
+    for character in value.chars() {
+        match character {
+            '"' => writer.write_all(b"\\\"")?,
+            '\\' => writer.write_all(b"\\\\")?,
+            '\u{08}' => writer.write_all(b"\\b")?,
+            '\u{0c}' => writer.write_all(b"\\f")?,
+            '\n' => writer.write_all(b"\\n")?,
+            '\r' => writer.write_all(b"\\r")?,
+            '\t' => writer.write_all(b"\\t")?,
+            control if control <= '\u{1f}' => write!(writer, "\\u{:04x}", u32::from(control))?,
+            _ => write!(writer, "{character}")?,
+        }
+    }
+    writer.write_all(b"\"")
+}
+
 fn write_json_string_array<W: Write>(writer: &mut W, values: &[String]) -> io::Result<()> {
     writer.write_all(b"[")?;
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
             writer.write_all(b",")?;
         }
-        writer.write_all(b"\"")?;
-        for character in value.chars() {
-            match character {
-                '"' => writer.write_all(b"\\\"")?,
-                '\\' => writer.write_all(b"\\\\")?,
-                '\u{08}' => writer.write_all(b"\\b")?,
-                '\u{0c}' => writer.write_all(b"\\f")?,
-                '\n' => writer.write_all(b"\\n")?,
-                '\r' => writer.write_all(b"\\r")?,
-                '\t' => writer.write_all(b"\\t")?,
-                control if control <= '\u{1f}' => write!(writer, "\\u{:04x}", u32::from(control))?,
-                _ => write!(writer, "{character}")?,
-            }
-        }
-        writer.write_all(b"\"")?;
+        write_json_string(writer, value)?;
     }
     writer.write_all(b"]")
 }

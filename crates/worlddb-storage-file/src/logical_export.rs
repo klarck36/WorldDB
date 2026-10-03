@@ -516,7 +516,11 @@ impl LogicalExportManager {
         Ok(export)
     }
 
-    pub(crate) fn export_locked(
+    /// Captures a logical export while the caller keeps a database lock held.
+    ///
+    /// This is useful when export authorization and adjacent source inventories must describe
+    /// the same frozen database state. The lock must belong to this database root.
+    pub fn export_locked(
         &self,
         scope: LogicalExportScope,
         policy: SecurityPolicyView<'_>,
