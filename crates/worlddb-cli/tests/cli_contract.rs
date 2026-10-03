@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use worlddb_core::{DomainId, OperationId};
 use worlddb_storage_file::{
-    DatabaseLayout, ManifestSnapshot, ManifestStore, WalPrepareLog, WriterLockError,
+    DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, WalPrepareLog,
+    WriterLockError,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -408,5 +409,177 @@ fn recovery_apply_is_explicit_and_reports_its_effect() -> Result<(), String> {
     let verified_text = String::from_utf8_lossy(&verified.stdout);
     assert!(verified_text.contains("\"disposition\":\"Clean\""));
     assert!(verified_text.contains("\"Truncation\":\"0\""));
+    Ok(())
+}
+
+#[test]
+fn exact_backup_verify_reports_profile_scope_and_target_verification() -> Result<(), String> {
+    let area = TempArea::create()?;
+    let source = area.path("backup-source");
+    let layout = DatabaseLayout::create(&source).map_err(|error| error.to_string())?;
+    drop(
+        layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?,
+    );
+    let backup = area.path("exact-backup");
+    ExactBackupManager::new(layout)
+        .create_exact_backup(&backup, None)
+        .map_err(|error| error.to_string())?;
+    let source_arg = source.to_string_lossy().into_owned();
+    let backup_arg = backup.to_string_lossy().into_owned();
+
+    let verified = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "verify",
+        &backup_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ]);
+    assert!(verified.is_some());
+    let Some(verified) = verified else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert!(verified.status.success());
+    assert!(verified.stderr.is_empty());
+    let verified_text = String::from_utf8_lossy(&verified.stdout);
+    assert!(verified_text.contains("\"status\":\"verified\""));
+    assert!(verified_text.contains("\"profile\":\"ExactDatabase\""));
+    assert!(verified_text.contains("\"audit_scope\":\"Excluded\""));
+    assert!(verified_text.contains("\"target_verified\":true"));
+    assert!(verified_text.contains("\"source_modified\":false"));
+    assert!(verified_text.contains("\"audit_safe_sequence\":null"));
+    assert!(!verified_text.contains(&backup_arg));
+    assert!(!verified_text.contains(&source_arg));
+    Ok(())
+}
+
+#[test]
+fn backup_creation_requires_trusted_policy_and_scope_mismatch_is_rejected() -> Result<(), String> {
+    let area = TempArea::create()?;
+    let source = area.path("backup-source");
+    let layout = DatabaseLayout::create(&source).map_err(|error| error.to_string())?;
+    drop(
+        layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?,
+    );
+    let source_before = snapshot_tree(&source)?;
+    let source_arg = source.to_string_lossy().into_owned();
+    let exact_target = area.path("exact-backup");
+    let exact_target_arg = exact_target.to_string_lossy().into_owned();
+    let exact_unauthorized = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "create",
+        &source_arg,
+        "--output",
+        &exact_target_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ]);
+    assert!(exact_unauthorized.is_some());
+    let Some(exact_unauthorized) = exact_unauthorized else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert_eq!(exact_unauthorized.status.code(), Some(4));
+    assert!(exact_unauthorized.stderr.is_empty());
+    assert!(
+        String::from_utf8_lossy(&exact_unauthorized.stdout).contains("\"code\":\"Unauthorized\"")
+    );
+    assert!(!exact_target.exists());
+    assert_eq!(snapshot_tree(&source)?, source_before);
+
+    let audit_target = area.path("audit-backup");
+    let audit_target_arg = audit_target.to_string_lossy().into_owned();
+
+    let unauthorized = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "create",
+        &source_arg,
+        "--output",
+        &audit_target_arg,
+        "--profile",
+        "audit-complete",
+        "--audit-scope",
+        "included",
+    ]);
+    assert!(unauthorized.is_some());
+    let Some(unauthorized) = unauthorized else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert_eq!(unauthorized.status.code(), Some(4));
+    assert!(unauthorized.stderr.is_empty());
+    assert!(String::from_utf8_lossy(&unauthorized.stdout).contains("\"code\":\"Unauthorized\""));
+    assert!(!audit_target.exists());
+    assert_eq!(snapshot_tree(&source)?, source_before);
+
+    let mismatched_scope = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "create",
+        &source_arg,
+        "--output",
+        &audit_target_arg,
+        "--profile",
+        "audit-complete",
+        "--audit-scope",
+        "excluded",
+    ]);
+    assert!(mismatched_scope.is_some());
+    let Some(mismatched_scope) = mismatched_scope else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert_eq!(mismatched_scope.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&mismatched_scope.stdout).contains("\"code\":\"InvalidRequest\"")
+    );
+    assert!(!audit_target.exists());
+    assert_eq!(snapshot_tree(&source)?, source_before);
+    Ok(())
+}
+
+#[test]
+fn restore_clone_requires_trusted_policy_before_reading_backup_or_touching_target()
+-> Result<(), String> {
+    let area = TempArea::create()?;
+    let backup = area.path("backup-path-canary");
+    let destination = area.path("restore-target");
+    let backup_arg = backup.to_string_lossy().into_owned();
+    let destination_arg = destination.to_string_lossy().into_owned();
+    let output = run(&[
+        "--format=jsonl",
+        "v1",
+        "restore",
+        "clone",
+        &backup_arg,
+        "--output",
+        &destination_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ]);
+    assert!(output.is_some());
+    let Some(output) = output else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert_eq!(output.status.code(), Some(4));
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("\"code\":\"Unauthorized\""));
+    assert!(!text.contains(&backup_arg));
+    assert!(!text.contains(&destination_arg));
+    assert!(!destination.exists());
     Ok(())
 }

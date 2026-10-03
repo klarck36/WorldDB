@@ -11,10 +11,11 @@ use std::process::Command;
 use worlddb_core::api::v1::{CURRENT_PROTOCOL, PublicCode, RequestId};
 use worlddb_core::{DatabaseId, DomainId};
 use worlddb_storage_file::{
-    DatabaseLayout, FormatProbeError, RecoveryDisposition, RecoveryError, RecoveryManager,
-    SalvageError, SalvageInventorySource, SalvageManager, SalvageSegmentOutcome,
-    StorageDamageClass, StorageFileError, StorageVerifier, StorageVerifyAction, StorageVerifyError,
-    StorageVerifyReport, WriterLockError,
+    BackupAuthenticity, BackupError, BackupProfile, BackupVerification, DatabaseLayout,
+    FormatProbeError, RecoveryDisposition, RecoveryError, RecoveryManager, SalvageError,
+    SalvageInventorySource, SalvageManager, SalvageSegmentOutcome, StorageDamageClass,
+    StorageFileError, StorageVerifier, StorageVerifyAction, StorageVerifyError,
+    StorageVerifyReport, WriterLockError, verify_audit_complete_backup, verify_exact_backup,
 };
 
 use crate::adapter_protocol::{
@@ -33,13 +34,15 @@ const EXIT_CANCELLED: u8 = 9;
 const EXIT_BUDGET_EXCEEDED: u8 = 10;
 const EXIT_INTERNAL: u8 = 70;
 
-const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
+const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 backup create/verify    Create or verify Exact/AuditComplete backups\n  v1 restore clone           Restore a verified backup as a new database\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
 
 const HELP_ADAPTER_RUN: &str = "Usage: worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\n\nThe manifest binds the operation, deterministic seed, ID mapping, protocol capabilities, and process budgets. The adapter receives only framed stdin/stdout data; the output file is written only after a clean adapter exit.";
 const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <database-directory>\n\nRuns read-only storage verification under a shared lock. The report includes safe_revision, disposition, observed damage classes, and safe next actions.";
 const HELP_RECOVERY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 recovery inspect <database-directory>\n       worlddb-cli [--format human|jsonl] v1 recovery run --apply <database-directory>\n\n`inspect` is read-only. `run --apply` explicitly enables journaled recovery of eligible WAL tails and committed snapshots.";
 const HELP_OPEN_READ_ONLY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 open --read-only <database-directory>\n\nValidates and verifies the database without creating files, changing storage, or enabling writes.";
 const HELP_SALVAGE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 salvage <source-directory> --output <new-directory>\n\nCopies verified immutable data to a new marked salvage fork. The source is opened with a shared read-only lock and is never repaired or rewritten.";
+const HELP_BACKUP: &str = "Usage: worlddb-cli [--format human|jsonl] v1 backup create <source-directory> --output <new-directory> --profile exact|audit-complete --audit-scope excluded|included\n       worlddb-cli [--format human|jsonl] v1 backup verify <backup-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nThe profile and matching audit scope are mandatory and repeated in every result. Exact excludes audit history. AuditComplete includes the supported raw-read audit prefix. Creating any backup requires the current BackupCreate capability; this standalone CLI fails closed without a trusted WorldDB host policy.";
+const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore clone <backup-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nRestore requires a trusted WorldDB host policy context, which the standalone CLI does not yet provide. Same-identity disaster recovery is not supported by the storage contract.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -55,6 +58,90 @@ enum HelpScope {
     Recovery,
     OpenReadOnly,
     Salvage,
+    Backup,
+    Restore,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackupAction {
+    Verified,
+}
+
+impl BackupAction {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackupAuditScope {
+    Excluded,
+    Included,
+}
+
+impl BackupAuditScope {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Excluded => "Excluded",
+            Self::Included => "Included",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthenticityLabel {
+    NotClaimed,
+    ClaimedButUnverified,
+    Verified,
+    WrongKey,
+    InvalidMac,
+}
+
+impl AuthenticityLabel {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NotClaimed => "NotClaimed",
+            Self::ClaimedButUnverified => "ClaimedButUnverified",
+            Self::Verified => "Verified",
+            Self::WrongKey => "WrongKey",
+            Self::InvalidMac => "InvalidMac",
+        }
+    }
+
+    fn from_authenticity(authenticity: &BackupAuthenticity) -> Self {
+        match authenticity {
+            BackupAuthenticity::NotClaimed => Self::NotClaimed,
+            BackupAuthenticity::ClaimedButUnverified { .. } => Self::ClaimedButUnverified,
+            BackupAuthenticity::Verified { .. } => Self::Verified,
+            BackupAuthenticity::WrongKey { .. } => Self::WrongKey,
+            BackupAuthenticity::InvalidMac { .. } => Self::InvalidMac,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BackupSummary {
+    database_id: DatabaseId,
+    revision: u64,
+    item_count: usize,
+    audit_safe_sequence: Option<u64>,
+    authenticity: AuthenticityLabel,
+}
+
+impl BackupSummary {
+    fn from_verification(verification: &BackupVerification) -> Self {
+        Self {
+            database_id: verification.database_id(),
+            revision: verification.revision().value(),
+            item_count: verification.item_count(),
+            audit_safe_sequence: verification
+                .audit_safe_sequence()
+                .map(|sequence| sequence.value()),
+            authenticity: AuthenticityLabel::from_authenticity(verification.authenticity()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,6 +214,12 @@ enum Success {
         copied_segments: usize,
         omitted_segments: usize,
         finding_count: usize,
+    },
+    Backup {
+        action: BackupAction,
+        profile: BackupProfile,
+        audit_scope: BackupAuditScope,
+        summary: BackupSummary,
     },
     AdapterRun {
         protocol_major: u16,
@@ -330,6 +423,12 @@ fn parse_help_scope(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     if scope == "salvage" && arguments.is_empty() {
         return Ok(Success::Help(HelpScope::Salvage));
     }
+    if scope == "backup" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Backup));
+    }
+    if scope == "restore" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Restore));
+    }
     Err(CliError::invalid_request())
 }
 
@@ -364,6 +463,12 @@ fn parse_v1_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     }
     if command == "salvage" {
         return parse_salvage_command(arguments);
+    }
+    if command == "backup" {
+        return parse_backup_command(arguments);
+    }
+    if command == "restore" {
+        return parse_restore_command(arguments);
     }
     Err(CliError::unsupported_operation())
 }
@@ -499,6 +604,150 @@ fn parse_salvage_command(mut arguments: VecDeque<OsString>) -> Result<Success, C
         return Err(CliError::invalid_request());
     }
     run_salvage(Path::new(&source_path), Path::new(&target_path))
+}
+
+fn parse_backup_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(action) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::Backup));
+    };
+    if action == "--help" || action == "-h" || action == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::Backup))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+
+    match action.to_str() {
+        Some("create") => {
+            let Some(source_path) = arguments.pop_front() else {
+                return Err(CliError::invalid_request());
+            };
+            if !take_option(&mut arguments, "--output") {
+                return Err(CliError::invalid_request());
+            }
+            let Some(target_path) = arguments.pop_front() else {
+                return Err(CliError::invalid_request());
+            };
+            let (profile, audit_scope) = take_profile_and_scope(&mut arguments)?;
+            if !arguments.is_empty() {
+                return Err(CliError::invalid_request());
+            }
+            run_backup_create(
+                Path::new(&source_path),
+                Path::new(&target_path),
+                profile,
+                audit_scope,
+            )
+        }
+        Some("verify") => {
+            let Some(backup_path) = arguments.pop_front() else {
+                return Err(CliError::invalid_request());
+            };
+            let (profile, audit_scope) = take_profile_and_scope(&mut arguments)?;
+            if !arguments.is_empty() {
+                return Err(CliError::invalid_request());
+            }
+            run_backup_verify(Path::new(&backup_path), profile, audit_scope)
+        }
+        Some(_) => Err(CliError::unsupported_operation()),
+        None => Err(CliError::invalid_request()),
+    }
+}
+
+fn parse_restore_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(mode) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::Restore));
+    };
+    if mode == "--help" || mode == "-h" || mode == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::Restore))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    if mode != "clone" {
+        return Err(CliError::unsupported_operation());
+    }
+    let Some(_backup_path) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if !take_option(&mut arguments, "--output") || arguments.pop_front().is_none() {
+        return Err(CliError::invalid_request());
+    }
+    let (_profile, _audit_scope) = take_profile_and_scope(&mut arguments)?;
+    if !arguments.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+
+    // RestoreManager correctly requires a SecurityPolicyView and current BackupRestore
+    // (plus AuditRead/AuditExport for AuditComplete). The standalone CLI has no trusted host
+    // identity provider, so it must reject before inspecting the backup or touching output.
+    Err(CliError::new(PublicCode::UNAUTHORIZED))
+}
+
+fn take_option(arguments: &mut VecDeque<OsString>, option: &str) -> bool {
+    arguments.pop_front().as_deref() == Some(OsString::from(option).as_os_str())
+}
+
+fn take_profile_and_scope(
+    arguments: &mut VecDeque<OsString>,
+) -> Result<(BackupProfile, BackupAuditScope), CliError> {
+    if !take_option(arguments, "--profile") {
+        return Err(CliError::invalid_request());
+    }
+    let profile = arguments
+        .pop_front()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(CliError::invalid_request)?;
+    if !take_option(arguments, "--audit-scope") {
+        return Err(CliError::invalid_request());
+    }
+    let scope = arguments
+        .pop_front()
+        .and_then(|value| value.into_string().ok())
+        .ok_or_else(CliError::invalid_request)?;
+
+    match (profile.as_str(), scope.as_str()) {
+        ("exact", "excluded") => Ok((BackupProfile::ExactDatabase, BackupAuditScope::Excluded)),
+        ("audit-complete", "included") => {
+            Ok((BackupProfile::AuditComplete, BackupAuditScope::Included))
+        }
+        _ => Err(CliError::invalid_request()),
+    }
+}
+
+fn run_backup_create(
+    _source: &Path,
+    _target: &Path,
+    _profile: BackupProfile,
+    _audit_scope: BackupAuditScope,
+) -> Result<Success, CliError> {
+    // BackupCreate is a current database capability, including for ExactDatabaseBackup.
+    // The standalone CLI has no trusted host policy context, so reject before opening either
+    // path rather than treating filesystem access as a policy grant.
+    Err(CliError::new(PublicCode::UNAUTHORIZED))
+}
+
+fn run_backup_verify(
+    backup: &Path,
+    profile: BackupProfile,
+    audit_scope: BackupAuditScope,
+) -> Result<Success, CliError> {
+    let verification = match profile {
+        BackupProfile::ExactDatabase => verify_exact_backup(backup, None),
+        BackupProfile::AuditComplete => verify_audit_complete_backup(backup, None),
+    }
+    .map_err(map_backup_error)?;
+    if verification.profile() != profile {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    Ok(Success::Backup {
+        action: BackupAction::Verified,
+        profile,
+        audit_scope,
+        summary: BackupSummary::from_verification(&verification),
+    })
 }
 
 fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> {
@@ -748,6 +997,46 @@ fn map_salvage_error(error: SalvageError) -> CliError {
     }
 }
 
+fn map_backup_error(error: BackupError) -> CliError {
+    match error {
+        BackupError::Io { .. }
+        | BackupError::StorageFile(_)
+        | BackupError::Wal(_)
+        | BackupError::Manifest(_)
+        | BackupError::Compaction(_)
+        | BackupError::Audit(_)
+        | BackupError::StorageVerify(_) => CliError::new(PublicCode::STORAGE_READ),
+        BackupError::WriterLock(error) => map_writer_lock_error(error),
+        BackupError::AuditAccess(_) => CliError::new(PublicCode::UNAUTHORIZED),
+        BackupError::DatabaseIdentityMissing
+        | BackupError::SourceSnapshotNotClean
+        | BackupError::SourceSnapshotMismatch
+        | BackupError::IncompleteTarget
+        | BackupError::InvalidBackupManifest
+        | BackupError::IntegrityMismatch
+        | BackupError::InventoryMismatch
+        | BackupError::TargetSnapshotMismatch
+        | BackupError::TargetNotClean(_)
+        | BackupError::InvalidItemPath
+        | BackupError::ProfileMismatch => CliError::new(PublicCode::CORRUPT_DATA),
+        BackupError::InvalidTarget
+        | BackupError::TargetAlreadyExists
+        | BackupError::TargetParentMissing
+        | BackupError::InvalidKeyId => CliError::invalid_request(),
+        BackupError::AuditSegmentsUnsupported => CliError::unsupported_operation(),
+        BackupError::ResourceLimit | BackupError::AllocationFailed => {
+            CliError::new(PublicCode::BUDGET_EXCEEDED)
+        }
+    }
+}
+
+fn backup_profile_label(profile: BackupProfile) -> &'static str {
+    match profile {
+        BackupProfile::ExactDatabase => "ExactDatabase",
+        BackupProfile::AuditComplete => "AuditComplete",
+    }
+}
+
 fn damage_class_index(class: StorageDamageClass) -> usize {
     match class {
         StorageDamageClass::Bitflip => 0,
@@ -878,6 +1167,8 @@ fn write_success<W: Write>(
             Success::Help(HelpScope::Recovery) => writeln!(writer, "{HELP_RECOVERY}"),
             Success::Help(HelpScope::OpenReadOnly) => writeln!(writer, "{HELP_OPEN_READ_ONLY}"),
             Success::Help(HelpScope::Salvage) => writeln!(writer, "{HELP_SALVAGE}"),
+            Success::Help(HelpScope::Backup) => writeln!(writer, "{HELP_BACKUP}"),
+            Success::Help(HelpScope::Restore) => writeln!(writer, "{HELP_RESTORE}"),
             Success::Version => writeln!(
                 writer,
                 "worlddb-cli {} (CLI protocol {}.{})",
@@ -946,6 +1237,25 @@ fn write_success<W: Write>(
                 omitted_segments,
                 finding_count
             ),
+            Success::Backup {
+                action,
+                profile,
+                audit_scope,
+                summary,
+            } => writeln!(
+                writer,
+                "backup {}: profile={}, audit_scope={}, database_id={}, revision={}, item_count={}, audit_safe_sequence={}, authenticity={}, target_verified=true, source_modified=false",
+                action.label(),
+                backup_profile_label(profile),
+                audit_scope.label(),
+                summary.database_id.to_canonical_string(),
+                summary.revision,
+                summary.item_count,
+                summary
+                    .audit_safe_sequence
+                    .map_or_else(|| String::from("none"), |sequence| sequence.to_string()),
+                summary.authenticity.label()
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
     }
@@ -960,7 +1270,7 @@ fn write_json_success<W: Write>(
     match success {
         Success::Help(HelpScope::Root) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 backup\",\"v1 restore\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
         ),
         Success::Help(HelpScope::AdapterRun) => writeln!(
             writer,
@@ -981,6 +1291,14 @@ fn write_json_success<W: Write>(
         Success::Help(HelpScope::Salvage) => writeln!(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"salvage\",\"usage\":\"v1 salvage <source-directory> --output <new-directory>\"}}}}}}"
+        ),
+        Success::Help(HelpScope::Backup) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"backup\",\"create_usage\":\"v1 backup create <source-directory> --output <new-directory> --profile exact|audit-complete --audit-scope excluded|included\",\"verify_usage\":\"v1 backup verify <backup-directory> --profile exact|audit-complete --audit-scope excluded|included\"}}}}}}"
+        ),
+        Success::Help(HelpScope::Restore) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"restore\",\"clone_usage\":\"v1 restore clone <backup-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\",\"same_identity_disaster_recovery\":false}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -1051,6 +1369,33 @@ fn write_json_success<W: Write>(
             salvage_inventory_label(inventory_source),
             disposition_label(disposition)
         ),
+        Success::Backup {
+            action,
+            profile,
+            audit_scope,
+            summary,
+        } => {
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"backup\",\"data\":{{\"status\":\"{}\",\"profile\":\"{}\",\"audit_scope\":\"{}\",\"database_id\":\"{}\",\"revision\":\"{}\",\"item_count\":\"{}\",\"audit_safe_sequence\":",
+                action.label(),
+                backup_profile_label(profile),
+                audit_scope.label(),
+                summary.database_id.to_canonical_string(),
+                summary.revision,
+                summary.item_count
+            )?;
+            if let Some(sequence) = summary.audit_safe_sequence {
+                write!(writer, "\"{sequence}\"")?;
+            } else {
+                writer.write_all(b"null")?;
+            }
+            writeln!(
+                writer,
+                ",\"authenticity\":\"{}\",\"target_verified\":true,\"source_modified\":false}}}}}}",
+                summary.authenticity.label()
+            )
+        }
     }
 }
 
