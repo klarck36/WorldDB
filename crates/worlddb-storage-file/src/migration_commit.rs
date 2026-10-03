@@ -3,9 +3,9 @@
 use std::fmt;
 
 use worlddb_core::{
-    AuditCommitContext, AuditOutcome, CancellablePublishError, CommitCancellation, DomainId,
-    MigrationAuditCommit, MigrationCommitBackend, OperationId, Record, Revision, RevisionBackend,
-    RevisionLogError,
+    AuditCommitContext, AuditOutcome, AuditRecord, CancellablePublishError, CommitCancellation,
+    DomainId, MigrationAuditCommit, MigrationCommitBackend, OperationId, Record, Revision,
+    RevisionBackend, RevisionLogError,
 };
 
 use crate::{
@@ -169,6 +169,84 @@ impl<'a> FileMigrationCommitBackend<'a> {
     #[must_use]
     pub fn last_failure(&self) -> Option<&str> {
         self.last_failure.as_deref()
+    }
+
+    /// Verifies that a prior guarded step and its exact Required Audit record are committed.
+    pub(crate) fn verify_committed_migration_step(
+        &self,
+        expected_base_revision: Revision,
+        entries: &[Record],
+        audit_commit: MigrationAuditCommit,
+        audit_record: &AuditRecord,
+    ) -> Result<Revision, FileMigrationBackendError> {
+        let operation_id = audit_commit.operation_id();
+        let target_revision = expected_base_revision
+            .next_commit()
+            .map_err(|_| FileMigrationBackendError::MigrationAuditMismatch(operation_id))?;
+        if audit_commit.commit_revision() != target_revision || target_revision > self.latest {
+            return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                operation_id,
+            ));
+        }
+
+        let identity = audit_commit.identity();
+        let mut batch_identity = None;
+        for (index, record) in entries.iter().enumerate() {
+            if let Record::MigrationStepCommitIdentity(found) = record {
+                if batch_identity.replace((index, *found)).is_some() {
+                    return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                        operation_id,
+                    ));
+                }
+            }
+        }
+        if batch_identity != entries.len().checked_sub(1).zip(Some(identity)) {
+            return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                operation_id,
+            ));
+        }
+
+        let mut stored_marker = None;
+        for (revision, record) in &self.records {
+            if let Record::MigrationStepCommitIdentity(found) = record {
+                if found.operation_id() == operation_id
+                    && stored_marker.replace((*revision, *found)).is_some()
+                {
+                    return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                        operation_id,
+                    ));
+                }
+            }
+        }
+        if stored_marker != Some((target_revision, identity)) {
+            return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                operation_id,
+            ));
+        }
+
+        let audits = self
+            .wal
+            .committed_required_audit_records(self.writer_lock)
+            .map_err(FileMigrationBackendError::RequiredAudit)?;
+        let mut matching_audit = audits
+            .iter()
+            .filter(|audit| audit.operation_id() == operation_id);
+        let Some(committed_audit) = matching_audit.next() else {
+            return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                operation_id,
+            ));
+        };
+        let action_payload = audit_commit.canonical_action_payload();
+        if matching_audit.next().is_some()
+            || committed_audit.revision() != target_revision
+            || committed_audit.record() != audit_record
+            || committed_audit.migration_action_payload() != Some(action_payload.as_slice())
+        {
+            return Err(FileMigrationBackendError::MigrationAuditMismatch(
+                operation_id,
+            ));
+        }
+        Ok(target_revision)
     }
 
     fn publish_failure(&mut self, message: impl fmt::Display) -> CancellablePublishError {

@@ -340,6 +340,11 @@ pub enum MigrationExecutionError<E> {
     MissingStepTargets,
     /// The backend head differs from the plan's source schema revision.
     SourceRevisionDoesNotMatchHead { planned: Revision, actual: Revision },
+    /// The backend head differs from the exact committed prefix used for guarded resume.
+    ResumeHeadDoesNotMatchPrefix {
+        expected: Revision,
+        actual: Revision,
+    },
     /// There must be exactly one prepared input for every plan step.
     StepInputCountMismatch,
     /// Prepared step inputs must use the exact order and identities in the immutable plan.
@@ -431,6 +436,12 @@ where
         MigrationExecutionMode::Compatible,
         Vec::new(),
         None,
+        0,
+        |_, _, _, _, _, _| {
+            Err(CancellablePublishError::Publish(
+                RevisionLogError::BackendFailure,
+            ))
+        },
         |backend, _base, entries, cancellation, _audit_commit, _audit_record| {
             backend.publish_cancellable(entries, cancellation)
         },
@@ -461,6 +472,68 @@ pub fn execute_guarded_migration<B, E>(
     safe_restore_point: Option<&MigrationSafeRestorePoint>,
     admin_action: Option<&BreakingMigrationAdminAction>,
     required_audit_records: Vec<AuditRecord>,
+    validate_step: impl FnMut(&B, Revision, &[Record], MigrationStepTargetSchema) -> Result<(), E>,
+) -> Result<MigrationExecutionResult, MigrationExecutionFailure<E>>
+where
+    B: MigrationCommitBackend,
+{
+    execute_guarded_migration_with_resume(
+        backend,
+        plan,
+        run_id,
+        source_database_id,
+        actual_source_schema_fingerprint,
+        transformer,
+        step_inputs,
+        decisions,
+        actor,
+        current_policy,
+        policy_target,
+        current_security_epoch,
+        safe_restore_point,
+        admin_action,
+        required_audit_records,
+        0,
+        |_, _, _, _, _, _| {
+            Err(CancellablePublishError::Publish(
+                RevisionLogError::BackendFailure,
+            ))
+        },
+        validate_step,
+    )
+}
+
+/// Resumes a guarded run after its durable journal prefix has been checked against history.
+///
+/// `committed_prefix_len` identifies the contiguous prefix whose step OperationId markers were
+/// found in normative history. `reconcile_existing_step` must verify the exact marker and
+/// Required Audit record for every prefix step and may durably reconcile its journal receipt.
+#[allow(clippy::too_many_arguments, reason = "WDB-EXC-0003")]
+pub fn execute_guarded_migration_with_resume<B, E>(
+    backend: &mut B,
+    plan: &MigrationPlan,
+    run_id: MigrationRunId,
+    source_database_id: crate::DatabaseId,
+    actual_source_schema_fingerprint: [u8; 32],
+    transformer: MigrationTransformer,
+    step_inputs: Vec<MigrationStepInput>,
+    decisions: crate::ValidatedMigrationDecisions,
+    actor: PrincipalId,
+    current_policy: &SecurityPolicySnapshot,
+    policy_target: PolicyTarget,
+    current_security_epoch: SecurityEpoch,
+    safe_restore_point: Option<&MigrationSafeRestorePoint>,
+    admin_action: Option<&BreakingMigrationAdminAction>,
+    required_audit_records: Vec<AuditRecord>,
+    committed_prefix_len: usize,
+    mut reconcile_existing_step: impl FnMut(
+        &mut B,
+        Revision,
+        Vec<Record>,
+        MigrationAuditCommit,
+        AuditRecord,
+        MigrationTransformFingerprint,
+    ) -> Result<Revision, CancellablePublishError>,
     mut validate_step: impl FnMut(&B, Revision, &[Record], MigrationStepTargetSchema) -> Result<(), E>,
 ) -> Result<MigrationExecutionResult, MigrationExecutionFailure<E>>
 where
@@ -483,13 +556,32 @@ where
     {
         return Err(fail(MigrationExecutionError::MigrationUnauthorized));
     }
-    if backend.latest_published() != plan.source_schema_precondition().revision().revision() {
-        return Err(fail(
+    let Some(step_targets) = plan.step_targets() else {
+        return Err(fail(MigrationExecutionError::MissingStepTargets));
+    };
+    let source_revision = plan.source_schema_precondition().revision().revision();
+    let expected_head = if committed_prefix_len == 0 {
+        source_revision
+    } else if let Some(target) = step_targets.get(committed_prefix_len.saturating_sub(1)) {
+        target.schema().revision().revision()
+    } else {
+        return Err(fail(MigrationExecutionError::StepInputCountMismatch));
+    };
+    if committed_prefix_len > plan.steps().len() {
+        return Err(fail(MigrationExecutionError::StepInputCountMismatch));
+    }
+    if backend.latest_published() != expected_head {
+        return Err(fail(if committed_prefix_len == 0 {
             MigrationExecutionError::SourceRevisionDoesNotMatchHead {
-                planned: plan.source_schema_precondition().revision().revision(),
+                planned: source_revision,
                 actual: backend.latest_published(),
-            },
-        ));
+            }
+        } else {
+            MigrationExecutionError::ResumeHeadDoesNotMatchPrefix {
+                expected: expected_head,
+                actual: backend.latest_published(),
+            }
+        }));
     }
     if let Err(error) = plan.validate_start(
         plan.source_schema_precondition().revision(),
@@ -518,9 +610,6 @@ where
         }
     }
 
-    let Some(step_targets) = plan.step_targets() else {
-        return Err(fail(MigrationExecutionError::MissingStepTargets));
-    };
     if required_audit_records.len() != plan.steps().len()
         || step_inputs.len() != plan.steps().len()
         || step_targets.len() != plan.steps().len()
@@ -788,6 +877,8 @@ where
         MigrationExecutionMode::Guarded,
         required_audit_records,
         Some(decision_fingerprint),
+        committed_prefix_len,
+        &mut reconcile_existing_step,
         |backend, base, entries, cancellation, audit_commit, audit_record| match (
             audit_commit,
             audit_record,
@@ -826,6 +917,15 @@ fn execute_migration_internal<B, E>(
     mode: MigrationExecutionMode,
     required_audit_records: Vec<AuditRecord>,
     decision_fingerprint: Option<[u8; 32]>,
+    committed_prefix_len: usize,
+    mut reconcile_existing_step: impl FnMut(
+        &mut B,
+        Revision,
+        Vec<Record>,
+        MigrationAuditCommit,
+        AuditRecord,
+        MigrationTransformFingerprint,
+    ) -> Result<Revision, CancellablePublishError>,
     mut publish_step: impl FnMut(
         &mut B,
         Revision,
@@ -881,17 +981,45 @@ where
         ));
     };
 
-    let latest = backend.latest_published();
-    let actual_source_revision = SchemaRevision::from_published_revision(latest);
-    if latest != plan.source_schema_precondition().revision().revision() {
+    if committed_prefix_len > step_inputs.len() {
         return Err(fail(
-            MigrationExecutionError::SourceRevisionDoesNotMatchHead {
-                planned: plan.source_schema_precondition().revision().revision(),
-                actual: latest,
+            MigrationExecutionError::StepInputCountMismatch,
+            completed_steps,
+        ));
+    }
+    let latest = backend.latest_published();
+    let source_revision = plan.source_schema_precondition().revision().revision();
+    let expected_head = if committed_prefix_len == 0 {
+        source_revision
+    } else if let Some(target) = step_targets.get(committed_prefix_len.saturating_sub(1)) {
+        target.schema().revision().revision()
+    } else {
+        return Err(fail(
+            MigrationExecutionError::StepInputCountMismatch,
+            completed_steps,
+        ));
+    };
+    if latest != expected_head {
+        return Err(fail(
+            if committed_prefix_len == 0 {
+                MigrationExecutionError::SourceRevisionDoesNotMatchHead {
+                    planned: source_revision,
+                    actual: latest,
+                }
+            } else {
+                MigrationExecutionError::ResumeHeadDoesNotMatchPrefix {
+                    expected: expected_head,
+                    actual: latest,
+                }
             },
             completed_steps,
         ));
     }
+    let actual_source_revision = if committed_prefix_len == 0 {
+        SchemaRevision::from_published_revision(latest)
+    } else {
+        plan.source_schema_precondition().revision()
+    };
     if let Err(error) = plan.validate_start(
         actual_source_revision,
         actual_source_schema_fingerprint,
@@ -1209,7 +1337,21 @@ where
             staged_records.push(record);
         }
         drop(batch);
-        let base_revision = backend.latest_published();
+        let base_revision = if step_index < committed_prefix_len {
+            if step_index == 0 {
+                source_revision
+            } else {
+                let Some(previous_target) = step_targets.get(step_index - 1) else {
+                    return Err(fail(
+                        MigrationExecutionError::MissingStepTargets,
+                        completed_steps,
+                    ));
+                };
+                previous_target.schema().revision().revision()
+            }
+        } else {
+            backend.latest_published()
+        };
         let expected_revision = match base_revision.next_commit() {
             Ok(revision) => revision,
             Err(_) => {
@@ -1291,6 +1433,50 @@ where
             ),
         };
         staged_records.push(Record::MigrationStepCommitIdentity(step_identity));
+
+        if step_index < committed_prefix_len {
+            let (Some(audit_commit), Some(audit_record)) = (audit_commit, audit_record) else {
+                return Err(fail(
+                    MigrationExecutionError::RequiredAuditCountMismatch,
+                    completed_steps,
+                ));
+            };
+            let revision = match reconcile_existing_step(
+                backend,
+                base_revision,
+                staged_records,
+                audit_commit,
+                audit_record,
+                transform_fingerprint,
+            ) {
+                Ok(revision) => revision,
+                Err(error) => {
+                    return Err(fail(
+                        MigrationExecutionError::Publish { step_id, error },
+                        completed_steps,
+                    ));
+                }
+            };
+            completed_steps.push(MigrationStepCommitReceipt {
+                step_id,
+                operation_id,
+                revision,
+                target_schema: step_target,
+                transform_fingerprint,
+                audit_record_id,
+            });
+            if revision != expected_revision {
+                return Err(fail(
+                    MigrationExecutionError::UnexpectedPublishedRevision {
+                        step_id,
+                        expected: expected_revision,
+                        actual: revision,
+                    },
+                    completed_steps,
+                ));
+            }
+            continue;
+        }
 
         let mut transaction = match OpenTransaction::begin(backend, base_revision) {
             Ok(transaction) => transaction,

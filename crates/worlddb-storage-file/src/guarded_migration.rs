@@ -1,5 +1,6 @@
 //! Guarded migration execution bound to a recovered file-store and durable run journal.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use worlddb_core::{
@@ -11,7 +12,7 @@ use worlddb_core::{
     MigrationSafeRestorePoint, MigrationStepInput, MigrationStepTargetSchema,
     MigrationTransformFingerprint, MigrationTransformer, MigrationTransformerVersion, PolicyTarget,
     PrincipalId, Record, Revision, RevisionBackend, RevisionLogError, SecurityEpoch,
-    SecurityPolicySnapshot, encode_record, execute_guarded_migration,
+    SecurityPolicySnapshot, encode_record, execute_guarded_migration_with_resume,
 };
 
 use crate::{
@@ -56,6 +57,8 @@ pub enum FileStoreGuardedMigrationJournalFailure {
     Transition(MigrationRunJournalError),
     /// The commit marker did not match the prepared run and step identity.
     CommitBindingMismatch,
+    /// A previously committed step or its exact Required Audit record did not match.
+    BackendVerification(FileMigrationBackendError),
     /// A committed output record could not be canonically encoded for its receipt fingerprint.
     RecordEncoding(worlddb_core::RecordCodecError),
 }
@@ -69,6 +72,12 @@ impl fmt::Display for FileStoreGuardedMigrationJournalFailure {
             }
             Self::CommitBindingMismatch => formatter
                 .write_str("migration commit does not match the durable run-journal step identity"),
+            Self::BackendVerification(error) => {
+                write!(
+                    formatter,
+                    "committed migration step verification failed: {error}"
+                )
+            }
             Self::RecordEncoding(error) => {
                 write!(
                     formatter,
@@ -86,6 +95,7 @@ impl std::error::Error for FileStoreGuardedMigrationJournalFailure {
             Self::Transition(error) => Some(error),
             Self::RecordEncoding(error) => Some(error),
             Self::CommitBindingMismatch => None,
+            Self::BackendVerification(error) => Some(error),
         }
     }
 }
@@ -101,8 +111,15 @@ pub enum FileStoreGuardedMigrationExecutionError<E> {
     InputFingerprintFailed,
     /// A previous run id is bound to another plan, input, or transformer version.
     JournalIdentityMismatch,
-    /// This run already has a committed or prepared prefix; M7-16e adds resume execution.
+    /// The durable journal has no trustworthy matching commit prefix.
     ResumeRequired(MigrationRunId),
+    /// Durable markers disagree with the run specification or are not a contiguous prefix.
+    ResumeHistoryMismatch(MigrationRunId),
+    /// Current file-store head is not the journal's exact committed prefix.
+    ResumeHeadMismatch {
+        expected: Revision,
+        actual: Revision,
+    },
     /// An already completed run cannot be executed a second time.
     RunAlreadyCompleted(MigrationRunId),
     /// The durable sidecar failed before the step's file-store commit was attempted.
@@ -142,6 +159,14 @@ impl<E: fmt::Debug> fmt::Display for FileStoreGuardedMigrationExecutionError<E> 
                 formatter,
                 "migration run {run_id} has a durable prefix and must be resumed or reconciled",
             ),
+            Self::ResumeHistoryMismatch(run_id) => write!(
+                formatter,
+                "migration run {run_id} journal and normative commit markers disagree",
+            ),
+            Self::ResumeHeadMismatch { expected, actual } => write!(
+                formatter,
+                "migration run resume expected history head {expected}, found {actual}",
+            ),
             Self::RunAlreadyCompleted(run_id) => {
                 write!(formatter, "migration run {run_id} is already complete")
             }
@@ -178,7 +203,8 @@ enum DeferredJournalFailure {
 ///
 /// Each step's Prepared sidecar snapshot is synced before its WAL commit. The matching committed
 /// step state is saved only after the Required Audit action and migration marker are durable.
-/// This handle refuses an existing prepared prefix; `M7-16e` owns resuming such a run.
+/// Existing prepared prefixes are reconciled by their persisted OperationId markers before the
+/// core executor resumes the remaining steps.
 pub struct FileStoreGuardedMigrationRun<'a> {
     backend: FileMigrationCommitBackend<'a>,
     journal: MigrationRunJournalFileStore<'a>,
@@ -265,9 +291,11 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
                 }
             },
         )?;
-        self.prepare_run_state(spec, run_id)?;
+        let decision_fingerprint = decisions.decision_fingerprint();
+        let committed_prefix_len =
+            self.prepare_run_state(spec, run_id, plan, decision_fingerprint)?;
 
-        let result = execute_guarded_migration(
+        let result = execute_guarded_migration_with_resume(
             self,
             plan,
             run_id,
@@ -283,6 +311,16 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
             safe_restore_point,
             admin_action,
             required_audit_records,
+            committed_prefix_len,
+            |run, base, entries, audit_commit, audit_record, transform_fingerprint| {
+                run.reconcile_existing_step(
+                    base,
+                    entries,
+                    audit_commit,
+                    audit_record,
+                    transform_fingerprint,
+                )
+            },
             validate_step,
         );
 
@@ -321,6 +359,7 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
                 },
             );
         }
+        crash_if_requested("completed");
         Ok(result)
     }
 
@@ -328,7 +367,9 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
         &mut self,
         spec: MigrationRunJournalSpec,
         run_id: MigrationRunId,
-    ) -> Result<(), FileStoreGuardedMigrationExecutionError<E>> {
+        plan: &MigrationPlan,
+        decision_fingerprint: [u8; 32],
+    ) -> Result<usize, FileStoreGuardedMigrationExecutionError<E>> {
         if self
             .journal_spec
             .as_ref()
@@ -347,21 +388,233 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
             if snapshot.state() == worlddb_core::MigrationRunJournalState::Completed {
                 return Err(FileStoreGuardedMigrationExecutionError::RunAlreadyCompleted(run_id));
             }
-            if snapshot
-                .steps()
-                .iter()
-                .any(|step| step.state() != MigrationRunJournalStepState::Pending)
-            {
-                return Err(FileStoreGuardedMigrationExecutionError::ResumeRequired(
-                    run_id,
-                ));
-            }
             self.snapshot = Some(snapshot);
         } else {
             self.snapshot = None;
         }
-        self.journal_spec = Some(spec);
-        Ok(())
+        self.journal_spec = Some(spec.clone());
+        self.find_committed_prefix(&spec, run_id, plan, decision_fingerprint)
+    }
+
+    fn find_committed_prefix<E>(
+        &self,
+        spec: &MigrationRunJournalSpec,
+        run_id: MigrationRunId,
+        plan: &MigrationPlan,
+        decision_fingerprint: [u8; 32],
+    ) -> Result<usize, FileStoreGuardedMigrationExecutionError<E>> {
+        let latest = self.backend.latest_published();
+        let history = self
+            .backend
+            .read_at(latest)
+            .map_err(|_| FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id))?;
+        let mut expected_operations = BTreeMap::new();
+        for step in spec.steps() {
+            if expected_operations
+                .insert(step.operation_id(), *step)
+                .is_some()
+            {
+                return Err(FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id));
+            }
+        }
+        let mut markers = BTreeMap::new();
+        for (revision, record) in history {
+            let Record::MigrationStepCommitIdentity(identity) = record else {
+                continue;
+            };
+            let expected_run_marker =
+                identity.migration_id() == spec.migration_id() && identity.run_id() == run_id;
+            if !expected_run_marker && !expected_operations.contains_key(&identity.operation_id()) {
+                continue;
+            }
+            let Some(step) = expected_operations.get(&identity.operation_id()).copied() else {
+                return Err(FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id));
+            };
+            if !expected_run_marker
+                || identity.step_id() != step.step_id()
+                || identity.input_fingerprint() != Some(step.input_fingerprint())
+                || identity.plan_fingerprint() != Some(*spec.plan_fingerprint().as_bytes())
+                || identity.decision_fingerprint() != Some(decision_fingerprint)
+                || revision != step.target_revision()
+                || markers
+                    .insert(identity.operation_id(), (revision, *identity))
+                    .is_some()
+            {
+                return Err(FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id));
+            }
+        }
+
+        if self.snapshot.is_none() && !markers.is_empty() {
+            return Err(FileStoreGuardedMigrationExecutionError::ResumeRequired(
+                run_id,
+            ));
+        }
+        let mut committed_prefix_len = 0_usize;
+        let mut prefix_ended = false;
+        let snapshot_steps = self
+            .snapshot
+            .as_ref()
+            .map(MigrationRunJournalSnapshot::steps);
+        for (index, step) in spec.steps().iter().enumerate() {
+            let state = snapshot_steps
+                .and_then(|steps| steps.get(index))
+                .map(|step| step.state())
+                .unwrap_or(MigrationRunJournalStepState::Pending);
+            let marker = markers.get(&step.operation_id());
+            match state {
+                MigrationRunJournalStepState::Pending => {
+                    if marker.is_some() {
+                        return Err(
+                            FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id),
+                        );
+                    }
+                    prefix_ended = true;
+                }
+                MigrationRunJournalStepState::Prepared => {
+                    if marker.is_some() {
+                        if prefix_ended {
+                            return Err(
+                                FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(
+                                    run_id,
+                                ),
+                            );
+                        }
+                        committed_prefix_len = committed_prefix_len.saturating_add(1);
+                    } else {
+                        prefix_ended = true;
+                    }
+                }
+                MigrationRunJournalStepState::Committed { revision, .. } => {
+                    let Some((marker_revision, identity)) = marker else {
+                        return Err(
+                            FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id),
+                        );
+                    };
+                    if prefix_ended
+                        || *marker_revision != revision
+                        || identity.step_id() != step.step_id()
+                    {
+                        return Err(
+                            FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id),
+                        );
+                    }
+                    committed_prefix_len = committed_prefix_len.saturating_add(1);
+                }
+            }
+            if prefix_ended {
+                for later in index + 1..spec.steps().len() {
+                    let Some(later_step) = spec.steps().get(later) else {
+                        return Err(
+                            FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id),
+                        );
+                    };
+                    if markers.contains_key(&later_step.operation_id())
+                        || snapshot_steps
+                            .and_then(|steps| steps.get(later))
+                            .is_some_and(|step| {
+                                step.state() != MigrationRunJournalStepState::Pending
+                            })
+                    {
+                        return Err(
+                            FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id),
+                        );
+                    }
+                }
+            }
+        }
+
+        let expected_head = if committed_prefix_len == 0 {
+            plan.source_schema_precondition().revision().revision()
+        } else if let Some(prefix_step) = spec.steps().get(committed_prefix_len.saturating_sub(1)) {
+            prefix_step.target_revision()
+        } else {
+            return Err(FileStoreGuardedMigrationExecutionError::ResumeHistoryMismatch(run_id));
+        };
+        if self.snapshot.is_some() && latest != expected_head {
+            return Err(
+                FileStoreGuardedMigrationExecutionError::ResumeHeadMismatch {
+                    expected: expected_head,
+                    actual: latest,
+                },
+            );
+        }
+        Ok(committed_prefix_len)
+    }
+
+    fn reconcile_existing_step(
+        &mut self,
+        expected_base_revision: Revision,
+        entries: Vec<Record>,
+        audit_commit: MigrationAuditCommit,
+        audit_record: AuditRecord,
+        transform_fingerprint: MigrationTransformFingerprint,
+    ) -> Result<Revision, CancellablePublishError> {
+        let operation_id = audit_commit.operation_id();
+        let revision = match self.backend.verify_committed_migration_step(
+            expected_base_revision,
+            &entries,
+            audit_commit,
+            &audit_record,
+        ) {
+            Ok(revision) => revision,
+            Err(source) => {
+                self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                    operation_id,
+                    source: FileStoreGuardedMigrationJournalFailure::BackendVerification(source),
+                });
+                return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+            }
+        };
+        let step_id = audit_commit.identity().step_id();
+        let Some(snapshot) = self.snapshot.as_mut() else {
+            self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                operation_id,
+                source: FileStoreGuardedMigrationJournalFailure::CommitBindingMismatch,
+            });
+            return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+        };
+        let Some(step) = snapshot
+            .steps()
+            .iter()
+            .find(|step| step.spec().step_id() == step_id)
+        else {
+            self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                operation_id,
+                source: FileStoreGuardedMigrationJournalFailure::CommitBindingMismatch,
+            });
+            return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+        };
+        match step.state() {
+            MigrationRunJournalStepState::Committed {
+                revision: prior_revision,
+                transform_fingerprint: prior_fingerprint,
+            } if prior_revision == revision && prior_fingerprint == transform_fingerprint => {
+                return Ok(revision);
+            }
+            MigrationRunJournalStepState::Prepared => {}
+            _ => {
+                self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                    operation_id,
+                    source: FileStoreGuardedMigrationJournalFailure::CommitBindingMismatch,
+                });
+                return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+            }
+        }
+        if let Err(error) = snapshot.mark_step_committed(step_id, revision, transform_fingerprint) {
+            self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                operation_id,
+                source: FileStoreGuardedMigrationJournalFailure::Transition(error),
+            });
+            return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+        }
+        if let Err(error) = self.journal.save(snapshot) {
+            self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
+                operation_id,
+                source: FileStoreGuardedMigrationJournalFailure::Store(error),
+            });
+            return Err(CancellablePublishError::OutcomeUnknown(operation_id));
+        }
+        Ok(revision)
     }
 
     fn fail_before_commit(
@@ -407,6 +660,7 @@ impl<'a> FileStoreGuardedMigrationRun<'a> {
                         .save(&snapshot)
                         .map_err(FileStoreGuardedMigrationJournalFailure::Store)?;
                     self.snapshot = Some(snapshot);
+                    crash_if_requested("running");
                 }
             }
         }
@@ -506,6 +760,16 @@ impl MigrationCommitBackend for FileStoreGuardedMigrationRun<'_> {
                 FileStoreGuardedMigrationJournalFailure::CommitBindingMismatch,
             ));
         }
+        let Some(step_ordinal) = spec
+            .steps()
+            .iter()
+            .position(|step| step.step_id() == identity.step_id())
+            .and_then(|index| index.checked_add(1))
+        else {
+            return Err(self.fail_before_commit(
+                FileStoreGuardedMigrationJournalFailure::CommitBindingMismatch,
+            ));
+        };
 
         let Some(transformed_records) = entries.get(..marker_index) else {
             return Err(self.fail_before_commit(
@@ -543,6 +807,7 @@ impl MigrationCommitBackend for FileStoreGuardedMigrationRun<'_> {
                 self.fail_before_commit(FileStoreGuardedMigrationJournalFailure::Store(error))
             );
         }
+        crash_if_requested(&format!("prepared_step_{step_ordinal}"));
 
         let operation_id = identity.operation_id();
         let revision = self.backend.publish_migration_step_with_required_audit(
@@ -552,6 +817,7 @@ impl MigrationCommitBackend for FileStoreGuardedMigrationRun<'_> {
             audit_record,
             cancellation,
         )?;
+        crash_if_requested(&format!("wal_commit_step_{step_ordinal}"));
         let Some(snapshot) = self.snapshot.as_mut() else {
             self.deferred_journal_failure = Some(DeferredJournalFailure::AfterCommit {
                 operation_id,
@@ -575,9 +841,21 @@ impl MigrationCommitBackend for FileStoreGuardedMigrationRun<'_> {
             });
             return Err(CancellablePublishError::OutcomeUnknown(operation_id));
         }
+        crash_if_requested(&format!("committed_step_{step_ordinal}"));
         Ok(revision)
     }
 }
+
+#[cfg(test)]
+fn crash_if_requested(checkpoint: &str) {
+    const CHECKPOINT_ENV: &str = "WORLDDB_M7_16E_MIGRATION_CRASH_CHECKPOINT";
+    if std::env::var(CHECKPOINT_ENV).is_ok_and(|wanted| wanted == checkpoint) {
+        std::process::exit(86);
+    }
+}
+
+#[cfg(not(test))]
+fn crash_if_requested(_checkpoint: &str) {}
 
 enum JournalSpecBuildError {
     Journal(MigrationRunJournalError),
@@ -656,6 +934,7 @@ fn calculate_transform_fingerprint(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use worlddb_core::{
@@ -668,8 +947,8 @@ mod tests {
         MigrationRunJournalStepState, MigrationStepInput, MigrationStepTargetSchema,
         MigrationTargetSchema, MigrationTransformer, MigrationTransformerVersion, PolicyRuleId,
         PolicyScope, PolicySubject, PolicyTarget, PredicateId, Principal, PrincipalId, Record,
-        Revision, SchemaDefinitionId, SchemaIdentityTransition, SchemaRevision, SecurityEpoch,
-        SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
+        Revision, RevisionBackend, SchemaDefinitionId, SchemaIdentityTransition, SchemaRevision,
+        SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
         SourceSchemaPrecondition, ValidatedMigrationDecisions,
     };
 
@@ -954,6 +1233,36 @@ mod tests {
                 ))
             })
             .collect()
+    }
+
+    fn changed_second_input(
+        inputs: &[MigrationStepInput],
+    ) -> Result<Vec<MigrationStepInput>, String> {
+        let mut changed = Vec::new();
+        changed
+            .try_reserve_exact(inputs.len())
+            .map_err(|_| String::from("could not reserve changed migration inputs"))?;
+        for (index, input) in inputs.iter().enumerate() {
+            let records = if index == 1 {
+                let record = Record::HistorySpaceDefinition(
+                    worlddb_core::HistorySpaceDefinition::new(
+                        id::<worlddb_core::HistorySpaceId>(99)?,
+                        None,
+                        Revision::GENESIS,
+                    )
+                    .map_err(|error| error.to_string())?,
+                );
+                vec![worlddb_core::encode_record(&record).map_err(|error| error.to_string())?]
+            } else {
+                input.records().to_vec()
+            };
+            changed.push(MigrationStepInput::new(
+                input.step_id(),
+                input.operation_id(),
+                records,
+            ));
+        }
+        Ok(changed)
     }
 
     fn security_history(
@@ -1321,6 +1630,302 @@ mod tests {
             record.record().action() == AuditAction::Migration
                 && record.migration_action_payload().is_some()
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn process_crash_at_each_guarded_migration_boundary_resumes_without_duplicate_steps()
+    -> Result<(), String> {
+        const ROOT_ENV: &str = "WORLDDB_M7_16E_MIGRATION_ROOT";
+        const CHECKPOINT_ENV: &str = "WORLDDB_M7_16E_MIGRATION_CRASH_CHECKPOINT";
+        const TEST_NAME: &str = "guarded_migration::tests::process_crash_at_each_guarded_migration_boundary_resumes_without_duplicate_steps";
+
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let actor = id::<PrincipalId>(43)?;
+            let source_database_id = layout
+                .database_id()
+                .ok_or_else(|| String::from("source database identity is missing"))?;
+            let (plan, empty_inputs) =
+                plan_and_inputs(MigrationCategory::Restrictive, Revision::FIRST_COMMIT, 2)?;
+            let inputs = with_history_records(&empty_inputs)?;
+            let policy = policy(actor, true, false)?;
+            let validated_decisions = decisions(&plan, &inputs, actor, &policy)?;
+            let audits = audit_records(&plan, &inputs, actor, &policy, 40, 50)?;
+            let run_id = id::<MigrationRunId>(44)?;
+            let mut run = FileStoreGuardedMigrationRun::open(layout, &lock)
+                .map_err(|error| error.to_string())?;
+            let result = run.execute(
+                &plan,
+                run_id,
+                source_database_id,
+                [0x11; 32],
+                MigrationTransformer::for_version(
+                    MigrationTransformerVersion::new(1).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?,
+                inputs,
+                validated_decisions,
+                actor,
+                &policy,
+                PolicyTarget::default(),
+                SecurityEpoch::INITIAL,
+                None,
+                None,
+                audits,
+                |_, _, _, _| Ok::<(), String>(()),
+            );
+            return Err(format!(
+                "child did not exit at the requested migration checkpoint: {result:?}; selected={:?}",
+                std::env::var_os(CHECKPOINT_ENV)
+            ));
+        }
+
+        let checkpoints = [
+            "running",
+            "prepared_step_1",
+            "wal_commit_step_1",
+            "committed_step_1",
+            "prepared_step_2",
+            "wal_commit_step_2",
+            "committed_step_2",
+            "completed",
+        ];
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        for checkpoint in checkpoints {
+            let area = TempArea::create()?;
+            let layout =
+                DatabaseLayout::create(area.path("source")).map_err(|error| error.to_string())?;
+            install_genesis_history(&layout)?;
+            let output = Command::new(&executable)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, layout.root())
+                .env(CHECKPOINT_ENV, checkpoint)
+                .output()
+                .map_err(|error| format!("spawn child for {checkpoint}: {error}"))?;
+            if output.status.code() != Some(86) {
+                return Err(format!(
+                    "child for {checkpoint} exited with {:?}, expected exit 86; stdout: {}; stderr: {}",
+                    output.status.code(),
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+
+            let layout = DatabaseLayout::open(layout.root()).map_err(|error| error.to_string())?;
+            let lock = layout
+                .try_writer_lock()
+                .map_err(|error| error.to_string())?;
+            let actor = id::<PrincipalId>(43)?;
+            let source_database_id = layout
+                .database_id()
+                .ok_or_else(|| String::from("source database identity is missing"))?;
+            let run_id = id::<MigrationRunId>(44)?;
+            let policy = policy(actor, true, false)?;
+            let (plan, empty_inputs) =
+                plan_and_inputs(MigrationCategory::Restrictive, Revision::FIRST_COMMIT, 2)?;
+            let inputs = with_history_records(&empty_inputs)?;
+            let audits = audit_records(&plan, &inputs, actor, &policy, 40, 50)?;
+            let validated_decisions = decisions(&plan, &inputs, actor, &policy)?;
+            let mut run = FileStoreGuardedMigrationRun::open(layout.clone(), &lock)
+                .map_err(|error| format!("reopen after {checkpoint}: {error}"))?;
+
+            let committed_count = match checkpoint {
+                "running" | "prepared_step_1" => 0,
+                "wal_commit_step_1" | "committed_step_1" | "prepared_step_2" => 1,
+                _ => 2,
+            };
+            let expected_head = match committed_count {
+                0 => Revision::FIRST_COMMIT,
+                1 => Revision::try_from(2).map_err(|error| error.to_string())?,
+                _ => Revision::try_from(3).map_err(|error| error.to_string())?,
+            };
+            assert_eq!(run.latest_published(), expected_head, "after {checkpoint}");
+            let before = run
+                .load_journal_status(run_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("journal disappeared after {checkpoint}"))?;
+            let first_state = before
+                .steps()
+                .first()
+                .map(|step| step.state())
+                .ok_or_else(|| String::from("first migration journal step is missing"))?;
+            let second_state = before
+                .steps()
+                .get(1)
+                .map(|step| step.state())
+                .ok_or_else(|| String::from("second migration journal step is missing"))?;
+            let second_revision = Revision::try_from(2).map_err(|error| error.to_string())?;
+            let third_revision = Revision::try_from(3).map_err(|error| error.to_string())?;
+            match checkpoint {
+                "running" => assert_eq!(first_state, MigrationRunJournalStepState::Pending),
+                "prepared_step_1" | "wal_commit_step_1" => {
+                    assert_eq!(first_state, MigrationRunJournalStepState::Prepared)
+                }
+                _ => assert!(matches!(
+                    first_state,
+                    MigrationRunJournalStepState::Committed { revision, .. }
+                        if revision == second_revision
+                )),
+            }
+            match checkpoint {
+                "running" | "prepared_step_1" | "wal_commit_step_1" | "committed_step_1" => {
+                    assert_eq!(second_state, MigrationRunJournalStepState::Pending)
+                }
+                "prepared_step_2" | "wal_commit_step_2" => {
+                    assert_eq!(second_state, MigrationRunJournalStepState::Prepared)
+                }
+                _ => assert!(matches!(
+                    second_state,
+                    MigrationRunJournalStepState::Committed { revision, .. }
+                        if revision == third_revision
+                )),
+            }
+            assert_eq!(
+                before.state(),
+                if checkpoint == "completed" {
+                    MigrationRunJournalState::Completed
+                } else {
+                    MigrationRunJournalState::Running
+                }
+            );
+
+            let initial_audits = WalPrepareLog::new(&layout)
+                .committed_required_audit_records(&lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(initial_audits.len(), committed_count);
+            let initial_markers = run
+                .read_at(run.latest_published())
+                .map_err(|error| error.to_string())?
+                .filter(|(_, record)| {
+                    matches!(record, Record::MigrationStepCommitIdentity(identity) if identity.run_id() == run_id)
+                })
+                .count();
+            assert_eq!(initial_markers, committed_count);
+
+            if checkpoint == "wal_commit_step_1" {
+                let changed_inputs = changed_second_input(&inputs)?;
+                let changed_decisions = decisions(&plan, &changed_inputs, actor, &policy)?;
+                let changed_audits = audit_records(&plan, &changed_inputs, actor, &policy, 40, 50)?;
+                let changed = run.execute(
+                    &plan,
+                    run_id,
+                    source_database_id,
+                    [0x11; 32],
+                    MigrationTransformer::for_version(
+                        MigrationTransformerVersion::new(1).map_err(|error| error.to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    changed_inputs,
+                    changed_decisions,
+                    actor,
+                    &policy,
+                    PolicyTarget::default(),
+                    SecurityEpoch::INITIAL,
+                    None,
+                    None,
+                    changed_audits,
+                    |_, _, _, _| Ok::<(), String>(()),
+                );
+                assert!(matches!(
+                    changed,
+                    Err(FileStoreGuardedMigrationExecutionError::JournalIdentityMismatch)
+                ));
+                assert_eq!(run.latest_published(), expected_head);
+                assert_eq!(
+                    WalPrepareLog::new(&layout)
+                        .committed_required_audit_records(&lock)
+                        .map_err(|error| error.to_string())?
+                        .len(),
+                    committed_count
+                );
+            }
+
+            if checkpoint == "completed" {
+                let repeated = run.execute(
+                    &plan,
+                    run_id,
+                    source_database_id,
+                    [0x11; 32],
+                    MigrationTransformer::for_version(
+                        MigrationTransformerVersion::new(1).map_err(|error| error.to_string())?,
+                    )
+                    .map_err(|error| error.to_string())?,
+                    inputs,
+                    validated_decisions,
+                    actor,
+                    &policy,
+                    PolicyTarget::default(),
+                    SecurityEpoch::INITIAL,
+                    None,
+                    None,
+                    audits,
+                    |_, _, _, _| Ok::<(), String>(()),
+                );
+                assert!(matches!(
+                    repeated,
+                    Err(FileStoreGuardedMigrationExecutionError::RunAlreadyCompleted(_))
+                ));
+            } else {
+                let resumed = run
+                    .execute(
+                        &plan,
+                        run_id,
+                        source_database_id,
+                        [0x11; 32],
+                        MigrationTransformer::for_version(
+                            MigrationTransformerVersion::new(1)
+                                .map_err(|error| error.to_string())?,
+                        )
+                        .map_err(|error| error.to_string())?,
+                        inputs,
+                        validated_decisions,
+                        actor,
+                        &policy,
+                        PolicyTarget::default(),
+                        SecurityEpoch::INITIAL,
+                        None,
+                        None,
+                        audits,
+                        |_, _, _, _| Ok::<(), String>(()),
+                    )
+                    .map_err(|error| format!("resume after {checkpoint}: {error}"))?;
+                assert_eq!(resumed.completed_steps().len(), 2);
+                assert_eq!(
+                    resumed.final_revision(),
+                    Revision::try_from(3).map_err(|error| error.to_string())?
+                );
+            }
+
+            assert_eq!(
+                run.latest_published(),
+                Revision::try_from(3).map_err(|e| e.to_string())?
+            );
+            let final_snapshot = run
+                .load_journal_status(run_id)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| String::from("completed journal is missing"))?;
+            assert_eq!(final_snapshot.state(), MigrationRunJournalState::Completed);
+            let final_markers = run
+                .read_at(run.latest_published())
+                .map_err(|error| error.to_string())?
+                .filter(|(_, record)| {
+                    matches!(record, Record::MigrationStepCommitIdentity(identity) if identity.run_id() == run_id)
+                })
+                .count();
+            assert_eq!(final_markers, 2, "no duplicate marker after {checkpoint}");
+            assert_eq!(
+                WalPrepareLog::new(&layout)
+                    .committed_required_audit_records(&lock)
+                    .map_err(|error| error.to_string())?
+                    .len(),
+                2,
+                "exact Required Audit count after {checkpoint}"
+            );
+        }
         Ok(())
     }
 }

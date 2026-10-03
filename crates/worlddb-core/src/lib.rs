@@ -975,7 +975,8 @@ pub use migration_execution::{
     MigrationExecutionResult, MigrationResumeError, MigrationResumeFailure,
     MigrationStepCommitReceipt, MigrationStepCommitStatus, MigrationStepInput,
     MigrationStepStatusError, MigrationStepValidationError, execute_compatible_migration,
-    execute_guarded_migration, execute_or_resume_compatible_migration, query_migration_step_status,
+    execute_guarded_migration, execute_guarded_migration_with_resume,
+    execute_or_resume_compatible_migration, query_migration_step_status,
 };
 pub use migration_guard::{
     BreakingMigrationAdminAction, BreakingMigrationAdminActionError, MigrationAuditCommit,

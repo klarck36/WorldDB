@@ -9,7 +9,7 @@
 
 The wrapper constructs and verifies a journal specification from the plan, run identity, transformer version, ordered per-step inputs, and their canonical input fingerprints. At each step it binds the commit marker to the plan, run, step, operation, input fingerprint, target revision, and terminal position of the marker. The transformed records are fingerprinted using the core v2 encoding.
 
-The run sidecar is created only when an authorized step reaches publication. The wrapper syncs `Prepared` before the WAL commit and records `Committed` only after the migration record, canonical migration action, Required Audit record, and history replay state have committed under the same WAL marker. It records `Completed` after every step. If the WAL commit succeeds but the journal cannot be updated, the API returns the operation identity as an unknown/reconciliation case; it does not claim that the run failed without publication. A prepared or committed prefix currently returns `ResumeRequired`; resumption is M7-16e.
+The run sidecar is created only when an authorized step reaches publication. The wrapper syncs `Prepared` before the WAL commit and records `Committed` only after the migration record, canonical migration action, Required Audit record, and history replay state have committed under the same WAL marker. It records `Completed` after every step. If the WAL commit succeeds but the journal cannot be updated, the API returns the operation identity as an unknown/reconciliation case; it does not claim that the run failed without publication. M7-16e adds reopen-and-resume for prepared or committed prefixes by reconciling the exact OperationId marker and Required Audit record before continuing.
 
 ## Windows verification
 
@@ -24,4 +24,4 @@ Workspace Clippy passed with warnings denied. `cargo xtask verify` passed with *
 
 ## Boundaries
 
-The adapter does not resume a prepared prefix in this task; M7-16e adds crash/reopen reconciliation and idempotent resume. Cross-platform execution remains deferred to M9-07 per project instruction.
+This task's four integration cases did not exercise process-crash recovery; M7-16e now supplies the separate crash/reopen reconciliation and idempotent-resume evidence. Cross-platform execution remains deferred to M9-07 per project instruction.
