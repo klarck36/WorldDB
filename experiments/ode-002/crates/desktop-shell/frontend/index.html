@@ -44,6 +44,7 @@
       #schema-status { min-height: 1.5em; }
       #branch-layer-status { min-height: 1.5em; }
       #perspective-status { min-height: 1.5em; }
+      #security-policy-status { min-height: 1.5em; }
       .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
       label { display: block; font-weight: 600; margin-bottom: 7px; }
       input, button {
@@ -253,6 +254,58 @@
           </div>
           <p id="entity-deprecated-warning" class="schema-note muted" hidden>Dieser EntityType ist veraltet. Die Anlage benötigt ausdrückliche Freigabe und eine zusätzliche Berechtigung.</p>
           <div class="actions"><button id="entity-create" type="button">Entität anlegen</button></div>
+        </fieldset>
+      </section>
+      <section id="security-policy-panel" class="card" aria-labelledby="security-policy-heading" hidden>
+        <h2 id="security-policy-heading">Rechteverwaltung</h2>
+        <p class="muted">Benutzer, GM/Player-Rollen und einzelne Berechtigungen werden hier verwaltet. Diese Rollen sind getrennt von Perspektiven und Wissenskontexten. Administratorischer Raw-Zugriff ist eine eigene Berechtigung; die GM-Rolle erhält ihn nicht automatisch.</p>
+        <div class="actions"><button id="security-policy-refresh" type="button">Rechte anzeigen</button></div>
+        <p id="security-policy-status" class="muted" role="status" aria-live="polite"></p>
+        <div class="grid">
+          <section aria-labelledby="policy-principals-heading">
+            <h3 id="policy-principals-heading">Benutzerkonten</h3>
+            <div id="security-policy-principals" aria-live="polite"></div>
+          </section>
+          <section aria-labelledby="policy-roles-heading">
+            <h3 id="policy-roles-heading">Rollen und Policy-Bundles</h3>
+            <div id="security-policy-roles" aria-live="polite"></div>
+          </section>
+        </div>
+        <fieldset id="security-policy-principal-editor">
+          <legend>Benutzerkonto verwalten</legend>
+          <label for="policy-principal-select">Benutzerkonto</label>
+          <select id="policy-principal-select"></select>
+          <label for="policy-principal-state">Zustand</label>
+          <select id="policy-principal-state">
+            <option value="active">Aktiv</option>
+            <option value="disabled">Deaktiviert</option>
+            <option value="retired">Dauerhaft stillgelegt</option>
+          </select>
+          <div class="actions"><button id="policy-principal-save" type="button">Änderung veröffentlichen</button></div>
+        </fieldset>
+        <fieldset id="security-policy-role-editor">
+          <legend>Rolle zuweisen</legend>
+          <div class="grid">
+            <div><label for="policy-assignment-principal">Benutzerkonto</label><select id="policy-assignment-principal"></select></div>
+            <div><label for="policy-assignment-role">Rolle</label><select id="policy-assignment-role"></select></div>
+          </div>
+          <div class="actions"><button id="policy-role-assign" type="button">Rolle zuweisen</button></div>
+          <div id="security-policy-assignments" aria-live="polite"></div>
+          <div class="grid">
+            <div><label for="policy-new-role-symbol">Neue Rolle (ASCII-Kleinbuchstaben)</label><input id="policy-new-role-symbol" autocomplete="off" placeholder="z. B. redakteur" /></div>
+            <div class="actions"><button id="policy-role-create" type="button">Leere Rolle anlegen</button></div>
+          </div>
+        </fieldset>
+        <fieldset id="security-policy-rule-editor">
+          <legend>Explizite Berechtigung hinzufügen</legend>
+          <div class="grid">
+            <div><label for="policy-rule-subject">Benutzerkonto oder Rolle</label><select id="policy-rule-subject"></select></div>
+            <div><label for="policy-rule-capability">Berechtigung</label><select id="policy-rule-capability"></select></div>
+            <div><label for="policy-rule-effect">Wirkung</label><select id="policy-rule-effect"><option value="allow">Erlauben</option><option value="deny">Verweigern</option></select></div>
+          </div>
+          <p class="muted">Neue Regeln gelten projektweit. Ein passendes Verweigern hat Vorrang vor jedem Erlauben. Fehlende Rechte bleiben verweigert.</p>
+          <div class="actions"><button id="policy-rule-add" type="button">Berechtigung veröffentlichen</button></div>
+          <div id="security-policy-rules" aria-live="polite"></div>
         </fieldset>
       </section>
       <section id="perspective-panel" class="card" aria-labelledby="perspective-heading" hidden>

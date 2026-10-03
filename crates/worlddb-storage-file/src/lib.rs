@@ -105,7 +105,8 @@ pub use salvage::{
 pub use schema_management::{
     EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager,
     FileHistorySpaceTransferManager, FileProjectMetadataManager, FileSchemaManager,
-    HistorySpaceTransferError, LayerManagementError, MetadataPublicationReceipt,
+    FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,
+    MetadataPublicationReceipt, PolicyManagementError, PolicyPublicationReceipt,
     SchemaManagementError, SchemaPublicationReceipt, TransferEventRelationItem,
     TransferPublicationReceipt, TransferSourceItem,
 };

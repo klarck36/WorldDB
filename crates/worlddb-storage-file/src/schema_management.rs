@@ -23,6 +23,10 @@ mod project_metadata;
 pub use project_metadata::{
     FileProjectMetadataManager, LayerManagementError, MetadataPublicationReceipt,
 };
+mod security_policy;
+pub use security_policy::{
+    FileSecurityPolicyManager, PolicyManagementError, PolicyPublicationReceipt,
+};
 mod transfer;
 pub use transfer::{
     FileHistorySpaceTransferManager, HistorySpaceTransferError, TransferEventRelationItem,

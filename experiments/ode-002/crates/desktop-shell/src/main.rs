@@ -16,7 +16,8 @@ use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
     HistorySpaceTransferCommand, HistorySpaceTransferResponse, PerspectiveCommand,
-    PerspectiveResponse, Response, SchemaCommand, SchemaResponse, StreamPlan,
+    PerspectiveResponse, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
+    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -172,7 +173,8 @@ fn run() -> Result<(), String> {
             manage_entities,
             manage_branch_layers,
             manage_history_space_transfer,
-            manage_perspectives
+            manage_perspectives,
+            manage_security_policy
         ])
         .run(tauri::generate_context!())
         .map_err(|error| error.to_string())
@@ -296,6 +298,14 @@ struct PerspectiveRequestV1 {
     command: PerspectiveCommand,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SecurityPolicyRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: SecurityPolicyCommand,
+}
+
 #[derive(Serialize)]
 struct BranchLayerResponseV1 {
     protocol_version: u16,
@@ -318,6 +328,12 @@ struct EntityResponseV1 {
 struct PerspectiveResponseV1 {
     protocol_version: u16,
     result: PerspectiveResponse,
+}
+
+#[derive(Serialize)]
+struct SecurityPolicyResponseV1 {
+    protocol_version: u16,
+    result: SecurityPolicyResponse,
 }
 
 #[derive(Serialize)]
@@ -671,6 +687,45 @@ fn manage_perspectives(
     }
 }
 
+#[tauri::command]
+fn manage_security_policy(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: SecurityPolicyRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<SecurityPolicyResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let is_write = !matches!(&request.command, SecurityPolicyCommand::Snapshot);
+    let operation = security_policy_smoke_operation(&request.command);
+    let result = match backend.security_policy(request.command) {
+        Ok(result) => {
+            record_security_policy_smoke(window.label(), operation, true, Some(&result))?;
+            result
+        }
+        Err(_) => {
+            record_security_policy_smoke(window.label(), operation, false, None)?;
+            return Err(IpcErrorV1::new("security_policy_rejected"));
+        }
+    };
+    if is_write {
+        let _ = app.emit("project-state-changed", ());
+    }
+    Ok(SecurityPolicyResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
 async fn pick_project_parent(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -845,6 +900,121 @@ fn perspective_smoke_operation(command: &PerspectiveCommand) -> &'static str {
         PerspectiveCommand::Update { .. } => "update",
         PerspectiveCommand::Retire { .. } => "retire",
         PerspectiveCommand::ValidateContext { .. } => "validate_context",
+    }
+}
+
+fn security_policy_smoke_operation(command: &SecurityPolicyCommand) -> &'static str {
+    match command {
+        SecurityPolicyCommand::Snapshot => "snapshot",
+        SecurityPolicyCommand::SetPrincipalState { .. } => "set_principal_state",
+        SecurityPolicyCommand::RegisterRole { .. } => "register_role",
+        SecurityPolicyCommand::AssignRole { .. } => "assign_role",
+        SecurityPolicyCommand::RevokeRoleAssignment { .. } => "revoke_role_assignment",
+        SecurityPolicyCommand::AddCapabilityRule { .. } => "add_capability_rule",
+        SecurityPolicyCommand::RevokeCapabilityRule { .. } => "revoke_capability_rule",
+    }
+}
+
+fn record_security_policy_smoke(
+    window_label: &str,
+    operation: &str,
+    succeeded: bool,
+    result: Option<&SecurityPolicyResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-security-policy-{window_label}.jsonl"));
+    let fields = result.map_or_else(
+        SecurityPolicySmokeFields::default,
+        |response| match response {
+            SecurityPolicyResponse::Snapshot(snapshot) => policy_smoke_snapshot_fields(snapshot),
+            SecurityPolicyResponse::Published(publication) => SecurityPolicySmokeFields {
+                revision: Some(publication.revision),
+                security_epoch: Some(publication.security_epoch),
+                ..SecurityPolicySmokeFields::default()
+            },
+        },
+    );
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "succeeded": succeeded,
+        "revision": fields.revision,
+        "security_epoch": fields.security_epoch,
+        "principal_count": fields.principal_count,
+        "role_count": fields.role_count,
+        "assignment_count": fields.assignment_count,
+        "explicit_rule_count": fields.rule_count,
+        "gm_admin_raw_allow": fields.gm_admin_raw_allow,
+        "gm_raw_history_allow": fields.gm_raw_history_allow,
+        "gm_admin_raw_deny": fields.gm_admin_raw_deny,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+#[derive(Default)]
+struct SecurityPolicySmokeFields {
+    revision: Option<u64>,
+    security_epoch: Option<u64>,
+    principal_count: Option<usize>,
+    role_count: Option<usize>,
+    assignment_count: Option<usize>,
+    rule_count: Option<usize>,
+    gm_admin_raw_allow: Option<bool>,
+    gm_raw_history_allow: Option<bool>,
+    gm_admin_raw_deny: Option<bool>,
+}
+
+fn policy_smoke_snapshot_fields(
+    snapshot: &SecurityPolicySnapshotView,
+) -> SecurityPolicySmokeFields {
+    let gm = snapshot.roles.iter().find(|role| role.symbol == "gm");
+    let gm_admin_raw_allow = gm.is_some_and(|role| {
+        role.bundle
+            .iter()
+            .any(|rule| rule.capability == "admin_raw_read" && rule.effect == "allow")
+    });
+    let gm_raw_history_allow = gm.is_some_and(|role| {
+        role.bundle
+            .iter()
+            .any(|rule| rule.capability == "raw_history_read" && rule.effect == "allow")
+    });
+    let gm_admin_raw_deny = gm.is_some_and(|role| {
+        snapshot.explicit_rules.iter().any(|rule| {
+            rule.subject_kind == "role"
+                && rule.subject_id == role.role_id
+                && rule.capability == "admin_raw_read"
+                && rule.effect == "deny"
+        })
+    });
+    SecurityPolicySmokeFields {
+        revision: Some(snapshot.revision),
+        security_epoch: Some(snapshot.security_epoch),
+        principal_count: Some(snapshot.principals.len()),
+        role_count: Some(snapshot.roles.len()),
+        assignment_count: Some(snapshot.assignments.len()),
+        rule_count: Some(snapshot.explicit_rules.len()),
+        gm_admin_raw_allow: Some(gm_admin_raw_allow),
+        gm_raw_history_allow: Some(gm_raw_history_allow),
+        gm_admin_raw_deny: Some(gm_admin_raw_deny),
     }
 }
 
@@ -1610,6 +1780,13 @@ impl Backend {
         self.with_engine(|engine| engine.perspectives(command))
     }
 
+    fn security_policy(
+        &self,
+        command: SecurityPolicyCommand,
+    ) -> Result<SecurityPolicyResponse, String> {
+        self.with_engine(|engine| engine.security_policy(command))
+    }
+
     fn project_status_locked(
         &self,
         state: &mut BackendState,
@@ -1848,6 +2025,23 @@ impl EngineBackend {
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
                 .perspectives(command),
+        }
+    }
+
+    fn security_policy(
+        &self,
+        command: SecurityPolicyCommand,
+    ) -> Result<SecurityPolicyResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .security_policy(command)
+                .map_err(|_| "engine rejected security policy operation".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .security_policy(command),
         }
     }
 
@@ -2169,6 +2363,17 @@ impl Sidecar {
             Response::Perspectives { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected Perspective operation".to_owned()),
             _ => Err("sidecar returned an unexpected Perspective response".to_owned()),
+        }
+    }
+
+    fn security_policy(
+        &mut self,
+        command: SecurityPolicyCommand,
+    ) -> Result<SecurityPolicyResponse, String> {
+        match self.request(Request::SecurityPolicy { command })? {
+            Response::SecurityPolicy { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected security policy operation".to_owned()),
+            _ => Err("sidecar returned an unexpected security policy response".to_owned()),
         }
     }
 

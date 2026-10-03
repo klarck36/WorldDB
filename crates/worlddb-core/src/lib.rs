@@ -884,6 +884,27 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates the idempotency identity for a policy-administration commit.
+    #[doc(hidden)]
+    pub fn generate_security_policy_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the Required Audit identity for a policy-administration commit.
+    #[doc(hidden)]
+    pub fn generate_security_policy_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the Required Audit operation identity for a policy-administration commit.
+    #[doc(hidden)]
+    pub fn generate_security_policy_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Records a restore-point token after the file adapter verified a real clone restore.
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments, reason = "WDB-EXC-0004")]

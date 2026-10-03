@@ -79,6 +79,25 @@ const entityDeprecatedOptIn = document.querySelector("#entity-deprecated-opt-in"
 const entityAcceptDeprecated = document.querySelector("#entity-accept-deprecated");
 const entityDeprecatedWarning = document.querySelector("#entity-deprecated-warning");
 const entityCreateButton = document.querySelector("#entity-create");
+const securityPolicyPanel = document.querySelector("#security-policy-panel");
+const securityPolicyStatus = document.querySelector("#security-policy-status");
+const securityPolicyPrincipals = document.querySelector("#security-policy-principals");
+const securityPolicyRoles = document.querySelector("#security-policy-roles");
+const securityPolicyAssignments = document.querySelector("#security-policy-assignments");
+const securityPolicyRules = document.querySelector("#security-policy-rules");
+const securityPolicyRefresh = document.querySelector("#security-policy-refresh");
+const policyPrincipalSelect = document.querySelector("#policy-principal-select");
+const policyPrincipalState = document.querySelector("#policy-principal-state");
+const policyPrincipalSave = document.querySelector("#policy-principal-save");
+const policyAssignmentPrincipal = document.querySelector("#policy-assignment-principal");
+const policyAssignmentRole = document.querySelector("#policy-assignment-role");
+const policyRoleAssign = document.querySelector("#policy-role-assign");
+const policyNewRoleSymbol = document.querySelector("#policy-new-role-symbol");
+const policyRoleCreate = document.querySelector("#policy-role-create");
+const policyRuleSubject = document.querySelector("#policy-rule-subject");
+const policyRuleCapability = document.querySelector("#policy-rule-capability");
+const policyRuleEffect = document.querySelector("#policy-rule-effect");
+const policyRuleAdd = document.querySelector("#policy-rule-add");
 const perspectivePanel = document.querySelector("#perspective-panel");
 const perspectiveViewMode = document.querySelector("#perspective-view-mode");
 const perspectiveViewRevision = document.querySelector("#perspective-view-revision");
@@ -157,6 +176,7 @@ const userMessages = {
   branch_layer_rejected: "Die Branch- oder Layer-Aktion wurde abgelehnt. Prüfe Cutoff, Priorität, Berechtigung und aktuellen Projektstand.",
   history_space_transfer_rejected: "Die Übertragung wurde abgelehnt. Lade Quelle und Ziel neu und prüfe die Verweise sowie die Vorschau.",
   perspective_rejected: "Die Perspektivenaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
+  security_policy_rejected: "Die Rechteaktion wurde abgelehnt. Prüfe die erforderliche Berechtigung und lade den aktuellen Projektstand neu.",
 };
 
 let sessionId;
@@ -166,6 +186,8 @@ let projectBusy = false;
 let schemaBusy = false;
 let entityBusy = false;
 let perspectiveBusy = false;
+let securityPolicyBusy = false;
+let securityPolicyUnavailable = false;
 let branchLayerBusy = false;
 let transferBusy = false;
 let schemaCurrentMode = true;
@@ -175,6 +197,7 @@ let currentSchema = null;
 let selectedEntities = null;
 let selectedPerspectives = null;
 let currentPerspectives = null;
+let currentSecurityPolicy = null;
 let selectedBranchLayers = null;
 let branchLayerCurrentMode = true;
 let transferCatalog = null;
@@ -194,12 +217,12 @@ function showError(error) {
 }
 
 function updateSchemaControls() {
-  const canRead = projectOpen && !schemaBusy && !projectBusy && !entityBusy && !perspectiveBusy && !branchLayerBusy && !transferBusy;
+  const canRead = projectOpen && !schemaBusy && !projectBusy && !entityBusy && !perspectiveBusy && !securityPolicyBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && schemaCurrentMode;
   schemaRefreshButton.disabled = !canRead;
   schemaCreateButton.disabled = !canMutate;
   for (const control of schemaEditor.querySelectorAll("input, select, textarea, button")) {
-    control.disabled = schemaBusy || projectBusy || perspectiveBusy || branchLayerBusy || transferBusy;
+    control.disabled = schemaBusy || projectBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy;
   }
   schemaCreateButton.disabled = !canMutate;
   schemaLifecyclePublish.disabled = !canMutate || stagedLifecycleChanges.length === 0;
@@ -211,6 +234,7 @@ function updateSchemaControls() {
   }
   updateEntityControls();
   updatePerspectiveControls();
+  updateSecurityPolicyControls();
   updateBranchLayerControls();
   updateTransferControls();
   updateProjectControls();
@@ -218,11 +242,11 @@ function updateSchemaControls() {
 
 function updateEntityControls() {
   if (!entityPanel) return;
-  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !perspectiveBusy && !branchLayerBusy && !transferBusy;
+  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !perspectiveBusy && !securityPolicyBusy && !branchLayerBusy && !transferBusy;
   const canMutate = canRead && entityCurrentMode;
   entityRefreshButton.disabled = !canRead;
   for (const control of entityEditor.querySelectorAll("input, select, button")) {
-    control.disabled = entityBusy || projectBusy || schemaBusy || perspectiveBusy || branchLayerBusy || transferBusy;
+    control.disabled = entityBusy || projectBusy || schemaBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy;
   }
   entityCreateButton.disabled = !canMutate || !entityTypeSelect.value
     || (selectedEntityType()?.lifecycle === "deprecated" && !entityAcceptDeprecated.checked);
@@ -233,7 +257,7 @@ function updateEntityControls() {
 
 function updatePerspectiveControls() {
   if (!perspectivePanel) return;
-  const blocked = perspectiveBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy;
+  const blocked = perspectiveBusy || securityPolicyBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy;
   const canRead = projectOpen && !blocked;
   const canMutate = canRead && perspectiveViewMode.value === "current";
   perspectiveRefreshButton.disabled = !canRead;
@@ -256,9 +280,30 @@ function updatePerspectiveControls() {
   }
 }
 
+function updateSecurityPolicyControls() {
+  if (!securityPolicyPanel) return;
+  const blocked = securityPolicyBusy || projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy;
+  const canRead = projectOpen && !blocked && !securityPolicyUnavailable;
+  securityPolicyRefresh.disabled = !canRead;
+  for (const editor of [
+    securityPolicyPanel.querySelector("#security-policy-principal-editor"),
+    securityPolicyPanel.querySelector("#security-policy-role-editor"),
+    securityPolicyPanel.querySelector("#security-policy-rule-editor"),
+  ]) {
+    for (const control of editor.querySelectorAll("input, select, button")) control.disabled = !canRead;
+  }
+  policyPrincipalSave.disabled = !canRead || !policyPrincipalSelect.value;
+  policyRoleAssign.disabled = !canRead || !policyAssignmentPrincipal.value || !policyAssignmentRole.value;
+  policyRoleCreate.disabled = !canRead || !/^[a-z][a-z0-9_]*$/.test(policyNewRoleSymbol.value);
+  policyRuleAdd.disabled = !canRead || !policyRuleSubject.value || !policyRuleCapability.value;
+  for (const button of securityPolicyPanel.querySelectorAll("button[data-policy-revoke]")) {
+    button.disabled = !canRead;
+  }
+}
+
 function updateBranchLayerControls() {
   if (!branchLayerPanel) return;
-  const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !perspectiveBusy && !transferBusy;
+  const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !perspectiveBusy && !securityPolicyBusy && !transferBusy;
   const canMutate = canRead && branchLayerCurrentMode;
   branchLayerRefreshButton.disabled = !canRead;
   for (const editor of [branchCreateEditor, layerCreateEditor, layerEditEditor]) {
@@ -282,7 +327,7 @@ function updateBranchLayerControls() {
 
 function updateTransferControls() {
   if (!transferPanel) return;
-  const blocked = transferBusy || projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy;
+  const blocked = transferBusy || projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy;
   const canRead = projectOpen && !blocked;
   transferLoadButton.disabled = !canRead || !transferSource.value || !transferTarget.value
     || transferSource.value === transferTarget.value;
@@ -293,9 +338,9 @@ function updateTransferControls() {
 }
 
 function updateProjectControls() {
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || projectOpen;
-  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || projectOpen;
-  closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || !projectOpen;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || projectOpen;
+  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || projectOpen;
+  closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || !projectOpen;
 }
 
 function setBusy(busy) {
@@ -307,6 +352,7 @@ function renderProject(project) {
   projectOpen = Boolean(project.project_open);
   schemaPanel.hidden = !projectOpen;
   entityPanel.hidden = !projectOpen;
+  securityPolicyPanel.hidden = !projectOpen;
   perspectivePanel.hidden = !projectOpen;
   branchLayerPanel.hidden = !projectOpen;
   transferPanel.hidden = !projectOpen;
@@ -337,6 +383,9 @@ async function refreshProject(activeSessionId) {
     await refreshEntities(activeSessionId).catch((error) => {
       entityStatus.textContent = showError(error);
     });
+    await refreshSecurityPolicy(activeSessionId).catch((error) => {
+      securityPolicyStatus.textContent = showError(error);
+    });
     await refreshPerspectives(activeSessionId).catch((error) => {
       perspectiveStatus.textContent = showError(error);
     });
@@ -353,11 +402,17 @@ async function refreshProject(activeSessionId) {
     selectedEntities = null;
     selectedPerspectives = null;
     currentPerspectives = null;
+    currentSecurityPolicy = null;
+    securityPolicyUnavailable = false;
     selectedBranchLayers = null;
     transferCatalog = null;
     transferPreviewTicket = null;
     schemaDefinitions.replaceChildren();
     entityList.replaceChildren();
+    securityPolicyPrincipals.replaceChildren();
+    securityPolicyRoles.replaceChildren();
+    securityPolicyAssignments.replaceChildren();
+    securityPolicyRules.replaceChildren();
     perspectiveList.replaceChildren();
     branchTree.replaceChildren();
     layerList.replaceChildren();
@@ -992,6 +1047,255 @@ function renderEntities(snapshot) {
   }
 }
 
+async function invokeSecurityPolicyFor(activeSessionId, command) {
+  const response = await invoke("manage_security_policy", {
+    request: { protocol_version: 1, session_id: activeSessionId, command },
+  });
+  if (response.protocol_version !== 1 || !response.result?.kind) throw new Error("unsupported_protocol");
+  return response.result;
+}
+
+async function refreshSecurityPolicy(activeSessionId = sessionId) {
+  if (!activeSessionId || !projectOpen || securityPolicyBusy) return;
+  securityPolicyBusy = true;
+  updateSchemaControls();
+  securityPolicyStatus.textContent = "Berechtigungen werden geladen …";
+  try {
+    const result = await invokeSecurityPolicyFor(activeSessionId, { command: "snapshot" });
+    if (result.kind !== "snapshot") throw new Error("unsupported_protocol");
+    currentSecurityPolicy = result;
+    securityPolicyUnavailable = false;
+    renderSecurityPolicy(result);
+    updateSecurityPolicyControls();
+  } catch (error) {
+    currentSecurityPolicy = null;
+    securityPolicyUnavailable = true;
+    securityPolicyPrincipals.replaceChildren();
+    securityPolicyRoles.replaceChildren();
+    securityPolicyAssignments.replaceChildren();
+    securityPolicyRules.replaceChildren();
+    securityPolicyStatus.textContent = showError(error);
+    throw error;
+  } finally {
+    securityPolicyBusy = false;
+    updateSchemaControls();
+  }
+}
+
+function renderSecurityPolicy(snapshot) {
+  securityPolicyStatus.textContent = `Projektrevision ${snapshot.revision} · SecurityEpoch ${snapshot.security_epoch}`;
+  securityPolicyPrincipals.replaceChildren();
+  securityPolicyRoles.replaceChildren();
+  securityPolicyAssignments.replaceChildren();
+  securityPolicyRules.replaceChildren();
+
+  const previousPrincipal = policyPrincipalSelect.value;
+  const previousAssignmentPrincipal = policyAssignmentPrincipal.value;
+  const previousRole = policyAssignmentRole.value;
+  const previousSubject = policyRuleSubject.value;
+  const previousCapability = policyRuleCapability.value;
+  fillPolicySelect(policyPrincipalSelect, snapshot.principals.map((item) => ({
+    value: item.principal_id,
+    label: `${item.principal_id} · ${principalStateLabel(item.state)}`,
+  })), previousPrincipal);
+  fillPolicySelect(policyAssignmentPrincipal, snapshot.principals
+    .filter((item) => item.state === "active")
+    .map((item) => ({ value: item.principal_id, label: item.principal_id })), previousAssignmentPrincipal);
+  fillPolicySelect(policyAssignmentRole, snapshot.roles.map((item) => ({
+    value: item.role_id,
+    label: `${item.symbol} · ${item.role_id}`,
+  })), previousRole);
+  const subjects = [
+    ...snapshot.principals.map((item) => ({
+      value: `principal:${item.principal_id}`,
+      label: `Benutzerkonto · ${item.principal_id}`,
+    })),
+    ...snapshot.roles.map((item) => ({
+      value: `role:${item.role_id}`,
+      label: `Rolle · ${item.symbol}`,
+    })),
+  ];
+  fillPolicySelect(policyRuleSubject, subjects, previousSubject);
+  fillPolicySelect(policyRuleCapability, snapshot.capabilities.map((item) => ({
+    value: item,
+    label: capabilityLabel(item),
+  })), previousCapability);
+
+  if (snapshot.principals.length === 0) {
+    appendText(securityPolicyPrincipals, "p", "Keine registrierten Benutzerkonten.", "muted");
+  }
+  for (const principal of snapshot.principals) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    appendText(card, "p", `${principalStateLabel(principal.state)} · ${principal.principal_id}`);
+    const assignments = snapshot.assignments
+      .filter((item) => item.principal_id === principal.principal_id)
+      .map((item) => snapshot.roles.find((roleItem) => roleItem.role_id === item.role_id)?.symbol ?? "unbekannte Rolle");
+    appendText(card, "p", assignments.length ? `Rollen: ${assignments.join(", ")}` : "Keine Rolle zugewiesen.", "muted");
+    securityPolicyPrincipals.append(card);
+  }
+
+  if (snapshot.roles.length === 0) appendText(securityPolicyRoles, "p", "Keine registrierten Rollen.", "muted");
+  for (const roleItem of snapshot.roles) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    appendText(card, "h3", `${roleItem.symbol} · Policy-Bundle`);
+    appendText(card, "p", `ID: ${roleItem.role_id}`, "muted");
+    const granted = roleItem.bundle.map((item) => `${capabilityLabel(item.capability)} (${effectLabel(item.effect)})`);
+    appendText(card, "p", granted.length ? `Basis-Bundle: ${granted.join(", ")}` : "Basis-Bundle ist leer.", "muted");
+    const hasAdminRaw = roleItem.bundle.some((item) => item.capability === "admin_raw_read" && item.effect === "allow");
+    const hasRawHistory = roleItem.bundle.some((item) => item.capability === "raw_history_read" && item.effect === "allow");
+    appendText(card, "p", `AdminRawRead: ${hasAdminRaw ? "explizit erlaubt" : "nicht im Basis-Bundle"} · RawHistoryRead: ${hasRawHistory ? "im Basis-Bundle" : "nicht im Basis-Bundle"}`, "muted");
+    const extraRules = snapshot.explicit_rules.filter((rule) => rule.subject_kind === "role" && rule.subject_id === roleItem.role_id);
+    appendText(card, "p", `Zusätzliche explizite Regeln: ${extraRules.length}${extraRules.length ? ` · ${extraRules.map((item) => `${capabilityLabel(item.capability)} (${effectLabel(item.effect)})`).join(", ")}` : ""}`, "muted");
+    securityPolicyRoles.append(card);
+  }
+
+  if (snapshot.assignments.length === 0) appendText(securityPolicyAssignments, "p", "Noch keine Rollen zugewiesen.", "muted");
+  for (const assignment of snapshot.assignments) {
+    const row = document.createElement("div");
+    row.className = "definition";
+    const roleItem = snapshot.roles.find((item) => item.role_id === assignment.role_id);
+    appendText(row, "p", `${assignment.principal_id} → ${roleItem?.symbol ?? "unbekannte Rolle"} · Bereich: ${assignment.scope}`);
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.dataset.policyRevoke = "assignment";
+    revoke.textContent = "Rolle entziehen";
+    revoke.addEventListener("click", () => revokePolicyAssignment(assignment.assignment_id));
+    row.append(revoke);
+    securityPolicyAssignments.append(row);
+  }
+
+  if (snapshot.explicit_rules.length === 0) appendText(securityPolicyRules, "p", "Noch keine zusätzlichen Capabilities eingetragen.", "muted");
+  for (const rule of snapshot.explicit_rules) {
+    const row = document.createElement("div");
+    row.className = "definition";
+    const subjectLabel = rule.subject_kind === "role"
+      ? snapshot.roles.find((item) => item.role_id === rule.subject_id)?.symbol ?? rule.subject_id
+      : rule.subject_id;
+    appendText(row, "p", `${rule.subject_kind === "role" ? "Rolle" : "Benutzerkonto"} ${subjectLabel} · ${capabilityLabel(rule.capability)} · ${effectLabel(rule.effect)} · ${rule.scope}`);
+    appendText(row, "p", `Regel-ID: ${rule.rule_id}`, "muted");
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.dataset.policyRevoke = "rule";
+    revoke.textContent = "Regel entziehen";
+    revoke.addEventListener("click", () => revokePolicyRule(rule.rule_id));
+    row.append(revoke);
+    securityPolicyRules.append(row);
+  }
+  if (snapshot.capabilities.includes("admin_raw_read")) {
+    appendText(securityPolicyStatus, "p", "AdminRawRead ist eine eigene Capability und wird keiner GM-Rolle automatisch erteilt.", "muted");
+  }
+  policyPrincipalState.value = snapshot.principals.find((item) => item.principal_id === policyPrincipalSelect.value)?.state ?? "active";
+  updateSecurityPolicyControls();
+}
+
+function fillPolicySelect(select, entries, previousValue) {
+  select.replaceChildren();
+  for (const entry of entries) {
+    const option = document.createElement("option");
+    option.value = entry.value;
+    option.textContent = entry.label;
+    select.append(option);
+  }
+  if (entries.some((entry) => entry.value === previousValue)) select.value = previousValue;
+  else if (entries.length > 0) select.value = entries[0].value;
+}
+
+function principalStateLabel(value) {
+  return ({ active: "Aktiv", disabled: "Deaktiviert", retired: "Dauerhaft stillgelegt" })[value] ?? value;
+}
+
+function capabilityLabel(value) {
+  return value.replaceAll("_", " ");
+}
+
+function effectLabel(value) {
+  return value === "allow" ? "Erlauben" : "Verweigern";
+}
+
+async function publishPolicyChange(command, successText) {
+  if (!currentSecurityPolicy) throw new Error("security_policy_rejected");
+  securityPolicyBusy = true;
+  updateSchemaControls();
+  securityPolicyStatus.textContent = "Rechteänderung wird geprüft und atomar veröffentlicht …";
+  try {
+    const result = await invokeSecurityPolicyFor(sessionId, {
+      ...command,
+      expected_base_revision: currentSecurityPolicy.revision,
+    });
+    if (result.kind !== "published") throw new Error("unsupported_protocol");
+    securityPolicyStatus.textContent = `${successText} · Revision ${result.revision} · SecurityEpoch ${result.security_epoch}.`;
+    try {
+      const snapshot = await invokeSecurityPolicyFor(sessionId, { command: "snapshot" });
+      if (snapshot.kind !== "snapshot") throw new Error("unsupported_protocol");
+      currentSecurityPolicy = snapshot;
+      securityPolicyUnavailable = false;
+      renderSecurityPolicy(snapshot);
+    } catch {
+      currentSecurityPolicy = null;
+      securityPolicyUnavailable = true;
+      securityPolicyStatus.textContent += " Die neue Richtlinie gilt bereits; dieses Konto darf die aktuelle Richtlinie nicht mehr lesen.";
+    }
+    await refreshProject(sessionId).catch(() => {});
+  } catch (error) {
+    securityPolicyStatus.textContent = showError(error);
+  } finally {
+    securityPolicyBusy = false;
+    updateSchemaControls();
+  }
+}
+
+function savePrincipalState() {
+  const principal = currentSecurityPolicy?.principals.find((item) => item.principal_id === policyPrincipalSelect.value);
+  const state = policyPrincipalState.value;
+  if (!principal || principal.state === state) return;
+  if (state === "retired" && !window.confirm("Dieses Benutzerkonto wird dauerhaft stillgelegt und kann nicht wieder aktiviert werden. Fortfahren?")) return;
+  return publishPolicyChange({
+    command: "set_principal_state",
+    principal_id: principal.principal_id,
+    state,
+  }, "Benutzerkonto aktualisiert");
+}
+
+function createPolicyRole() {
+  const symbol = policyNewRoleSymbol.value.trim();
+  if (!/^[a-z][a-z0-9_]*$/.test(symbol)) {
+    securityPolicyStatus.textContent = "Das Rollensymbol muss [a-z][a-z0-9_]* entsprechen.";
+    return;
+  }
+  return publishPolicyChange({ command: "register_role", symbol }, "Leere Rolle angelegt");
+}
+
+function assignPolicyRole() {
+  if (!policyAssignmentPrincipal.value || !policyAssignmentRole.value) return;
+  return publishPolicyChange({
+    command: "assign_role",
+    principal_id: policyAssignmentPrincipal.value,
+    role_id: policyAssignmentRole.value,
+  }, "Rolle zugewiesen");
+}
+
+function addPolicyRule() {
+  const [subjectKind, subjectId] = policyRuleSubject.value.split(":", 2);
+  if (!subjectId || !policyRuleCapability.value) return;
+  return publishPolicyChange({
+    command: "add_capability_rule",
+    subject_kind: subjectKind,
+    subject_id: subjectId,
+    capability: policyRuleCapability.value,
+    effect: policyRuleEffect.value,
+  }, "Explizite Berechtigung veröffentlicht");
+}
+
+function revokePolicyAssignment(assignmentId) {
+  return publishPolicyChange({ command: "revoke_role_assignment", assignment_id: assignmentId }, "Rolle entzogen");
+}
+
+function revokePolicyRule(ruleId) {
+  return publishPolicyChange({ command: "revoke_capability_rule", rule_id: ruleId }, "Explizite Berechtigung entzogen");
+}
+
 function perspectiveModeInput() {
   if (perspectiveViewMode.value === "current") return { mode: "current" };
   const revision = Number(perspectiveViewRevision.value);
@@ -1570,6 +1874,74 @@ async function runPerspectiveSmoke(activeSessionId) {
   await refreshPerspectives(activeSessionId);
 }
 
+async function runSecurityPolicySmoke(activeSessionId) {
+  securityPolicyBusy = true;
+  updateSchemaControls();
+  try {
+    const baseline = await invokeSecurityPolicyFor(activeSessionId, { command: "snapshot" });
+    if (baseline.kind !== "snapshot") throw new Error("policy snapshot was not returned");
+    const gm = baseline.roles.find((item) => item.symbol === "gm");
+    const player = baseline.roles.find((item) => item.symbol === "player");
+    if (!gm || !player) throw new Error("project bootstrap omitted the GM or Player role");
+    if (gm.bundle.some((item) => item.capability === "admin_raw_read" && item.effect === "allow")) {
+      throw new Error("GM base bundle implicitly grants AdminRawRead");
+    }
+    const actor = baseline.principals.find((item) => item.state === "active");
+    if (!actor) throw new Error("project bootstrap omitted the active creator principal");
+
+    const assigned = await invokeSecurityPolicyFor(activeSessionId, {
+      command: "assign_role",
+      expected_base_revision: baseline.revision,
+      principal_id: actor.principal_id,
+      role_id: player.role_id,
+    });
+    if (assigned.kind !== "published" || assigned.security_epoch !== baseline.security_epoch + 1) {
+      throw new Error("role assignment did not advance SecurityEpoch exactly once");
+    }
+    const afterAssignment = await invokeSecurityPolicyFor(activeSessionId, { command: "snapshot" });
+    if (!afterAssignment.assignments.some((item) => item.principal_id === actor.principal_id && item.role_id === player.role_id)) {
+      throw new Error("published role assignment is missing from the next policy snapshot");
+    }
+
+    const revokedAssignment = await invokeSecurityPolicyFor(activeSessionId, {
+      command: "revoke_role_assignment",
+      expected_base_revision: assigned.revision,
+      assignment_id: afterAssignment.assignments.find((item) => item.principal_id === actor.principal_id && item.role_id === player.role_id).assignment_id,
+    });
+    if (revokedAssignment.kind !== "published" || revokedAssignment.security_epoch !== assigned.security_epoch + 1) {
+      throw new Error("role assignment revocation did not advance SecurityEpoch exactly once");
+    }
+
+    const denyRule = await invokeSecurityPolicyFor(activeSessionId, {
+      command: "add_capability_rule",
+      expected_base_revision: revokedAssignment.revision,
+      subject_kind: "role",
+      subject_id: gm.role_id,
+      capability: "admin_raw_read",
+      effect: "deny",
+    });
+    if (denyRule.kind !== "published" || denyRule.security_epoch !== revokedAssignment.security_epoch + 1) {
+      throw new Error("explicit capability rule did not advance SecurityEpoch exactly once");
+    }
+    const afterRule = await invokeSecurityPolicyFor(activeSessionId, { command: "snapshot" });
+    const explicitRule = afterRule.explicit_rules.find((item) => item.subject_kind === "role"
+      && item.subject_id === gm.role_id && item.capability === "admin_raw_read" && item.effect === "deny");
+    if (!explicitRule) throw new Error("explicit GM AdminRawRead deny was not published as a separate rule");
+    const revokedRule = await invokeSecurityPolicyFor(activeSessionId, {
+      command: "revoke_capability_rule",
+      expected_base_revision: denyRule.revision,
+      rule_id: explicitRule.rule_id,
+    });
+    if (revokedRule.kind !== "published" || revokedRule.security_epoch !== denyRule.security_epoch + 1) {
+      throw new Error("capability-rule revocation did not advance SecurityEpoch exactly once");
+    }
+  } finally {
+    securityPolicyBusy = false;
+    updateSchemaControls();
+    await refreshSecurityPolicy(activeSessionId).catch(() => {});
+  }
+}
+
 async function createEntity({ propagateErrors = false } = {}) {
   if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) return;
   entityBusy = true;
@@ -2143,6 +2515,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
+          if (!securityPolicyBusy) refreshSecurityPolicy(sessionId).catch((error) => {
+            securityPolicyStatus.textContent = showError(error);
+          });
           if (!perspectiveBusy) refreshPerspectives(sessionId).catch((error) => {
             perspectiveStatus.textContent = showError(error);
           });
@@ -2173,11 +2548,12 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
         await runProjectSmoke(sessionId);
         if (role === "primary") {
-          operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Branch- und Layerprüfung läuft …";
+          operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Rechte-, Branch- und Layerprüfung läuft …";
           await runSchemaSmoke(sessionId);
           await runEntitySmoke(sessionId);
           await runBranchLayerSmoke(sessionId);
           await runPerspectiveSmoke(sessionId);
+          await runSecurityPolicySmoke(sessionId);
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
@@ -2265,6 +2641,21 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   entityTypeSelect.addEventListener("change", updateEntityTypeSelectionState);
   entityAcceptDeprecated.addEventListener("change", updateEntityControls);
   entityCreateButton.addEventListener("click", createEntity);
+  securityPolicyRefresh.addEventListener("click", () => refreshSecurityPolicy().catch(() => {}));
+  policyPrincipalSelect.addEventListener("change", () => {
+    const selected = currentSecurityPolicy?.principals.find((item) => item.principal_id === policyPrincipalSelect.value);
+    policyPrincipalState.value = selected?.state ?? "active";
+    updateSecurityPolicyControls();
+  });
+  policyPrincipalState.addEventListener("change", updateSecurityPolicyControls);
+  policyPrincipalSave.addEventListener("click", () => savePrincipalState());
+  policyRoleAssign.addEventListener("click", () => assignPolicyRole());
+  policyNewRoleSymbol.addEventListener("input", updateSecurityPolicyControls);
+  policyRoleCreate.addEventListener("click", () => createPolicyRole());
+  policyRuleAdd.addEventListener("click", () => addPolicyRule());
+  policyRuleSubject.addEventListener("change", updateSecurityPolicyControls);
+  policyRuleCapability.addEventListener("change", updateSecurityPolicyControls);
+  policyRuleEffect.addEventListener("change", updateSecurityPolicyControls);
   perspectiveRefreshButton.addEventListener("click", () => refreshPerspectives().catch(() => {}));
   perspectiveViewMode.addEventListener("change", () => {
     perspectiveViewRevisionWrap.hidden = perspectiveViewMode.value === "current";

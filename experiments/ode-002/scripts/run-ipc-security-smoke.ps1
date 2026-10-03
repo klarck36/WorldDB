@@ -35,6 +35,8 @@ $secondaryBranchLayerPath = Join-Path $testRoot 'ipc-branch-layer-secondary.json
 $primaryTransferPath = Join-Path $testRoot 'ipc-transfer-primary.jsonl'
 $primaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-primary.jsonl'
 $secondaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-secondary.jsonl'
+$primarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-primary.jsonl'
+$secondarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-secondary.jsonl'
 $process = $null
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -160,6 +162,25 @@ function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [st
     throw "Timed out waiting for complete Perspective IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
 }
 
+function Wait-ForSecurityPolicyOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
+            $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $assignments = @($primary | Where-Object { $_.operation -eq 'assign_role' -and $_.succeeded }).Count
+            $revocations = @($primary | Where-Object { $_.operation -eq 'revoke_role_assignment' -and $_.succeeded }).Count
+            $rules = @($primary | Where-Object { $_.operation -eq 'add_capability_rule' -and $_.succeeded }).Count
+            $ruleRevocations = @($primary | Where-Object { $_.operation -eq 'revoke_capability_rule' -and $_.succeeded }).Count
+            if ($assignments -ge 1 -and $revocations -ge 1 -and $rules -ge 1 -and $ruleRevocations -ge 1) { return }
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $events = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
+    throw "Timed out waiting for policy IPC workflows. Primary: $events"
+}
+
 try {
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
@@ -168,6 +189,7 @@ try {
     $env:WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_TRANSFER_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
     $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
@@ -188,6 +210,7 @@ try {
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
     Wait-ForTransferOperations $process $primaryTransferPath
     Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath
+    Wait-ForSecurityPolicyOperations $process $primarySecurityPolicyPath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
@@ -202,6 +225,10 @@ try {
     $primaryTransfer = @(Get-Content -LiteralPath $primaryTransferPath | ForEach-Object { $_ | ConvertFrom-Json })
     $primaryPerspectives = @(Get-Content -LiteralPath $primaryPerspectivePath | ForEach-Object { $_ | ConvertFrom-Json })
     $secondaryPerspectives = @(Get-Content -LiteralPath $secondaryPerspectivePath | ForEach-Object { $_ | ConvertFrom-Json })
+    $primarySecurityPolicy = @(Get-Content -LiteralPath $primarySecurityPolicyPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $secondarySecurityPolicy = if (Test-Path -LiteralPath $secondarySecurityPolicyPath -PathType Leaf) {
+        @(Get-Content -LiteralPath $secondarySecurityPolicyPath | ForEach-Object { $_ | ConvertFrom-Json })
+    } else { @() }
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
@@ -290,6 +317,46 @@ try {
     }
     if (@($secondaryPerspectives | Where-Object { $_.operation -eq 'snapshot_current' -and $_.succeeded }).Count -eq 0) {
         throw 'The secondary window did not read the shared Perspective catalog.'
+    }
+    if (@($primarySecurityPolicy | Where-Object { -not $_.succeeded }).Count -gt 0) {
+        throw 'The primary window had a rejected security policy IPC operation.'
+    }
+    $policyMutations = @($primarySecurityPolicy | Where-Object {
+        $_.operation -in @('assign_role', 'revoke_role_assignment', 'add_capability_rule', 'revoke_capability_rule')
+    })
+    if ($policyMutations.Count -ne 4) { throw 'The security policy smoke did not complete all four role/capability changes.' }
+    for ($index = 1; $index -lt $policyMutations.Count; $index++) {
+        if ($policyMutations[$index].security_epoch -ne $policyMutations[$index - 1].security_epoch + 1) {
+            throw 'A security policy change did not advance SecurityEpoch exactly once.'
+        }
+    }
+    $policySnapshots = @($primarySecurityPolicy | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded })
+    if ($policySnapshots.Count -lt 3) { throw 'Policy snapshots did not show state before, during, and after the changes.' }
+    $baselineEpoch = $policyMutations[0].security_epoch - 1
+    $baselineSnapshots = @($policySnapshots | Where-Object { $_.security_epoch -eq $baselineEpoch })
+    $assignmentSnapshots = @($policySnapshots | Where-Object { $_.security_epoch -eq $policyMutations[0].security_epoch })
+    $ruleSnapshots = @($policySnapshots | Where-Object { $_.security_epoch -eq $policyMutations[2].security_epoch })
+    $finalSnapshots = @($policySnapshots | Where-Object { $_.security_epoch -eq $policyMutations[3].security_epoch })
+    if ($baselineSnapshots.Count -eq 0 -or @($baselineSnapshots | Where-Object { $_.gm_admin_raw_allow -ne $false -or $_.gm_raw_history_allow -ne $true }).Count -gt 0) {
+        throw 'The initial GM bundle does not distinguish RawHistoryRead from AdminRawRead as specified.'
+    }
+    $baselineAssignmentCount = $baselineSnapshots[0].assignment_count
+    $baselineRuleCount = $baselineSnapshots[0].explicit_rule_count
+    if (@($assignmentSnapshots | Where-Object { $_.assignment_count -eq $baselineAssignmentCount + 1 }).Count -eq 0) {
+        throw 'The role assignment was not reflected in a policy snapshot at its committed epoch.'
+    }
+    if (@($ruleSnapshots | Where-Object { $_.assignment_count -eq $baselineAssignmentCount }).Count -eq 0) {
+        throw 'Role assignment and revocation were not reflected in policy snapshots.'
+    }
+    if (@($ruleSnapshots | Where-Object { $_.gm_admin_raw_deny -eq $true -and $_.explicit_rule_count -gt $baselineRuleCount }).Count -eq 0) {
+        throw 'The explicit GM AdminRawRead deny was not kept separate from the role bundle.'
+    }
+    if ($finalSnapshots.Count -gt 0 -and @($finalSnapshots | Where-Object { $_.explicit_rule_count -eq $baselineRuleCount }).Count -eq 0) {
+        throw 'Revoking the temporary capability rule did not restore the original explicit-rule inventory.'
+    }
+    if (($secondarySecurityPolicy.Count -eq 0) -or
+        (@($secondarySecurityPolicy | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count -eq 0)) {
+        throw 'The secondary window did not read shared security policy.'
     }
 
     $process.Refresh()

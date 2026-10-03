@@ -24,6 +24,12 @@ pub use perspective::{
     EpistemicModeInput, PerspectiveCommand, PerspectiveContextView, PerspectiveDefinitionView,
     PerspectivePublicationView, PerspectiveResponse, PerspectiveSnapshotView, PerspectiveView,
 };
+mod security_policy;
+pub use security_policy::{
+    CapabilityBundleEntryView, CapabilityRuleView, GrantEffectInput, PolicySubjectKindInput,
+    PrincipalStateInput, PrincipalView, RoleAssignmentView, RoleView, SecurityPolicyCommand,
+    SecurityPolicyPublicationView, SecurityPolicyResponse, SecurityPolicySnapshotView,
+};
 mod history_space_transfer;
 pub use history_space_transfer::{
     ContentIdentityInput, ExternalReferencePolicyInput, HistorySpaceTransferCommand,
@@ -105,6 +111,9 @@ pub enum Request {
     Perspectives {
         command: PerspectiveCommand,
     },
+    SecurityPolicy {
+        command: SecurityPolicyCommand,
+    },
     HistorySpaceTransfer {
         command: HistorySpaceTransferCommand,
     },
@@ -148,6 +157,9 @@ pub enum Response {
     },
     Perspectives {
         result: PerspectiveResponse,
+    },
+    SecurityPolicy {
+        result: SecurityPolicyResponse,
     },
     HistorySpaceTransfer {
         result: HistorySpaceTransferResponse,
@@ -250,6 +262,7 @@ pub enum EngineError {
     Entity(String),
     BranchLayer(String),
     Perspective(String),
+    SecurityPolicy(String),
     HistorySpaceTransfer(String),
 }
 
@@ -262,6 +275,7 @@ impl std::fmt::Display for EngineError {
             Self::Entity(message) => formatter.write_str(message),
             Self::BranchLayer(message) => formatter.write_str(message),
             Self::Perspective(message) => formatter.write_str(message),
+            Self::SecurityPolicy(message) => formatter.write_str(message),
             Self::HistorySpaceTransfer(message) => formatter.write_str(message),
         }
     }
