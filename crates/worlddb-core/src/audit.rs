@@ -158,6 +158,10 @@ pub enum AuditAction {
     AuditConfigurationChange,
     /// Creation or lifecycle update of a project schema definition.
     SchemaManagement,
+    /// Creation of one immutable Entity catalog identity.
+    EntityCreation,
+    /// Retirement of one Entity catalog identity.
+    EntityRetirement,
 }
 
 /// Closed object classes that can be named without copying sensitive payloads.
@@ -181,6 +185,8 @@ pub enum AuditObjectClass {
     AuditConfiguration,
     /// EntityType, Predicate, or EventKind schema definition.
     SchemaDefinition,
+    /// Project-wide Entity identity or retirement catalog.
+    EntityCatalog,
 }
 
 /// Safe public result class for an audited operation.

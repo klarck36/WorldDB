@@ -849,6 +849,41 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates a host-generated identity for one new project Entity.
+    #[doc(hidden)]
+    pub fn generate_entity_management_entity_id()
+    -> Result<crate::ids::EntityId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates a host-generated identity for one Entity retirement record.
+    #[doc(hidden)]
+    pub fn generate_entity_management_retirement_id()
+    -> Result<crate::ids::EntityRetirementId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the idempotency identity for one Entity catalog transaction.
+    #[doc(hidden)]
+    pub fn generate_entity_management_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the required-audit record identity for one Entity transaction.
+    #[doc(hidden)]
+    pub fn generate_entity_management_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the required-audit operation identity for one Entity transaction.
+    #[doc(hidden)]
+    pub fn generate_entity_management_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Records a restore-point token after the file adapter verified a real clone restore.
     #[doc(hidden)]
     #[allow(clippy::too_many_arguments, reason = "WDB-EXC-0004")]

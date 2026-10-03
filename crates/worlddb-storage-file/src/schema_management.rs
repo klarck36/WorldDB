@@ -17,6 +17,9 @@ use crate::{
     SecurityPolicyHistoryStore, StorageVerifier, WalOperationStatus, WalPrepareLog, WriterLock,
 };
 
+mod entity;
+pub use entity::{EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager};
+
 const MAX_SCHEMA_BATCH_RECORDS: usize = 1_024;
 
 /// Authorized file-backed schema history and transaction manager.
@@ -848,10 +851,10 @@ mod tests {
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    struct TempArea(PathBuf);
+    pub(super) struct TempArea(PathBuf);
 
     impl TempArea {
-        fn create() -> Result<Self, String> {
+        pub(super) fn create() -> Result<Self, String> {
             let sequence = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
             let path = env::temp_dir().join(format!(
                 "worlddb-schema-management-{}-{sequence}",
@@ -861,7 +864,7 @@ mod tests {
             Ok(Self(path))
         }
 
-        fn database(&self) -> PathBuf {
+        pub(super) fn database(&self) -> PathBuf {
             self.0.join("database")
         }
     }
@@ -872,7 +875,7 @@ mod tests {
         }
     }
 
-    fn id<T: DomainId>(tail: u8) -> Result<T, String> {
+    pub(super) fn id<T: DomainId>(tail: u8) -> Result<T, String> {
         let mut bytes = [0_u8; 16];
         bytes[6] = 0x70;
         bytes[8] = 0x80;
@@ -880,7 +883,7 @@ mod tests {
         T::try_from_bytes(bytes).map_err(|error| error.to_string())
     }
 
-    fn create_project(
+    pub(super) fn create_project(
         root: &PathBuf,
         capabilities: &[worlddb_core::Capability],
     ) -> Result<worlddb_core::PrincipalId, String> {

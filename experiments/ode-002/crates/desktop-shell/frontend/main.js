@@ -65,6 +65,20 @@ const eventAttributeDecimalMetadataInputs = {
   measurement_precision: document.querySelector("#event-attribute-measurement-precision"),
   currency_scale: document.querySelector("#event-attribute-currency-scale"),
 };
+const entityPanel = document.querySelector("#entity-panel");
+const entityStatus = document.querySelector("#entity-status");
+const entityList = document.querySelector("#entity-list");
+const entityEditor = document.querySelector("#entity-editor");
+const entityViewMode = document.querySelector("#entity-view-mode");
+const entityViewRevision = document.querySelector("#entity-view-revision");
+const entityViewRevisionWrap = document.querySelector("#entity-view-revision-wrap");
+const entityViewRevisionLabel = document.querySelector("#entity-view-revision-label");
+const entityRefreshButton = document.querySelector("#entity-refresh");
+const entityTypeSelect = document.querySelector("#entity-type-select");
+const entityDeprecatedOptIn = document.querySelector("#entity-deprecated-opt-in");
+const entityAcceptDeprecated = document.querySelector("#entity-accept-deprecated");
+const entityDeprecatedWarning = document.querySelector("#entity-deprecated-warning");
+const entityCreateButton = document.querySelector("#entity-create");
 
 const userMessages = {
   project_already_exists: "An diesem Ort gibt es bereits ein Projekt.",
@@ -77,6 +91,7 @@ const userMessages = {
   invalid_request: "Bitte prüfe die Eingabe.",
   unknown_commit_outcome: "Der Speicherstatus ist unklar. Prüfe das Projekt, bevor du es erneut änderst.",
   schema_rejected: "Die Schema-Aktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
+  entity_rejected: "Die Entitätsaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
 };
 
 let sessionId;
@@ -84,9 +99,12 @@ let projectOpen = false;
 let projectRevision = null;
 let projectBusy = false;
 let schemaBusy = false;
+let entityBusy = false;
 let schemaCurrentMode = true;
+let entityCurrentMode = true;
 let selectedSchema = null;
 let currentSchema = null;
+let selectedEntities = null;
 let stagedEventRoles = [];
 let stagedEventAttributes = [];
 let stagedLifecycleChanges = [];
@@ -117,13 +135,29 @@ function updateSchemaControls() {
   for (const button of schemaLifecyclePending.querySelectorAll("button")) {
     button.disabled = schemaBusy || projectBusy;
   }
+  updateEntityControls();
   updateProjectControls();
 }
 
+function updateEntityControls() {
+  if (!entityPanel) return;
+  const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy;
+  const canMutate = canRead && entityCurrentMode;
+  entityRefreshButton.disabled = !canRead;
+  for (const control of entityEditor.querySelectorAll("input, select, button")) {
+    control.disabled = entityBusy || projectBusy || schemaBusy;
+  }
+  entityCreateButton.disabled = !canMutate || !entityTypeSelect.value
+    || (selectedEntityType()?.lifecycle === "deprecated" && !entityAcceptDeprecated.checked);
+  for (const button of entityList.querySelectorAll("button[data-entity-retire]")) {
+    button.disabled = !canMutate;
+  }
+}
+
 function updateProjectControls() {
-  createButton.disabled = projectBusy || schemaBusy || projectOpen;
-  openButton.disabled = projectBusy || schemaBusy || projectOpen;
-  closeButton.disabled = projectBusy || schemaBusy || !projectOpen;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || projectOpen;
+  openButton.disabled = projectBusy || schemaBusy || entityBusy || projectOpen;
+  closeButton.disabled = projectBusy || schemaBusy || entityBusy || !projectOpen;
 }
 
 function setBusy(busy) {
@@ -134,6 +168,7 @@ function setBusy(busy) {
 function renderProject(project) {
   projectOpen = Boolean(project.project_open);
   schemaPanel.hidden = !projectOpen;
+  entityPanel.hidden = !projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -156,13 +191,21 @@ async function refreshProject(activeSessionId) {
   renderProject(await getProject(activeSessionId));
   if ((!wasOpen && projectOpen) || (wasOpen && projectOpen && projectRevision !== previousRevision && !schemaBusy)) {
     await refreshSchema(activeSessionId).catch((error) => {
-    schemaStatus.textContent = showError(error);
+      schemaStatus.textContent = showError(error);
+    });
+    await refreshEntities(activeSessionId).catch((error) => {
+      entityStatus.textContent = showError(error);
     });
   }
   if (!projectOpen) {
     selectedSchema = null;
     currentSchema = null;
+    selectedEntities = null;
     schemaDefinitions.replaceChildren();
+    entityList.replaceChildren();
+    entityTypeSelect.replaceChildren();
+    entityAcceptDeprecated.checked = false;
+    updateEntityControls();
   }
 }
 
@@ -230,12 +273,114 @@ function schemaModeInput() {
     : { mode: "explicit", revision };
 }
 
-async function manageSchema(command) {
+async function manageSchema(command, activeSessionId = sessionId) {
   const response = await invoke("manage_schema", {
-    request: { protocol_version: 1, session_id: sessionId, command },
+    request: { protocol_version: 1, session_id: activeSessionId, command },
   });
   if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
   return response.result;
+}
+
+function entityModeInput() {
+  const mode = entityViewMode.value;
+  if (mode === "current") return { mode: "current" };
+  const revision = Number(entityViewRevision.value);
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("invalid_request");
+  return mode === "historical"
+    ? { mode: "historical", recorded_as_of: revision }
+    : { mode: "explicit", revision };
+}
+
+async function manageEntities(command, activeSessionId = sessionId) {
+  const response = await invoke("manage_entities", {
+    request: { protocol_version: 1, session_id: activeSessionId, command },
+  });
+  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+  return response.result;
+}
+
+async function invokeEntitiesFor(activeSessionId, mode) {
+  const result = await manageEntities({ command: "snapshot", mode }, activeSessionId);
+  if (result.kind !== "snapshot") throw new Error("unsupported_protocol");
+  return result;
+}
+
+async function refreshEntities(activeSessionId = sessionId) {
+  if (!projectOpen || !activeSessionId) return;
+  entityStatus.textContent = "Entitäten werden geladen …";
+  entityRefreshButton.disabled = true;
+  try {
+    selectedEntities = await invokeEntitiesFor(activeSessionId, entityModeInput());
+    entityCurrentMode = entityViewMode.value === "current";
+    renderEntities(selectedEntities);
+    updateEntityTypeSelect(selectedEntities);
+    updateEntityControls();
+  } catch (error) {
+    entityStatus.textContent = showError(error);
+    entityList.replaceChildren();
+    updateEntityControls();
+    throw error;
+  }
+}
+
+function selectedEntityType() {
+  return selectedEntities?.entity_types.find((item) => item.entity_type_id === entityTypeSelect.value) ?? null;
+}
+
+function updateEntityTypeSelect(snapshot) {
+  const previous = entityTypeSelect.value;
+  const available = snapshot.entity_types.filter((item) => item.lifecycle !== "retired");
+  entityTypeSelect.replaceChildren();
+  for (const type of available) {
+    const option = document.createElement("option");
+    option.value = type.entity_type_id;
+    option.textContent = `${type.symbol} · ${lifecycleLabel(type.lifecycle)}`;
+    entityTypeSelect.append(option);
+  }
+  if (available.some((item) => item.entity_type_id === previous)) entityTypeSelect.value = previous;
+  if (available.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Kein verwendbarer EntityType vorhanden";
+    entityTypeSelect.append(option);
+  }
+  updateEntityTypeSelectionState();
+}
+
+function updateEntityTypeSelectionState() {
+  const deprecated = selectedEntityType()?.lifecycle === "deprecated";
+  entityDeprecatedOptIn.hidden = !deprecated;
+  entityDeprecatedWarning.hidden = !deprecated;
+  if (!deprecated) entityAcceptDeprecated.checked = false;
+  updateEntityControls();
+}
+
+function renderEntities(snapshot) {
+  entityStatus.textContent = `Datenrevision ${snapshot.revision} · ${snapshot.entities.length} Entität(en)`;
+  entityList.replaceChildren();
+  if (snapshot.entities.length === 0) {
+    appendText(entityList, "p", "In diesem Stand sind noch keine Entitäten vorhanden.", "muted");
+    return;
+  }
+  for (const entity of snapshot.entities) {
+    const card = document.createElement("article");
+    card.className = "definition";
+    appendText(card, "h3", `Entität · ${entity.entity_type_symbol}`);
+    const status = entity.retired_revision == null
+      ? "Aktiv"
+      : `Stillgelegt in Datenrevision ${entity.retired_revision}`;
+    appendText(card, "p", `${status} · angelegt in Datenrevision ${entity.created_revision}`);
+    appendText(card, "p", `EntityType: ${entity.entity_type_symbol} · ${lifecycleLabel(entity.entity_type_lifecycle)}`, "muted");
+    if (entityCurrentMode && entity.retired_revision == null) {
+      const retire = document.createElement("button");
+      retire.type = "button";
+      retire.dataset.entityRetire = "true";
+      retire.textContent = "Entität stilllegen";
+      retire.addEventListener("click", () => retireEntity(entity.entity_id));
+      card.append(retire);
+    }
+    entityList.append(card);
+  }
 }
 
 async function refreshSchema(activeSessionId = sessionId) {
@@ -311,6 +456,162 @@ async function runSchemaSmoke(activeSessionId) {
   const retiredDefinition = selectedSchema?.definitions.find((item) => item.identity === definition.identity);
   if (retiredDefinition?.lifecycle !== "retired") {
     throw new Error("schema retirement did not publish the requested lifecycle state");
+  }
+
+  await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_available");
+  const deprecatedType = await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_deprecated");
+  const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await manageSchema({
+    command: "set_lifecycle",
+    expected_base_revision: current.revision,
+    family: "entity_type",
+    identity: deprecatedType.identity,
+    lifecycle: "deprecated",
+  });
+}
+
+async function createSmokeEntityType(activeSessionId, symbol) {
+  const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  const result = await manageSchema({
+    command: "create",
+    expected_base_revision: current.revision,
+    definition: {
+      family: "entity_type",
+      symbol,
+      description: "Entity catalog smoke verification type.",
+    },
+  }, activeSessionId);
+  if (result.kind !== "published") throw new Error(`schema did not publish ${symbol}`);
+  const published = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  const definition = published.definitions.find((item) => item.symbol === symbol);
+  if (!definition || definition.lifecycle !== "active") throw new Error(`schema did not expose active ${symbol}`);
+  return definition;
+}
+
+async function runEntitySmoke(activeSessionId) {
+  entityViewMode.value = "current";
+  entityCurrentMode = true;
+  await refreshEntities(activeSessionId);
+  const beforeCreate = selectedEntities;
+  const activeType = beforeCreate.entity_types.find((item) => item.symbol === "ipc_smoke_entity_available" && item.lifecycle === "active");
+  const deprecatedType = beforeCreate.entity_types.find((item) => item.symbol === "ipc_smoke_entity_deprecated" && item.lifecycle === "deprecated");
+  if (!activeType || !deprecatedType) throw new Error("Entity smoke EntityTypes were not published with the required lifecycles");
+
+  entityTypeSelect.value = activeType.entity_type_id;
+  entityAcceptDeprecated.checked = false;
+  updateEntityTypeSelectionState();
+  const created = await createEntity({ propagateErrors: true });
+  if (created.kind !== "published" || !created.entity_id) throw new Error("active Entity creation did not publish");
+  const activeCreationRevision = created.revision;
+  entityViewMode.value = "historical";
+  entityViewRevision.value = String(beforeCreate.revision);
+  await refreshEntities(activeSessionId);
+  const historicalBefore = selectedEntities;
+  if (historicalBefore.entities.some((item) => item.entity_id === created.entity_id)
+    || !entityCreateButton.disabled
+    || entityList.querySelector("button[data-entity-retire]")) {
+    throw new Error("historical Entity view exposed a later Entity or live mutation control");
+  }
+  entityViewMode.value = "explicit";
+  entityViewRevision.value = String(activeCreationRevision);
+  await refreshEntities(activeSessionId);
+  const explicitCreation = selectedEntities;
+  if (!explicitCreation.entities.some((item) => item.entity_id === created.entity_id)) {
+    throw new Error("Entity creation was not visible at the correct historical/explicit revisions");
+  }
+
+  entityViewMode.value = "current";
+  entityCurrentMode = true;
+  await refreshEntities(activeSessionId);
+  entityTypeSelect.value = deprecatedType.entity_type_id;
+  entityAcceptDeprecated.checked = true;
+  updateEntityTypeSelectionState();
+  if (entityDeprecatedOptIn.hidden || entityDeprecatedWarning.hidden || entityCreateButton.disabled) {
+    throw new Error("Deprecated EntityType opt-in was not presented by the entity form");
+  }
+  const deprecatedCreated = await createEntity({ propagateErrors: true });
+  if (deprecatedCreated.kind !== "published" || deprecatedCreated.warning?.code !== "deprecated_entity_type") {
+    throw new Error("Deprecated EntityType opt-in did not return the typed warning");
+  }
+
+  const retired = await retireEntity(created.entity_id, { confirm: false, propagateErrors: true });
+  if (retired.kind !== "published") throw new Error("Entity retirement did not publish");
+  entityViewMode.value = "current";
+  await refreshEntities(activeSessionId);
+  const currentEntity = selectedEntities.entities.find((item) => item.entity_id === created.entity_id);
+  entityViewMode.value = "historical";
+  entityViewRevision.value = String(activeCreationRevision);
+  await refreshEntities(activeSessionId);
+  const historicalEntity = selectedEntities.entities.find((item) => item.entity_id === created.entity_id);
+  entityViewMode.value = "explicit";
+  entityViewRevision.value = String(retired.revision);
+  await refreshEntities(activeSessionId);
+  const explicitEntity = selectedEntities.entities.find((item) => item.entity_id === created.entity_id);
+  if (currentEntity?.retired_revision !== retired.revision
+    || historicalEntity?.retired_revision != null
+    || explicitEntity?.retired_revision !== retired.revision) {
+    throw new Error("Entity retirement did not preserve its append-only historical state");
+  }
+  entityViewMode.value = "current";
+  entityCurrentMode = true;
+  await refreshEntities(activeSessionId);
+}
+
+async function createEntity({ propagateErrors = false } = {}) {
+  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) return;
+  entityBusy = true;
+  updateEntityControls();
+  entityStatus.textContent = "Entität wird geprüft und angelegt …";
+  try {
+    const latest = await invokeEntitiesFor(sessionId, { mode: "current" });
+    const selected = latest.entity_types.find((item) => item.entity_type_id === entityTypeSelect.value);
+    if (!selected || selected.lifecycle === "retired") throw new Error("invalid_request");
+    const acceptDeprecated = selected.lifecycle === "deprecated" && entityAcceptDeprecated.checked;
+    const result = await manageEntities({
+      command: "create",
+      expected_base_revision: latest.revision,
+      entity_type_id: selected.entity_type_id,
+      accept_deprecated_type: acceptDeprecated,
+    });
+    if (result.kind !== "published") throw new Error("unsupported_protocol");
+    entityStatus.textContent = result.warning?.message
+      ?? `Entität veröffentlicht. Aktuelle Datenrevision ${result.revision}.`;
+    await refreshEntities();
+    return result;
+  } catch (error) {
+    entityStatus.textContent = showError(error);
+    if (propagateErrors) throw error;
+  } finally {
+    entityBusy = false;
+    updateEntityControls();
+  }
+}
+
+async function retireEntity(entityId, { confirm = true, propagateErrors = false } = {}) {
+  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) return;
+  if (confirm && !window.confirm("Diese Entität endgültig stilllegen? Das kann nicht rückgängig gemacht werden. Vorhandene Aussagen bleiben erhalten.")) return;
+  entityBusy = true;
+  updateEntityControls();
+  entityStatus.textContent = "Entität wird stillgelegt …";
+  try {
+    const latest = await invokeEntitiesFor(sessionId, { mode: "current" });
+    const selected = latest.entities.find((item) => item.entity_id === entityId && item.retired_revision == null);
+    if (!selected) throw new Error("invalid_request");
+    const result = await manageEntities({
+      command: "retire",
+      expected_base_revision: latest.revision,
+      entity_id: selected.entity_id,
+    });
+    if (result.kind !== "published") throw new Error("unsupported_protocol");
+    entityStatus.textContent = `Entität stillgelegt. Datenrevision ${result.revision}.`;
+    await refreshEntities();
+    return result;
+  } catch (error) {
+    entityStatus.textContent = showError(error);
+    if (propagateErrors) throw error;
+  } finally {
+    entityBusy = false;
+    updateEntityControls();
   }
 }
 
@@ -822,6 +1123,16 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       sessionId = ticket.session_id;
       windowStatus.textContent = `Fenster ${role}: lokale Sitzung verbunden.`;
 
+      const listen = window.__TAURI__?.event?.listen;
+      if (listen) {
+        await listen("project-state-changed", () => {
+          refreshProject(sessionId).catch(() => {});
+          refreshEntities(sessionId).catch((error) => {
+            entityStatus.textContent = showError(error);
+          });
+        });
+      }
+
       const [securityMode, projectMode] = await Promise.all([
         invoke("security_smoke_mode"),
         invoke("project_dialog_mode"),
@@ -840,8 +1151,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
         await runProjectSmoke(sessionId);
         if (role === "primary") {
-          operationStatus.textContent = "Schema- und Historienprüfung läuft …";
+          operationStatus.textContent = "Schema-, Entitäts- und Historienprüfung läuft …";
           await runSchemaSmoke(sessionId);
+          await runEntitySmoke(sessionId);
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
@@ -915,6 +1227,20 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     if (projectOpen) refreshSchema().catch(() => {});
   });
   schemaViewRevision.addEventListener("change", () => refreshSchema().catch(() => {}));
+  entityRefreshButton.addEventListener("click", () => refreshEntities().catch(() => {}));
+  entityViewMode.addEventListener("change", () => {
+    entityViewRevisionWrap.hidden = entityViewMode.value === "current";
+    entityViewRevisionLabel.textContent = entityViewMode.value === "historical"
+      ? "Datenrevision (RecordedAsOf)"
+      : "Datenrevision";
+    entityCurrentMode = entityViewMode.value === "current";
+    updateEntityControls();
+    if (projectOpen) refreshEntities().catch(() => {});
+  });
+  entityViewRevision.addEventListener("change", () => refreshEntities().catch(() => {}));
+  entityTypeSelect.addEventListener("change", updateEntityTypeSelectionState);
+  entityAcceptDeprecated.addEventListener("change", updateEntityControls);
+  entityCreateButton.addEventListener("click", createEntity);
   schemaFamily.addEventListener("change", updateSchemaFormVisibility);
   schemaValueKind.addEventListener("change", updateSchemaFormVisibility);
   schemaCardinality.addEventListener("change", updateSchemaFormVisibility);

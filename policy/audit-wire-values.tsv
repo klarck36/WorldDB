@@ -8,6 +8,9 @@ action	6	Backup
 action	7	RestorePublication
 action	8	PurgePublication
 action	9	AuditConfigurationChange
+action	10	SchemaManagement
+action	11	EntityCreation
+action	12	EntityRetirement
 object_class	1	Database
 object_class	2	SecurityPolicy
 object_class	3	Migration
@@ -16,6 +19,8 @@ object_class	5	Backup
 object_class	6	Export
 object_class	7	RawReadScope
 object_class	8	AuditConfiguration
+object_class	9	SchemaDefinition
+object_class	10	EntityCatalog
 outcome	1	Succeeded
 outcome	2	Denied
 outcome	3	Failed

@@ -9,6 +9,11 @@ use worlddb_storage_file::{DatabaseLayout, WriterLock};
 
 mod project;
 pub use project::{ProjectAccess, ProjectError, create_project, open_project};
+mod entity;
+pub use entity::{
+    EntityCommand, EntityModeInput, EntityPublicationView, EntityResponse, EntitySnapshotView,
+    EntityTypeView, EntityView, EntityWarningView,
+};
 mod schema;
 pub use schema::{
     CalendarPeriodDraft, CardinalityDraft, ConstraintDraft, DecimalMetadataDraft,
@@ -74,6 +79,9 @@ pub enum Request {
     Schema {
         command: SchemaCommand,
     },
+    Entities {
+        command: EntityCommand,
+    },
     Panic,
     Shutdown,
 }
@@ -105,6 +113,9 @@ pub enum Response {
     },
     Schema {
         result: SchemaResponse,
+    },
+    Entities {
+        result: EntityResponse,
     },
     Shutdown,
     Error {
@@ -201,6 +212,7 @@ pub enum EngineError {
     Storage(String),
     Stream(&'static str),
     Schema(String),
+    Entity(String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -209,6 +221,7 @@ impl std::fmt::Display for EngineError {
             Self::Storage(message) => formatter.write_str(message),
             Self::Stream(code) => write!(formatter, "stream protocol error: {code}"),
             Self::Schema(message) => formatter.write_str(message),
+            Self::Entity(message) => formatter.write_str(message),
         }
     }
 }

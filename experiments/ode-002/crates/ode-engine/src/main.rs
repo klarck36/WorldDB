@@ -169,6 +169,20 @@ fn main() {
                     std::process::exit(74);
                 }
             }
+            Request::Entities { command } => {
+                let response = match engine.entities(command) {
+                    Ok(result) => Response::Entities { result },
+                    Err(worlddb_ode_engine::EngineError::Entity(_)) => Response::Error {
+                        code: "entity_rejected".to_owned(),
+                    },
+                    Err(_) => Response::Error {
+                        code: "engine_failed".to_owned(),
+                    },
+                };
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
             Request::Panic => engine.panic_for_spike(),
             Request::Shutdown => {
                 let _ = write_response(&Response::Shutdown);

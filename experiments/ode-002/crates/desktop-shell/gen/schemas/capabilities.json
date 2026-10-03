@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Native windows with no Tauri plugin permissions; WorldDB access is available through versioned host commands only.","local":true,"windows":["primary","secondary"],"permissions":[]}}
+{"default":{"identifier":"default","description":"Native windows can listen for project state refreshes; WorldDB access is available through versioned host commands only.","local":true,"windows":["primary","secondary"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}}

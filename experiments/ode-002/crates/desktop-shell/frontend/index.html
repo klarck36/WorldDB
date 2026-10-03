@@ -221,6 +221,38 @@
         </fieldset>
         <p class="schema-note muted">Deprecated verlangt bei neuen Dateneinträgen Opt-in, die passende Berechtigung und eine typisierte Warnung. Retired blockiert neue Dateneinträge; historische Ansichten bleiben verfügbar. Änderungen an Struktur und Constraints laufen als Migration.</p>
       </section>
+      <section id="entity-panel" class="card" aria-labelledby="entity-heading" hidden>
+        <h2 id="entity-heading">Entitäten</h2>
+        <p class="muted">Eine Entität erhält ihren EntityType dauerhaft bei der Anlage. Namen und weitere Angaben werden als typisierte Aussagen erfasst.</p>
+        <div class="grid">
+          <div>
+            <label for="entity-view-mode">Ansicht</label>
+            <select id="entity-view-mode">
+              <option value="current">Aktueller Stand</option>
+              <option value="historical">Stand zu einer Datenrevision</option>
+              <option value="explicit">Genau diese Datenrevision</option>
+            </select>
+          </div>
+          <div id="entity-view-revision-wrap" hidden>
+            <label id="entity-view-revision-label" for="entity-view-revision">Datenrevision</label>
+            <input id="entity-view-revision" type="number" min="0" step="1" value="1" />
+          </div>
+        </div>
+        <div class="actions"><button id="entity-refresh" type="button">Entitäten anzeigen</button></div>
+        <p id="entity-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="entity-list" aria-live="polite"></div>
+        <fieldset id="entity-editor">
+          <legend>Entität anlegen</legend>
+          <label for="entity-type-select">EntityType</label>
+          <select id="entity-type-select"></select>
+          <div id="entity-deprecated-opt-in" class="inline compact" hidden>
+            <input id="entity-accept-deprecated" type="checkbox" />
+            <label for="entity-accept-deprecated">Anlage mit diesem veralteten EntityType ausdrücklich freigeben</label>
+          </div>
+          <p id="entity-deprecated-warning" class="schema-note muted" hidden>Dieser EntityType ist veraltet. Die Anlage benötigt ausdrückliche Freigabe und eine zusätzliche Berechtigung.</p>
+          <div class="actions"><button id="entity-create" type="button">Entität anlegen</button></div>
+        </fieldset>
+      </section>
     </main>
     <script src="main.js"></script>
   </body>

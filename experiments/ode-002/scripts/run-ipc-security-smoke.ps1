@@ -28,6 +28,8 @@ $primaryProjectPath = Join-Path $testRoot 'ipc-project-primary.json'
 $secondaryProjectPath = Join-Path $testRoot 'ipc-project-secondary.json'
 $primarySchemaPath = Join-Path $testRoot 'ipc-schema-primary.jsonl'
 $secondarySchemaPath = Join-Path $testRoot 'ipc-schema-secondary.jsonl'
+$primaryEntityPath = Join-Path $testRoot 'ipc-entity-primary.jsonl'
+$secondaryEntityPath = Join-Path $testRoot 'ipc-entity-secondary.jsonl'
 $process = $null
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -70,10 +72,33 @@ function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]
     throw "Timed out waiting for complete schema IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
 }
 
+function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
+            $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $creates = @($primary | Where-Object { $_.operation -eq 'create' }).Count
+            $historicalReads = @($primary | Where-Object { $_.operation -eq 'snapshot_historical' }).Count
+            $explicitReads = @($primary | Where-Object { $_.operation -eq 'snapshot_explicit' }).Count
+            $retirements = @($primary | Where-Object { $_.operation -eq 'retire' }).Count
+            $secondaryReads = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
+            if ($creates -ge 2 -and $historicalReads -ge 2 -and $explicitReads -ge 2 -and $retirements -ge 1 -and $secondaryReads -ge 1) { return }
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $primaryEvents = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
+    $secondaryEvents = if (Test-Path -LiteralPath $SecondaryPath -PathType Leaf) { Get-Content -LiteralPath $SecondaryPath -Raw } else { '<missing>' }
+    throw "Timed out waiting for complete Entity IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
+}
+
 try {
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_SCHEMA_SMOKE_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_ENTITY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
     $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
@@ -90,6 +115,7 @@ try {
 
     Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
     Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
+    Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
@@ -97,6 +123,8 @@ try {
     $secondaryProject = Get-Content -LiteralPath $secondaryProjectPath -Raw | ConvertFrom-Json
     $primarySchema = @(Get-Content -LiteralPath $primarySchemaPath | ForEach-Object { $_ | ConvertFrom-Json })
     $secondarySchema = @(Get-Content -LiteralPath $secondarySchemaPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $primaryEntity = @(Get-Content -LiteralPath $primaryEntityPath | ForEach-Object { $_ | ConvertFrom-Json })
+    $secondaryEntity = @(Get-Content -LiteralPath $secondaryEntityPath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
@@ -125,6 +153,23 @@ try {
     if (@($secondarySchema | Where-Object { $_.operation -eq 'snapshot_current' }).Count -eq 0) {
         throw 'The secondary window did not read the shared current schema.'
     }
+    if (@($primaryEntity | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The primary window had a rejected Entity IPC operation.' }
+    if (@($secondaryEntity | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The secondary window had a rejected Entity read.' }
+    $requiredEntityOperations = @('snapshot_current', 'create', 'snapshot_historical', 'snapshot_explicit', 'retire')
+    foreach ($operation in $requiredEntityOperations) {
+        if (@($primaryEntity | Where-Object { $_.operation -eq $operation }).Count -eq 0) {
+            throw "The primary window did not complete Entity IPC operation '$operation'."
+        }
+    }
+    if (@($primaryEntity | Where-Object { $_.operation -eq 'create' }).Count -lt 2) {
+        throw 'The primary window did not create both the Active and Deprecated EntityType entities.'
+    }
+    if (@($primaryEntity | Where-Object { $_.warning.code -eq 'deprecated_entity_type' }).Count -ne 1) {
+        throw 'The Deprecated EntityType creation did not return exactly one typed warning.'
+    }
+    if (@($secondaryEntity | Where-Object { $_.operation -eq 'snapshot_current' }).Count -eq 0) {
+        throw 'The secondary window did not read the shared current Entity catalog.'
+    }
 
     $process.Refresh()
     $processIds = @([int]$process.Id)
@@ -151,6 +196,10 @@ try {
         transactional_schema_create_and_lifecycle = 'PASS'
         current_historical_and_explicit_schema_reads = 'PASS'
         secondary_window_schema_read = 'PASS'
+        transactional_entity_create_and_retirement = 'PASS'
+        current_historical_and_explicit_entity_reads = 'PASS'
+        deprecated_entity_type_opt_in_warning = 'PASS'
+        secondary_window_entity_read = 'PASS'
         shared_project_with_distinct_window_snapshots = 'PASS'
         versioned_ipc_protocol = 'PASS'
         invalid_session_rejected_in_both_windows = 'PASS'
@@ -162,7 +211,7 @@ try {
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {

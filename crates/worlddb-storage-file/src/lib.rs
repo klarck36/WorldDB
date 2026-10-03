@@ -102,7 +102,10 @@ pub use salvage::{
     SalvageError, SalvageInventorySource, SalvageManager, SalvageReport, SalvageSegmentOutcome,
     SalvageSegmentResult, SalvageSegmentSource, SalvageUnit,
 };
-pub use schema_management::{FileSchemaManager, SchemaManagementError, SchemaPublicationReceipt};
+pub use schema_management::{
+    EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager, FileSchemaManager,
+    SchemaManagementError, SchemaPublicationReceipt,
+};
 pub use security_segment::{
     SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, SecurityPolicySegment,
     SecurityPolicySegmentReceipt, SecurityPolicyStorageError,
