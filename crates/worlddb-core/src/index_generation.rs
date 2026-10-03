@@ -22,6 +22,21 @@ pub enum IndexFamily {
 }
 
 impl IndexFamily {
+    /// Every derived index family recognized by the 1.0 wire registry.
+    pub const ALL: [Self; 11] = [
+        Self::RecordId,
+        Self::OperationId,
+        Self::SchemaIdRevision,
+        Self::Lifecycle,
+        Self::AssertionPointHistory,
+        Self::AssertionValidity,
+        Self::MaskScopeContextPrecedence,
+        Self::EventSearch,
+        Self::EventRelation,
+        Self::EventMask,
+        Self::ProvenanceAdjacency,
+    ];
+
     /// Stable tag used by the derived-index generation format.
     #[must_use]
     pub const fn wire_tag(self) -> u16 {

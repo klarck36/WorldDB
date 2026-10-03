@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use worlddb_core::{
-    DecoderLimits, IndexBuildVersion, IndexFamily, IndexFormatVersion, IndexGenerationMetadata,
-    IndexMetadataError, IndexRevisionCoverage, IndexSchemaVersion, Revision, RevisionError,
+    DatabaseId, DecoderLimits, IndexBuildVersion, IndexFamily, IndexFormatVersion,
+    IndexGenerationMetadata, IndexMetadataError, IndexRevisionCoverage, IndexSchemaVersion,
+    Revision, RevisionError,
 };
 
 use crate::{
@@ -105,6 +106,62 @@ pub struct StoredIndexGeneration {
     file_digest: [u8; 32],
 }
 
+/// One verified immutable index file found by a complete directory inventory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IndexGenerationInventoryEntry {
+    family: IndexFamily,
+    generation_id: u64,
+    file_digest: [u8; 32],
+    current: bool,
+}
+
+impl IndexGenerationInventoryEntry {
+    /// Index family encoded in the generation metadata.
+    #[must_use]
+    pub const fn family(self) -> IndexFamily {
+        self.family
+    }
+
+    /// Immutable generation number.
+    #[must_use]
+    pub const fn generation_id(self) -> u64 {
+        self.generation_id
+    }
+
+    /// Digest of the complete encoded generation file.
+    #[must_use]
+    pub const fn file_digest(self) -> [u8; 32] {
+        self.file_digest
+    }
+
+    /// Whether the family's validated current pointer selects this generation.
+    #[must_use]
+    pub const fn current(self) -> bool {
+        self.current
+    }
+}
+
+/// Complete, verified inventory of a database's local derived-index generations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IndexStorageInventory {
+    database_id: DatabaseId,
+    generations: Vec<IndexGenerationInventoryEntry>,
+}
+
+impl IndexStorageInventory {
+    /// Database identity whose index directory was scanned.
+    #[must_use]
+    pub const fn database_id(&self) -> DatabaseId {
+        self.database_id
+    }
+
+    /// Every recognized generation file in canonical family/generation order.
+    #[must_use]
+    pub fn generations(&self) -> &[IndexGenerationInventoryEntry] {
+        &self.generations
+    }
+}
+
 impl StoredIndexGeneration {
     /// Verified family, generation, version, and revision coverage.
     #[must_use]
@@ -165,6 +222,8 @@ impl IndexRebuildReceipt {
 pub enum IndexRebuildError {
     /// The supplied source and storage layout refer to different database roots.
     SourceDatabaseMismatch,
+    /// The database layout has no durable database identity.
+    DatabaseIdentityMissing,
     /// The acquired writer lock belongs to a different database.
     ForeignWriterLock,
     /// Recovery has not authorized writes to this database.
@@ -228,6 +287,9 @@ impl fmt::Display for IndexRebuildError {
         match self {
             Self::SourceDatabaseMismatch => {
                 formatter.write_str("index source belongs to a different database")
+            }
+            Self::DatabaseIdentityMissing => {
+                formatter.write_str("index inventory requires a durable database identity")
             }
             Self::ForeignWriterLock => {
                 formatter.write_str("index publication received a foreign writer lock")
@@ -310,6 +372,7 @@ impl std::error::Error for IndexRebuildError {
             Self::WriterLock(error) => Some(error),
             Self::Io { source, .. } => Some(source),
             Self::SourceDatabaseMismatch
+            | Self::DatabaseIdentityMissing
             | Self::ForeignWriterLock
             | Self::RecoveryRequired
             | Self::HeadBehindCoverage { .. }
@@ -343,6 +406,119 @@ impl IndexGenerationStore {
     #[must_use]
     pub const fn new(layout: DatabaseLayout, family: IndexFamily) -> Self {
         Self { layout, family }
+    }
+
+    /// Scans and validates every local generation file and current-family pointer.
+    ///
+    /// Unknown files, malformed names, links, corrupt generations, and dangling pointers fail
+    /// closed instead of producing an incomplete inventory.
+    pub fn inventory_all(
+        layout: &DatabaseLayout,
+    ) -> Result<IndexStorageInventory, IndexRebuildError> {
+        let database_id = layout
+            .database_id()
+            .ok_or(IndexRebuildError::DatabaseIdentityMissing)?;
+        let _writer_lock = layout
+            .try_writer_lock()
+            .map_err(IndexRebuildError::WriterLock)?;
+        let directory = layout.indexes_directory();
+        match fs::symlink_metadata(&directory) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(IndexStorageInventory {
+                    database_id,
+                    generations: Vec::new(),
+                });
+            }
+            Err(source) => {
+                return Err(IndexRebuildError::Io {
+                    operation: "inspect index directory for purge inventory",
+                    source,
+                });
+            }
+            Ok(_) => validate_directory_inside_root(layout, &directory)?,
+        }
+
+        let mut generations = Vec::new();
+        let mut current = std::collections::BTreeMap::<u16, (u64, [u8; 32])>::new();
+        for entry in fs::read_dir(&directory).map_err(|source| IndexRebuildError::Io {
+            operation: "list index files for purge inventory",
+            source,
+        })? {
+            let entry = entry.map_err(|source| IndexRebuildError::Io {
+                operation: "read index inventory directory entry",
+                source,
+            })?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| IndexRebuildError::InvalidGenerationFileName)?;
+            if name.starts_with("index-") && name.ends_with(".CURRENT") {
+                let family = family_from_index_file_name(&name)?;
+                if current.contains_key(&family.wire_tag())
+                    || current_pointer_path(&directory, family)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        != Some(name.as_str())
+                {
+                    return Err(IndexRebuildError::InvalidCurrentPointer);
+                }
+                let generation = IndexGenerationStore::new(layout.clone(), family)
+                    .read_current()?
+                    .ok_or(IndexRebuildError::InvalidCurrentPointer)?;
+                current.insert(
+                    family.wire_tag(),
+                    (generation.metadata.generation_id(), generation.file_digest),
+                );
+            } else if name.starts_with("index-") && name.ends_with(GENERATION_FILE_SUFFIX) {
+                let family = family_from_index_file_name(&name)?;
+                let prefix = generation_file_prefix(family);
+                let generation_id = parse_generation_file_name(&name, &prefix)?;
+                let path = entry.path();
+                let metadata =
+                    fs::symlink_metadata(&path).map_err(|source| IndexRebuildError::Io {
+                        operation: "inspect immutable index generation for purge inventory",
+                        source,
+                    })?;
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(IndexRebuildError::PathOutsideDatabase);
+                }
+                validate_file_inside_root(layout, &path)?;
+                let bytes = read_bounded_file(&path, DecoderLimits::DEFAULT.max_frame_bytes)?;
+                let generation = decode_index_generation(&bytes, &DecoderLimits::DEFAULT)
+                    .map_err(IndexRebuildError::Generation)?;
+                if generation.metadata().family() != family
+                    || generation.metadata().generation_id() != generation_id
+                {
+                    return Err(IndexRebuildError::InvalidGenerationFileName);
+                }
+                generations.push(IndexGenerationInventoryEntry {
+                    family,
+                    generation_id,
+                    file_digest: generation.file_digest(),
+                    current: false,
+                });
+            } else {
+                return Err(IndexRebuildError::InvalidGenerationFileName);
+            }
+        }
+
+        for (family_tag, (generation_id, digest)) in current {
+            let family = IndexFamily::from_wire_tag(family_tag)
+                .ok_or(IndexRebuildError::InvalidCurrentPointer)?;
+            let entry = generations
+                .iter_mut()
+                .find(|entry| entry.family == family && entry.generation_id == generation_id)
+                .ok_or(IndexRebuildError::InvalidCurrentPointer)?;
+            if entry.file_digest != digest || entry.current {
+                return Err(IndexRebuildError::InvalidCurrentPointer);
+            }
+            entry.current = true;
+        }
+        generations.sort_by_key(|entry| (entry.family.wire_tag(), entry.generation_id));
+        Ok(IndexStorageInventory {
+            database_id,
+            generations,
+        })
     }
 
     /// Reads the exact checksummed current pointer and verifies its full generation file.
@@ -897,6 +1073,19 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, IndexRebuildError> {
 
 fn current_pointer_path(directory: &Path, family: IndexFamily) -> PathBuf {
     directory.join(format!("index-{:04x}.CURRENT", family.wire_tag()))
+}
+
+fn family_from_index_file_name(name: &str) -> Result<IndexFamily, IndexRebuildError> {
+    let tag_text = name
+        .strip_prefix("index-")
+        .and_then(|value| value.get(..4))
+        .ok_or(IndexRebuildError::InvalidGenerationFileName)?;
+    let tag = u16::from_str_radix(tag_text, 16)
+        .map_err(|_| IndexRebuildError::InvalidGenerationFileName)?;
+    if format!("{tag:04x}") != tag_text {
+        return Err(IndexRebuildError::InvalidGenerationFileName);
+    }
+    IndexFamily::from_wire_tag(tag).ok_or(IndexRebuildError::InvalidGenerationFileName)
 }
 
 fn generation_file_prefix(family: IndexFamily) -> String {
@@ -1660,6 +1849,75 @@ mod tests {
                 "after {point:?}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn purge_inventory_includes_stale_and_current_generations_and_rejects_unknown_files()
+    -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let first = publish_direct(&layout, b"old", revision(1)?, &NativeIndexPublication)
+            .map_err(|error| error.to_string())?;
+        let second = publish_direct(&layout, b"new", revision(2)?, &NativeIndexPublication)
+            .map_err(|error| error.to_string())?;
+
+        let inventory =
+            IndexGenerationStore::inventory_all(&layout).map_err(|error| error.to_string())?;
+        assert_eq!(
+            inventory.database_id(),
+            layout.database_id().ok_or("database ID missing")?
+        );
+        assert_eq!(inventory.generations().len(), 2);
+        assert_eq!(
+            inventory
+                .generations()
+                .iter()
+                .filter(|entry| entry.current())
+                .count(),
+            1
+        );
+        assert!(inventory.generations().iter().any(|entry| {
+            entry.generation_id() == first.metadata().generation_id() && !entry.current()
+        }));
+        assert!(inventory.generations().iter().any(|entry| {
+            entry.generation_id() == second.metadata().generation_id() && entry.current()
+        }));
+
+        fs::write(
+            layout.indexes_directory().join("unclassified-index-file"),
+            b"residue",
+        )
+        .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            IndexGenerationStore::inventory_all(&layout),
+            Err(IndexRebuildError::InvalidGenerationFileName)
+        ));
+        fs::remove_file(layout.indexes_directory().join("unclassified-index-file"))
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            IndexGenerationStore::inventory_all(&layout)
+                .map_err(|error| error.to_string())?
+                .generations()
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn purge_inventory_treats_an_uncreated_optional_index_directory_as_empty() -> Result<(), String>
+    {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        assert!(!layout.indexes_directory().exists());
+        let inventory =
+            IndexGenerationStore::inventory_all(&layout).map_err(|error| error.to_string())?;
+        assert!(inventory.generations().is_empty());
+        assert_eq!(
+            inventory.database_id(),
+            layout.database_id().ok_or("database ID missing")?
+        );
         Ok(())
     }
 

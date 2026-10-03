@@ -13,6 +13,7 @@ mod logical_export;
 mod logical_import;
 mod manifest;
 mod migration_run_journal;
+mod purge;
 mod recovery;
 mod recovery_journal;
 mod recovery_manager;
@@ -51,8 +52,9 @@ pub use index_generation::{
     decode_index_generation, encode_index_generation, select_index_generation,
 };
 pub use index_rebuild::{
-    IndexGenerationStore, IndexRebuildError, IndexRebuildLimits, IndexRebuildManager,
-    IndexRebuildReceipt, IndexRebuildSource, PinnedIndexSnapshot, StoredIndexGeneration,
+    IndexGenerationInventoryEntry, IndexGenerationStore, IndexRebuildError, IndexRebuildLimits,
+    IndexRebuildManager, IndexRebuildReceipt, IndexRebuildSource, IndexStorageInventory,
+    PinnedIndexSnapshot, StoredIndexGeneration,
 };
 pub use layout::{DatabaseLayout, StorageFileError};
 pub use logical_export::{
@@ -69,6 +71,10 @@ pub use manifest::{
     ManifestSnapshot, ManifestStore,
 };
 pub use migration_run_journal::{MigrationRunJournalFileStore, MigrationRunJournalFileStoreError};
+pub use purge::{
+    PurgeApproval, PurgeCascadePlan, PurgeError, PurgeExternalArtifact, PurgeExternalArtifactKind,
+    PurgeIndexGeneration, PurgePlan, PurgePlanManager, PurgeRecordId, PurgeSidecarInventory,
+};
 pub use recovery::{
     CurrentManifestState, RecoveryCorruptionKind, RecoveryDisposition, RecoveryFinding,
     RecoveryReport, RecoveryScanError, RecoveryScanner,

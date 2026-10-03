@@ -53,7 +53,7 @@ pub enum LogicalImportIdentity {
 }
 
 impl LogicalImportIdentity {
-    const fn tag(self) -> u8 {
+    pub(crate) const fn tag(self) -> u8 {
         match self {
             Self::HistorySpace(_) => 1,
             Self::Layer(_) => 2,
@@ -76,7 +76,7 @@ impl LogicalImportIdentity {
         }
     }
 
-    fn encode(self, output: &mut Vec<u8>) -> Result<(), LogicalImportError> {
+    pub(crate) fn encode(self, output: &mut Vec<u8>) -> Result<(), LogicalImportError> {
         output.push(self.tag());
         match self {
             Self::HistorySpace(id) => output.extend_from_slice(&id.to_bytes()),
@@ -529,6 +529,62 @@ fn collect_importable_identities(
     Ok(identities)
 }
 
+/// Returns every durable identity defined by one record, including its typed record reference.
+///
+/// Purge planning uses this beside `record_references` to build the same dependency graph used
+/// by import validation. Multiple schema revisions may define the same non-record identity.
+pub(crate) fn record_defined_identities(record: &Record) -> Vec<LogicalImportIdentity> {
+    let mut identities = BTreeSet::new();
+    match record {
+        Record::HistorySpaceDefinition(value) => {
+            identities.insert(LogicalImportIdentity::HistorySpace(
+                value.history_space_id(),
+            ));
+        }
+        Record::Entity(value) => {
+            identities.insert(LogicalImportIdentity::Entity(value.entity_id()));
+        }
+        Record::PerspectiveDefinitionRevision(value) => {
+            identities.insert(LogicalImportIdentity::Perspective(value.perspective_id()));
+        }
+        Record::LayerDefinition(value) => {
+            identities.insert(LogicalImportIdentity::Layer(value.layer_id()));
+        }
+        Record::LayerSchemaSnapshot(value) => {
+            identities.insert(LogicalImportIdentity::Layer(value.base_layer_id()));
+            identities.extend(
+                value
+                    .definitions()
+                    .iter()
+                    .map(|definition| LogicalImportIdentity::Layer(definition.layer_id())),
+            );
+        }
+        Record::EntityTypeDefinition(value) => {
+            identities.insert(LogicalImportIdentity::EntityType(value.entity_type_id()));
+        }
+        Record::PredicateDefinition(value) => {
+            identities.insert(LogicalImportIdentity::Predicate(value.predicate_id()));
+        }
+        Record::EventKindDefinition(value) => {
+            identities.insert(LogicalImportIdentity::EventKind(value.event_kind_id()));
+            identities.extend(
+                value
+                    .roles()
+                    .iter()
+                    .map(|role| LogicalImportIdentity::EventRole(role.event_role_id())),
+            );
+            identities.extend(value.attributes().iter().map(|attribute| {
+                LogicalImportIdentity::EventAttribute(attribute.event_attribute_id())
+            }));
+        }
+        _ => {}
+    }
+    if let Some(reference) = record_ref(record) {
+        identities.insert(LogicalImportIdentity::Record(reference));
+    }
+    identities.into_iter().collect()
+}
+
 fn validate_referenced_identities(
     source: &LogicalExport,
     imported: &BTreeSet<LogicalImportIdentity>,
@@ -561,7 +617,7 @@ fn map_identity(
         .map_or(identity, |mapping| mapping.target)
 }
 
-fn record_references(record: &Record) -> Vec<LogicalImportIdentity> {
+pub(crate) fn record_references(record: &Record) -> Vec<LogicalImportIdentity> {
     let mut references = Vec::new();
     match record {
         Record::HistorySpaceDefinition(value) => {

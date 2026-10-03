@@ -1726,10 +1726,12 @@ mod tests {
         LogicalExportStorageClass,
     };
     use crate::{
-        CompactionManager, DatabaseLayout, HistorySegmentStore, LogicalImportDestinationInventory,
-        LogicalImportError, LogicalImportIdMapping, LogicalImportIdentity, LogicalImportManager,
-        LogicalImportPlan, ManifestSegmentKind, ManifestSegmentReference, ManifestSnapshot,
-        ManifestStore, RecoveryManager, SecurityPolicyHistoryStore, WalPrepareLog,
+        CompactionManager, DatabaseLayout, HistorySegmentStore, IndexGenerationStore,
+        LogicalImportDestinationInventory, LogicalImportError, LogicalImportIdMapping,
+        LogicalImportIdentity, LogicalImportManager, LogicalImportPlan, ManifestSegmentKind,
+        ManifestSegmentReference, ManifestSnapshot, ManifestStore, PurgeApproval, PurgeCascadePlan,
+        PurgeError, PurgeExternalArtifact, PurgeExternalArtifactKind, PurgePlan, PurgePlanManager,
+        PurgeSidecarInventory, RecoveryManager, SecurityPolicyHistoryStore, WalPrepareLog,
     };
     use std::env;
     use std::fs;
@@ -1737,12 +1739,12 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use worlddb_core::{
         AuthorizationMode, Capability, CapabilityGrant, CapabilityRule, DatabaseId, DomainId,
-        Entity, EntityId, EntityRetirement, EntityRetirementId, EntityTypeId, GrantEffect,
-        HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, Lifecycle, OperationId,
-        PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId, PolicyScope, PolicySubject,
-        Principal, PrincipalId, Record, RecordKind, RecordRef, Revision, SchemaRevision,
-        SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
-        Symbol,
+        Entity, EntityId, EntityRetirement, EntityRetirementId, EntityTypeDefinition, EntityTypeId,
+        GrantEffect, HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, Lifecycle,
+        OperationId, PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId, PolicyScope,
+        PolicySubject, Principal, PrincipalId, Record, RecordKind, RecordRef, Revision,
+        SchemaRevision, SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot,
+        SecurityPolicyVersion, Symbol,
     };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -2522,6 +2524,148 @@ mod tests {
         assert!(matches!(
             LogicalImportManager::prepare(&source_bytes, &plan_bytes, &destination),
             Err(LogicalImportError::MissingReference)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn purge_plan_rejects_implicit_cascade_and_binds_the_exact_approved_set() -> Result<(), String>
+    {
+        let area = TestArea::create()?;
+        let index_layout = area.layout()?;
+        let source_database_id = index_layout
+            .database_id()
+            .ok_or_else(|| String::from("database identity missing"))?;
+        let history_space = id::<HistorySpaceId>(71)?;
+        let entity_type = id::<EntityTypeId>(72)?;
+        let entity = id::<EntityId>(73)?;
+        let records = vec![
+            Record::HistorySpaceDefinition(
+                HistorySpaceDefinition::new(history_space, None, Revision::GENESIS)
+                    .map_err(|error| error.to_string())?,
+            ),
+            Record::EntityTypeDefinition(EntityTypeDefinition::new(
+                entity_type,
+                Symbol::new("purge_fixture").map_err(|error| error.to_string())?,
+                None,
+                Lifecycle::Active,
+                Revision::FIRST_COMMIT,
+            )),
+            Record::Entity(Entity::new(entity, entity_type, Revision::FIRST_COMMIT)),
+            Record::EntityRetirement(EntityRetirement::new(
+                id::<EntityRetirementId>(74)?,
+                entity,
+                Revision::FIRST_COMMIT,
+            )),
+        ];
+        let decoded_records = records
+            .iter()
+            .map(|record| {
+                let frame =
+                    worlddb_core::encode_record(record).map_err(|error| error.to_string())?;
+                worlddb_core::decode_record(&frame).map_err(|error| error.to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let partial_source_records = decoded_records.clone();
+        let scope = LogicalExportScope::new(
+            Revision::GENESIS,
+            Revision::FIRST_COMMIT,
+            vec![history_space],
+            RecordKind::ALL
+                .into_iter()
+                .filter(|kind| !super::is_revisionless_kind(*kind))
+                .collect(),
+        )
+        .map_err(|error| error.to_string())?;
+        let source_artifact = super::build_export(
+            source_database_id,
+            Revision::FIRST_COMMIT,
+            &scope,
+            decoded_records,
+        )
+        .and_then(|export| export.encode())
+        .map_err(|error| error.to_string())?;
+        let original_digest = *blake3::hash(&source_artifact).as_bytes();
+        let index_inventory = IndexGenerationStore::inventory_all(&index_layout)
+            .map_err(|error| error.to_string())?;
+        let sidecars = PurgeSidecarInventory::new(
+            index_inventory,
+            vec![PurgeExternalArtifact::new(
+                PurgeExternalArtifactKind::ExactBackup,
+                [76; 32],
+            )],
+            false,
+        )
+        .map_err(|error| error.to_string())?;
+        let target = LogicalImportIdentity::Entity(entity);
+        let partial_scope = LogicalExportScope::new(
+            Revision::GENESIS,
+            Revision::FIRST_COMMIT,
+            vec![history_space],
+            vec![RecordKind::HistorySpaceDefinition],
+        )
+        .map_err(|error| error.to_string())?;
+        let partial_artifact = super::build_export(
+            source_database_id,
+            Revision::FIRST_COMMIT,
+            &partial_scope,
+            partial_source_records,
+        )
+        .and_then(|export| export.encode())
+        .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            PurgePlanManager::preview(&partial_artifact, vec![target], sidecars.clone()),
+            Err(PurgeError::IncompleteLogicalExport)
+        ));
+        let preview = PurgePlanManager::preview(&source_artifact, vec![target], sidecars.clone())
+            .map_err(|error| error.to_string())?;
+        assert_eq!(preview.target_records().len(), 1);
+        assert_eq!(preview.dependants().len(), 1);
+        assert_eq!(preview.retained_external_artifacts().len(), 1);
+        assert!(!preview.external_inventory_complete());
+        assert_eq!(
+            PurgePlan::index_families_to_rebuild().len(),
+            worlddb_core::IndexFamily::ALL.len()
+        );
+        assert!(matches!(
+            preview.clone().approve_reject_if_referenced(),
+            Err(PurgeError::ReferencesRemain)
+        ));
+        assert!(matches!(
+            preview.clone().approve_cascade(
+                &PurgeCascadePlan::new(Vec::new()).map_err(|error| error.to_string())?
+            ),
+            Err(PurgeError::CascadePlanMismatch)
+        ));
+        let approved = preview
+            .clone()
+            .approve_cascade(
+                &PurgeCascadePlan::new(preview.dependants().to_vec())
+                    .map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+        assert_eq!(approved.approval(), Some(PurgeApproval::CascadePlan));
+        assert_ne!(approved.fingerprint(), preview.fingerprint());
+        let repeated = PurgePlanManager::preview(&source_artifact, vec![target], sidecars)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(preview.fingerprint(), repeated.fingerprint());
+        assert_eq!(*blake3::hash(&source_artifact).as_bytes(), original_digest);
+
+        let incomplete_sidecars = PurgeSidecarInventory::from_partial_index_inventory(
+            source_database_id,
+            Vec::new(),
+            Vec::new(),
+            false,
+        )
+        .map_err(|error| error.to_string())?;
+        let incomplete =
+            PurgePlanManager::preview(&source_artifact, vec![target], incomplete_sidecars)
+                .map_err(|error| error.to_string())?;
+        let incomplete_cascade = PurgeCascadePlan::new(incomplete.dependants().to_vec())
+            .map_err(|error| error.to_string())?;
+        assert!(matches!(
+            incomplete.approve_cascade(&incomplete_cascade),
+            Err(PurgeError::IndexInventoryIncomplete)
         ));
         Ok(())
     }
