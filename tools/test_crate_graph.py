@@ -16,7 +16,7 @@ VALID_EXTERNAL = {
     "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
     "worlddb-process-adapter": {"windows-sys"},
     "worlddb-testkit": {"rusqlite"},
-    "worlddb-cli": {"blake3"},
+    "worlddb-cli": {"blake3", "getrandom"},
 }
 
 

@@ -3,3 +3,4 @@
 //! CLI-side process boundaries for WorldDB extension adapters.
 
 pub mod adapter_protocol;
+pub mod cli;

@@ -22,6 +22,8 @@ Der File-Adapter ist als eigene Crate vorgesehen, weil die geplante Plattform-/D
 
 `tools/check_crate_graph.py` prüft `cargo metadata` des tatsächlichen Workspaces. Das M0-Gate akzeptierte die fünf Startcrates und die obige Abhängigkeitsrichtung; in M0-09 waren zusätzlich alle externen Abhängigkeiten verboten. `tools/test_crate_graph.py` prüft die Policy mit Positiv- und Negativproben: eine Rückkante `worlddb-core -> worlddb-storage-file`, eine externe Dependency und eine unbeschlossene `worlddb-resolution`-Crate werden abgewiesen. M7-13a ergänzt den zugelassenen Prozessadapter nach einem eigenen Boundary-Gate.
 
+M8-02 ergänzt `getrandom` als direkten, bereits in M0-12 geprüften Workspacebaustein der CLI. Die CLI erzeugt damit eine zufällige UUIDv4 als Requestkorrelation für ihre JSONL-Antworten; sie verwendet ausschließlich das fallible `getrandom::fill`-API ohne Defaultfeatures. Diese Prozessgrenze vergibt keine Identität oder Berechtigung und zieht keine externe Abhängigkeit in Core oder Storage.
+
 ## Lokale Prüfung
 
 - `cargo check --locked --workspace --all-targets` – bestanden mit Rust 1.85.0; alle fünf Workspace-Mitglieder und Targets geprüft.

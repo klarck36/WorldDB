@@ -5,6 +5,7 @@
 profile	dev	default	Local development verification on the declared MSRV
 step	dev	format-check	run	cargo	fmt --all -- --check	-
 step	dev	workspace-check	run	cargo	check --locked --workspace --all-targets	-
+step	dev	cli-contract	run	cargo	test --locked -p worlddb-cli --all-targets	-
 step	dev	decoder-inventory-smoke	run	cargo	test --locked --package worlddb-core --test decoder_fuzz	-
 step	dev	typescript-transport-dependencies	run	pnpm	--dir bindings/typescript install --frozen-lockfile	-
 step	dev	typescript-transport-verify	run	pnpm	--dir bindings/typescript verify	-

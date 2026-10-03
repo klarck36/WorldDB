@@ -18,13 +18,13 @@ EXPECTED_CRATES = {
     "xtask": set(),
 }
 
-# These core dependencies are reviewed in policy/dependencies.tsv and their
-# task evidence; rusqlite is the optional M5-20 testkit reference adapter.
+# These external dependency edges are reviewed in policy/dependencies.tsv and
+# their task evidence; rusqlite is the optional M5-20 testkit reference adapter.
 EXPECTED_EXTERNALS = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
     "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
     "worlddb-process-adapter": {"windows-sys"},
-    "worlddb-cli": {"blake3"},
+    "worlddb-cli": {"blake3", "getrandom"},
     "worlddb-testkit": {"rusqlite"},
     "xtask": set(),
 }

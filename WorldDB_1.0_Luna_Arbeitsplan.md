@@ -255,7 +255,7 @@ Die Reihenfolge folgt dem Master-Implementierungsplan M0–M10. **Die Zeilenfolg
 ### M8 – Öffentliche API, Admin-CLI und bedienbare Desktop-App
 
 - [x] **M8-01 – Öffentliche Rust-Facade stabilisieren.** Engineoperationen, owned Results, getypte Requests, Public Codes und versionierte DTOs hinter einer schmalen API anbieten. **Fertig wenn** weder Storage-Traits noch interne Locks/Secrets in der API sichtbar sind. Windows-Nachweis: `docs/M8-01-verification.md`; Linux/macOS folgen M9-07.
-- [ ] **M8-02 – CLI-Grundgerüst.** Versionierte Befehle, Hilfe, Exitcodes und maschinenlesbare sichere Ausgabe bauen. **Fertig wenn** alle Fehler als dokumentierte Public Codes erscheinen und Tests keine Geheimnisse in stdout/stderr finden.
+- [x] **M8-02 – CLI-Grundgerüst.** Versionierte Befehle, Hilfe, Exitcodes und maschinenlesbare sichere Ausgabe bauen. **Fertig wenn** alle Fehler als dokumentierte Public Codes erscheinen und Tests keine Geheimnisse in stdout/stderr finden. Windows-Nachweis: `docs/M8-02-verification.md`; Linux/macOS folgen M9-07.
 - [ ] **M8-03 – CLI Verify/Recovery/Salvage.** `verify`, `recovery`, read-only Öffnen und `salvage` anbinden. **Fertig wenn** `safe_revision`, Schadensklasse und Originalschutz bedienbar sind.
 - [ ] **M8-04 – CLI Backup/Restore.** Exact- und AuditComplete-Profil, Ziel-Verify, Clone-/Disaster-Recovery-Modus anbinden. **Fertig wenn** Profil und Auditumfang vor Ausführung/Erfolg klar ausgegeben werden.
 - [ ] **M8-05 – CLI Migration.** `plan`, `dry-run`, `run`, `resume` und Formatupgrade mit Admin-/Restorepoint-Gates anbieten. **Fertig wenn** Breaking ohne explizite Aktion scheitert.
