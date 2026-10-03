@@ -2,6 +2,7 @@
 members = [
     "crates/worlddb-core",
     "crates/worlddb-storage-file",
+    "crates/worlddb-process-adapter",
     "crates/worlddb-cli",
     "crates/worlddb-testkit",
     "xtask",

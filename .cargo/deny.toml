@@ -57,9 +57,10 @@ allow = [
 ]
 
 # fs4 1.1.0 enables rustix's default std/alloc support and windows-sys's
-# empty default feature for its target adapters. The Windows storage adapter
-# also selects the exact Foundation and FileSystem APIs it calls. Keep the
-# exception exact-versioned; fs4 itself has defaults disabled.
+# empty default feature for its target adapters. The Windows storage and
+# process adapters use the exact Foundation, Security, FileSystem, ToolHelp,
+# JobObjects, and Threading APIs they call. Keep the exception exact-versioned;
+# fs4 itself has defaults disabled.
 [[bans.features]]
 crate = "rustix:1.1.5"
 allow = ["default", "std", "alloc", "fs"]
@@ -69,6 +70,7 @@ crate = "windows-sys:0.61.2"
 allow = [
     "default",
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_Storage",
     "Win32_System_IO",
@@ -78,6 +80,9 @@ allow = [
     "Win32_Networking",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
 ]
 
 [bans.build]

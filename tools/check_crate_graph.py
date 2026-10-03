@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_CRATES = {
     "worlddb-core": set(),
     "worlddb-storage-file": {"worlddb-core"},
-    "worlddb-cli": {"worlddb-core", "worlddb-storage-file"},
+    "worlddb-process-adapter": set(),
+    "worlddb-cli": {"worlddb-core", "worlddb-process-adapter", "worlddb-storage-file"},
     "worlddb-testkit": {"worlddb-core"},
     "xtask": set(),
 }
@@ -22,7 +23,8 @@ EXPECTED_CRATES = {
 EXPECTED_EXTERNALS = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
     "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
-    "worlddb-cli": set(),
+    "worlddb-process-adapter": {"windows-sys"},
+    "worlddb-cli": {"blake3"},
     "worlddb-testkit": {"rusqlite"},
     "xtask": set(),
 }

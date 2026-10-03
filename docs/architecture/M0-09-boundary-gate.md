@@ -20,7 +20,7 @@ Der File-Adapter ist als eigene Crate vorgesehen, weil die geplante Plattform-/D
 
 ## Durchsetzbarer Graph
 
-`tools/check_crate_graph.py` prüft `cargo metadata` des tatsächlichen Workspaces. Es akzeptiert nur die fünf Startcrates und die obige Abhängigkeitsrichtung; in M0-09 sind zusätzlich alle externen Abhängigkeiten verboten. `tools/test_crate_graph.py` prüft die Policy mit Positiv- und Negativproben: eine Rückkante `worlddb-core -> worlddb-storage-file`, eine externe Dependency und eine unbeschlossene `worlddb-resolution`-Crate werden abgewiesen.
+`tools/check_crate_graph.py` prüft `cargo metadata` des tatsächlichen Workspaces. Das M0-Gate akzeptierte die fünf Startcrates und die obige Abhängigkeitsrichtung; in M0-09 waren zusätzlich alle externen Abhängigkeiten verboten. `tools/test_crate_graph.py` prüft die Policy mit Positiv- und Negativproben: eine Rückkante `worlddb-core -> worlddb-storage-file`, eine externe Dependency und eine unbeschlossene `worlddb-resolution`-Crate werden abgewiesen. M7-13a ergänzt den zugelassenen Prozessadapter nach einem eigenen Boundary-Gate.
 
 ## Lokale Prüfung
 
@@ -31,4 +31,10 @@ Der File-Adapter ist als eigene Crate vorgesehen, weil die geplante Plattform-/D
 
 ## Lizenzgrenze
 
-Die M0-06-Inventur verlangte eine ausdrückliche Produktlizenzentscheidung vor dem ersten Produktcode-/Dependency-Commit. Der Product Owner hat am 2026-09-29 „opensource“ gewählt; umgesetzt wird die zuvor empfohlene Dual-Lizenz `MIT OR Apache-2.0`. Alle fünf Crates erben denselben SPDX-Ausdruck aus dem Workspacemanifest; `LICENSE-MIT` und `LICENSE-APACHE` enthalten die beiden Lizenztexte. Der MIT-Copyrightvermerk lautet `Copyright 2026 WorldDB contributors`.
+Die M0-06-Inventur verlangte eine ausdrückliche Produktlizenzentscheidung vor dem ersten Produktcode-/Dependency-Commit. Der Product Owner hat am 2026-09-29 „opensource“ gewählt; umgesetzt wird die zuvor empfohlene Dual-Lizenz `MIT OR Apache-2.0`. Alle fünf M0-Startcrates erben denselben SPDX-Ausdruck aus dem Workspacemanifest; `LICENSE-MIT` und `LICENSE-APACHE` enthalten die beiden Lizenztexte. Der MIT-Copyrightvermerk lautet `Copyright 2026 WorldDB contributors`.
+
+## M7-13a – Prozessadapter-Gate
+
+`worlddb-process-adapter` ist eine eigenständige Plattformgrenze. Nur diese Crate erzeugt den Windows-Job, setzt committed-memory- und Prozessbaumbeschränkungen und startet den Adapter suspendiert bis Jobzuweisung und Resume abgeschlossen sind. `worlddb-cli` hängt vom Prozessadapter ab; `worlddb-core` und `worlddb-storage-file` erhalten keine Rückkante. Dieses Gate begründet die Extraktion durch isoliertes Plattform-FFI und einen separat testbaren OS-Prozessvertrag; es erweitert die M0-Startstruktur bewusst.
+
+Der nicht vertrauenswürdige Kindprozess bekommt weder Core-Objekte noch Storage-Handles oder Datenbankpfade. Er erhält ausschließlich das versionierte Manifest und begrenzte Bytes über Standardstreams. Windows-Job- oder Threadoperationen, die nicht installiert werden können, brechen den Start geschlossen ab.

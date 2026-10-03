@@ -14,6 +14,10 @@ EXCEPTION_ALLOW = re.compile(
 )
 REQUIRED_MARKERS = ("// SAFETY:", "// TEST:", "// REVIEW:")
 WINDOW_LINES = 12
+APPROVED_ADAPTER_ROOTS = (
+    "crates/worlddb-storage-file/",
+    "crates/worlddb-process-adapter/",
+)
 
 
 def validate_unsafe_sources(sources: dict[str, str]) -> list[str]:
@@ -25,8 +29,9 @@ def validate_unsafe_sources(sources: dict[str, str]) -> list[str]:
             if not UNSAFE_CONSTRUCT.search(code):
                 continue
             location = f"{path}:{index + 1}"
-            if not path.replace("\\", "/").startswith("crates/worlddb-storage-file/"):
-                errors.append(f"{location}: unsafe code is allowed only in worlddb-storage-file")
+            normalized_path = path.replace("\\", "/")
+            if not normalized_path.startswith(APPROVED_ADAPTER_ROOTS):
+                errors.append(f"{location}: unsafe code is allowed only in approved platform adapters")
                 continue
             start = max(0, index - WINDOW_LINES)
             context_lines = lines[start : index + 1]

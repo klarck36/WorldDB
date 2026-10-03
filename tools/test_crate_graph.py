@@ -6,14 +6,17 @@ from check_crate_graph import validate_graph
 VALID_GRAPH = {
     "worlddb-core": set(),
     "worlddb-storage-file": {"worlddb-core"},
-    "worlddb-cli": {"worlddb-core", "worlddb-storage-file"},
+    "worlddb-process-adapter": set(),
+    "worlddb-cli": {"worlddb-core", "worlddb-process-adapter", "worlddb-storage-file"},
     "worlddb-testkit": {"worlddb-core"},
     "xtask": set(),
 }
 VALID_EXTERNAL = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
     "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
+    "worlddb-process-adapter": {"windows-sys"},
     "worlddb-testkit": {"rusqlite"},
+    "worlddb-cli": {"blake3"},
 }
 
 

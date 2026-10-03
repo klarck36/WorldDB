@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_MEMBERS = {
     "crates/worlddb-core": "worlddb-core",
     "crates/worlddb-storage-file": "worlddb-storage-file",
+    "crates/worlddb-process-adapter": "worlddb-process-adapter",
     "crates/worlddb-cli": "worlddb-cli",
     "crates/worlddb-testkit": "worlddb-testkit",
     "xtask": "xtask",
@@ -43,7 +44,7 @@ def validate_workspace(
 
     workspace = root.get("workspace", {})
     if set(workspace.get("members", [])) != set(EXPECTED_MEMBERS):
-        errors.append("workspace members do not match the approved five-crate M0 layout")
+        errors.append("workspace members do not match the approved M0/M7 crate layout")
     lint_tables = workspace.get("lints", {})
     if lint_tables.get("rust", {}).get("unsafe_code") != "deny":
         errors.append("workspace rust lints must deny unsafe_code")
@@ -74,6 +75,10 @@ def validate_workspace(
         "crates/worlddb-storage-file/src/lib.rs", ""
     ):
         errors.append("worlddb-storage-file must deny unsafe_code and remain locally overridable")
+    if "#![deny(unsafe_code)]" not in member_sources.get(
+        "crates/worlddb-process-adapter/src/lib.rs", ""
+    ):
+        errors.append("worlddb-process-adapter must deny unsafe_code and remain locally overridable")
     if rustfmt.get("edition") != "2024":
         errors.append("rustfmt.toml must declare edition 2024")
     if not isinstance(rustfmt.get("max_width"), int) or rustfmt["max_width"] < 40:
@@ -92,6 +97,7 @@ def workspace_inputs(root: Path) -> tuple[str, dict[str, str], dict[str, str], s
         for member in (
             "crates/worlddb-core/src/lib.rs",
             "crates/worlddb-storage-file/src/lib.rs",
+            "crates/worlddb-process-adapter/src/lib.rs",
         )
     }
     rustfmt = (root / "rustfmt.toml").read_text(encoding="utf-8")
@@ -109,7 +115,7 @@ def main() -> int:
         for error in errors:
             print(f"WORKSPACE LINT ERROR: {error}", file=sys.stderr)
         return 1
-    print("WORKSPACE LINTS OK: all members inherit deny policies; core forbids unsafe; adapter denies unsafe")
+    print("WORKSPACE LINTS OK: all members inherit deny policies; core forbids unsafe; platform adapters deny unsafe")
     return 0
 
 

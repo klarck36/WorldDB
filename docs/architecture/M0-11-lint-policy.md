@@ -6,13 +6,13 @@
 
 ## Unsafe-Grenze
 
-Alle Workspacecrates erben das Rust-Lint `unsafe_code = deny`. `worlddb-core` verschärft das auf Crate-Ebene zu `#![forbid(unsafe_code)]`. Nur `worlddb-storage-file` ist als Plattformadapter mit `#![deny(unsafe_code)]` markiert, damit eine eng begrenzte, überprüfte Ausnahme technisch möglich bleibt.
+Alle Workspacecrates erben das Rust-Lint `unsafe_code = deny`. `worlddb-core` verschärft das auf Crate-Ebene zu `#![forbid(unsafe_code)]`. `worlddb-storage-file` und `worlddb-process-adapter` sind die genehmigten Plattformadapter und setzen selbst `#![deny(unsafe_code)]`; ihre eng begrenzten, geprüften Ausnahmen müssen lokal registriert sein.
 
-`tools/check_unsafe_policy.py` weist Unsafe außerhalb des Adapters ab. Jeder künftige Unsafe-Block im Adapter braucht im lokalen Kontext einen `#[allow(unsafe_code, reason = "WDB-EXC-NNNN")]`-Eintrag sowie `SAFETY:`, `TEST:` und `REVIEW:`-Belege. Rustc/Clippy erzwingen die Codegrenze; der Check prüft die zusätzlichen Reviewangaben. Der aktuelle Workspace enthält keinen Unsafe-Code und keine Ausnahmen.
+`tools/check_unsafe_policy.py` weist Unsafe außerhalb dieser beiden Adapter ab. Jeder Unsafe-Block braucht im lokalen Kontext ein `#[allow(unsafe_code, reason = "WDB-EXC-NNNN")]`-Attribut sowie `SAFETY:`, `TEST:` und `REVIEW:`-Belege. Rustc/Clippy erzwingen die Codegrenze; der Check prüft die zusätzlichen Reviewangaben. WDB-EXC-0002 bindet die Windows-Dateiveröffentlichung. WDB-EXC-0005 bindet ausschließlich die Windows-Job-, Prozesszuweisungs- und Resume-API des Prozessadapters.
 
 ## Ausnahme-Register
 
-`policy/exceptions.tsv` verwendet die Spalten `exception_id`, `owner`, `reason` und `expires_on`. IDs haben das Format `WDB-EXC-NNNN`, Ablaufdaten `YYYY-MM-DD`. Jede lokale `#[allow]`-Annotation muss genau eine registrierte ID nennen; abgelaufene, ungenutzte oder unvollständige Einträge lassen Verify fehlschlagen. Die Datei enthält derzeit nur den Header und keine Ausnahmen.
+`policy/exceptions.tsv` verwendet die Spalten `exception_id`, `owner`, `reason` und `expires_on`. IDs haben das Format `WDB-EXC-NNNN`, Ablaufdaten `YYYY-MM-DD`. Jede lokale `#[allow]`-Annotation muss genau eine registrierte ID nennen; abgelaufene, ungenutzte oder unvollständige Einträge lassen Verify fehlschlagen. Das Register führt alle aktiven Ausnahmen einschließlich WDB-EXC-0005.
 
 ## Fachterminologie
 
@@ -20,4 +20,4 @@ Der Terminologie-Check folgt Master §34.3. Er klassifiziert jeden Treffer auf `
 
 ## Durchsetzung
 
-Das Dev-Profil in `tools/verify/steps.tsv` führt Format-, Workspace-, Clippy-, Unsafe-, Ausnahme- und Terminologiechecks aus. Negative Prüffälle belegen, dass unzulässiger Unsafe-Code, eine normative Alt-ID, eine abgelaufene Ausnahme und fehlende Unsafe-Nachweise scheitern. Future dependency- und CI-Schritte bleiben sichtbar als M0-12- bzw. M0-14-SKIPs registriert.
+Das Dev-Profil in `tools/verify/steps.tsv` führt Format-, Workspace-, Clippy-, Unsafe-, Ausnahme- und Terminologiechecks aus. Negative Prüffälle belegen, dass unzulässiger Unsafe-Code, eine normative Alt-ID, eine abgelaufene Ausnahme und fehlende Unsafe-Nachweise scheitern. Der Prozessadapter bleibt unter `deny(unsafe_code)`; nur die einzeln markierten Job-API-Aufrufe verwenden WDB-EXC-0005. Future dependency- und CI-Schritte bleiben sichtbar als M0-12- bzw. M0-14-SKIPs registriert.

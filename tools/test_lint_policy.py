@@ -118,7 +118,7 @@ class UnsafeBoundaryPolicyTests(unittest.TestCase):
     def test_unsafe_is_rejected_outside_the_platform_adapter(self):
         source = "fn read() { unsafe { let _ = 1; } }\n"
         errors = check_unsafe_policy.validate_unsafe_sources({"crates/worlddb-core/src/lib.rs": source})
-        self.assertTrue(any("only in worlddb-storage-file" in error for error in errors))
+        self.assertTrue(any("only in approved platform adapters" in error for error in errors))
 
     def test_unapproved_unsafe_makes_the_verify_step_fail(self):
         with tempfile.TemporaryDirectory(prefix="worlddb-unsafe-policy-") as directory:
