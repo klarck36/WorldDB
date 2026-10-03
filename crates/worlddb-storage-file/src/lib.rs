@@ -6,6 +6,7 @@ mod audit_wal;
 mod backup;
 mod compaction;
 mod format;
+mod guarded_migration;
 mod index_generation;
 mod index_rebuild;
 mod layout;
@@ -48,6 +49,10 @@ pub use compaction::{
 };
 pub use format::{
     FORMAT_FILE_BYTES, FORMAT_FILE_KIND, FormatCapabilities, FormatProbeError, probe_format,
+};
+pub use guarded_migration::{
+    FileStoreGuardedMigrationExecutionError, FileStoreGuardedMigrationJournalFailure,
+    FileStoreGuardedMigrationOpenError, FileStoreGuardedMigrationRun,
 };
 pub use index_generation::{
     INDEX_GENERATION_FRAME_KIND, IndexFileDecision, IndexGeneration, IndexGenerationError,

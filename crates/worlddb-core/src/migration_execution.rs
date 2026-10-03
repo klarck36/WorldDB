@@ -83,6 +83,12 @@ impl MigrationStepInput {
     pub const fn operation_id(&self) -> OperationId {
         self.operation_id
     }
+
+    /// Exact ordered canonical input frames assigned to this migration step.
+    #[must_use]
+    pub fn records(&self) -> &[Vec<u8>] {
+        &self.records
+    }
 }
 
 /// Evidence returned for one atomically published migration step.
