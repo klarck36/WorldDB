@@ -14,6 +14,7 @@ mod logical_import;
 mod manifest;
 mod migration_run_journal;
 mod purge;
+mod purge_rewrite;
 mod recovery;
 mod recovery_journal;
 mod recovery_manager;
@@ -74,6 +75,10 @@ pub use migration_run_journal::{MigrationRunJournalFileStore, MigrationRunJourna
 pub use purge::{
     PurgeApproval, PurgeCascadePlan, PurgeError, PurgeExternalArtifact, PurgeExternalArtifactKind,
     PurgeIndexGeneration, PurgePlan, PurgePlanManager, PurgeRecordId, PurgeSidecarInventory,
+};
+pub use purge_rewrite::{
+    PurgeIdMapping, PurgeReport, PurgeRewriteError, PurgeRewriteManager, PurgeRewriteReceipt,
+    PurgeRewriteRequest,
 };
 pub use recovery::{
     CurrentManifestState, RecoveryCorruptionKind, RecoveryDisposition, RecoveryFinding,

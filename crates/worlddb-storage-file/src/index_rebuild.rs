@@ -415,12 +415,22 @@ impl IndexGenerationStore {
     pub fn inventory_all(
         layout: &DatabaseLayout,
     ) -> Result<IndexStorageInventory, IndexRebuildError> {
+        let writer_lock = layout
+            .try_writer_lock()
+            .map_err(IndexRebuildError::WriterLock)?;
+        Self::inventory_all_locked(layout, &writer_lock)
+    }
+
+    pub(crate) fn inventory_all_locked(
+        layout: &DatabaseLayout,
+        writer_lock: &WriterLock,
+    ) -> Result<IndexStorageInventory, IndexRebuildError> {
+        if !writer_lock.belongs_to_database_root(layout.root()) {
+            return Err(IndexRebuildError::ForeignWriterLock);
+        }
         let database_id = layout
             .database_id()
             .ok_or(IndexRebuildError::DatabaseIdentityMissing)?;
-        let _writer_lock = layout
-            .try_writer_lock()
-            .map_err(IndexRebuildError::WriterLock)?;
         let directory = layout.indexes_directory();
         match fs::symlink_metadata(&directory) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {

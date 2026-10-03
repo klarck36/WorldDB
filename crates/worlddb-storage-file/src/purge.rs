@@ -357,6 +357,23 @@ impl PurgePlan {
         records
     }
 
+    pub(crate) fn matches_sidecars(&self, sidecars: &PurgeSidecarInventory) -> bool {
+        self.sidecars == *sidecars
+    }
+
+    pub(crate) fn is_affected(
+        &self,
+        record: &worlddb_core::DecodedRecord,
+    ) -> Result<bool, PurgeError> {
+        let definitions = record_defined_identities(record.record());
+        if definitions.is_empty() {
+            return Err(PurgeError::RecordHasNoIdentity);
+        }
+        let id = purge_record_id(record.record(), record, &definitions)?;
+        Ok(self.target_records.binary_search(&id).is_ok()
+            || self.dependants.binary_search(&id).is_ok())
+    }
+
     /// Index generations inventoried for disposal and rebuild in the new database.
     #[must_use]
     pub fn index_generations(&self) -> &[PurgeIndexGeneration] {

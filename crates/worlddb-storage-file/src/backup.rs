@@ -23,6 +23,7 @@ use crate::{
 };
 
 mod restore;
+pub(crate) use restore::publish_restore_directory;
 pub use restore::{RestoreError, RestoreManager, RestoreReport};
 mod migration_restore_point;
 pub use migration_restore_point::MigrationRestorePointError;

@@ -847,6 +847,10 @@ fn publish_directory(stage: &Path, target: &Path) -> io::Result<()> {
     fs::rename(stage, target)
 }
 
+pub(crate) fn publish_restore_directory(stage: &Path, target: &Path) -> io::Result<()> {
+    publish_directory(stage, target)
+}
+
 #[cfg(windows)]
 fn replace_file(stage: &Path, target: &Path) -> io::Result<()> {
     crate::windows_publication::move_file(stage, target, true)

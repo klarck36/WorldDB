@@ -744,6 +744,27 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates the idempotency identity for an offline purge publication commit.
+    #[doc(hidden)]
+    pub fn generate_purge_publication_operation_id()
+    -> Result<crate::ids::OperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-record identity for an offline purge publication.
+    #[doc(hidden)]
+    pub fn generate_purge_publication_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the audit-operation identity for an offline purge publication.
+    #[doc(hidden)]
+    pub fn generate_purge_publication_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates the WAL operation identity for one sharing-export audit boundary.
     #[doc(hidden)]
     pub fn generate_sharing_export_operation_id()

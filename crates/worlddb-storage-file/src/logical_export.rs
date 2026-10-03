@@ -510,6 +510,67 @@ impl LogicalExportManager {
         }
         build_export(database_id, head.revision(), &scope, records)
     }
+
+    pub(crate) fn export_locked(
+        &self,
+        scope: LogicalExportScope,
+        policy: SecurityPolicyView<'_>,
+        lock: &crate::WriterLock,
+    ) -> Result<LogicalExport, LogicalExportError> {
+        authorize_scope(&scope, policy)?;
+        let layout =
+            DatabaseLayout::open(self.layout.root()).map_err(LogicalExportError::Layout)?;
+        if !lock.belongs_to_database_root(layout.root()) {
+            return Err(LogicalExportError::SnapshotMismatch);
+        }
+        let report = StorageVerifier::new(layout.clone())
+            .verify(lock)
+            .map_err(LogicalExportError::StorageVerify)?;
+        if !report.is_clean() {
+            return Err(LogicalExportError::SourceNotClean);
+        }
+        let database_id = layout
+            .database_id()
+            .ok_or(LogicalExportError::DatabaseIdentityMissing)?;
+        let head = WalPrepareLog::new(&layout)
+            .commit_head(lock)
+            .map_err(LogicalExportError::Wal)?;
+        if head.revision() != report.safe_revision() || scope.through_revision > head.revision() {
+            return Err(LogicalExportError::SnapshotMismatch);
+        }
+        let manifest = ManifestStore::new(layout.clone())
+            .read_current()
+            .map_err(LogicalExportError::Manifest)?;
+        match manifest.as_ref() {
+            Some(current)
+                if current.revision() == head.revision()
+                    && current.commit_hash() == head.commit_hash() => {}
+            None if head.revision() == Revision::GENESIS => {}
+            _ => return Err(LogicalExportError::SnapshotMismatch),
+        }
+        let references = manifest.as_ref().map_or(&[][..], Manifest::segments);
+        let history_store = HistorySegmentStore::new(layout);
+        let mut records = Vec::new();
+        for reference in references
+            .iter()
+            .filter(|reference| reference.kind() == ManifestSegmentKind::History)
+        {
+            let segment = history_store
+                .read_segment(reference.id())
+                .map_err(LogicalExportError::Segment)?;
+            if segment.content_digest() != reference.content_digest() {
+                return Err(LogicalExportError::SnapshotMismatch);
+            }
+            records
+                .try_reserve(segment.records().len())
+                .map_err(|_| LogicalExportError::AllocationFailed)?;
+            records.extend(segment.records().iter().cloned());
+            if records.len() > LOGICAL_EXPORT_MAX_RECORDS {
+                return Err(LogicalExportError::ResourceLimit);
+            }
+        }
+        build_export(database_id, head.revision(), &scope, records)
+    }
 }
 
 /// Why the requested logical export could not be materialized or decoded.
@@ -1227,7 +1288,7 @@ pub(crate) fn record_ref(record: &Record) -> Option<RecordRef> {
     })
 }
 
-fn record_revision(record: &Record) -> Option<Revision> {
+pub(crate) fn record_revision(record: &Record) -> Option<Revision> {
     Some(match record {
         Record::HistorySpaceDefinition(_) => return None,
         Record::Entity(value) => value.created_revision(),
