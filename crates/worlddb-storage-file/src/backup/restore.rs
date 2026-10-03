@@ -950,9 +950,11 @@ mod tests {
     fn restore_policy() -> Result<SecurityPolicyHistory, String> {
         let principal = id::<PrincipalId>(1)?;
         let rules = [
-            (2, Capability::BackupRestore),
-            (3, Capability::AuditRead),
-            (4, Capability::AuditExport),
+            (2, Capability::ProjectRead),
+            (3, Capability::BackupCreate),
+            (4, Capability::BackupRestore),
+            (5, Capability::AuditRead),
+            (6, Capability::AuditExport),
         ]
         .into_iter()
         .map(|(tail, capability)| -> Result<_, String> {

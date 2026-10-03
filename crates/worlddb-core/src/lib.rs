@@ -850,11 +850,12 @@ pub mod storage_internal {
 
 pub use security::{
     AuthorizationDecision, Capability, CapabilityGrant, CapabilityRule, EvidenceRelationship,
-    FieldSelector, GrantEffect, PolicyBundle, PolicyBundleError, PolicyEventRelationKind,
-    PolicyScope, PolicySubject, PolicyTarget, Principal, PrincipalState, ProvenanceRelationship,
-    RelationshipSelector, RoleAssignment, RoleDefinition, RoleDefinitionError, SecurityPolicyError,
-    SecurityPolicyHistory, SecurityPolicyHistoryError, SecurityPolicySnapshot,
-    SecurityPolicyVersion, SecurityPolicyView,
+    FieldSelector, GrantEffect, HostAccountPrincipalError, PolicyBundle, PolicyBundleError,
+    PolicyEventRelationKind, PolicyScope, PolicySubject, PolicyTarget, Principal, PrincipalState,
+    ProvenanceRelationship, RelationshipSelector, RoleAssignment, RoleDefinition,
+    RoleDefinitionError, SecurityPolicyError, SecurityPolicyHistory, SecurityPolicyHistoryError,
+    SecurityPolicySnapshot, SecurityPolicyVersion, SecurityPolicyView,
+    derive_host_account_principal,
 };
 pub use security_transaction::{
     SecurityPolicyChange, SecurityPolicyChangeRequest, SecurityPolicyCommitBatch,

@@ -17,6 +17,18 @@ use worlddb_storage_file::{
     WalPrepareLog, WriterLockError,
 };
 
+#[cfg(windows)]
+use worlddb_core::{
+    AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
+    AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, PolicyTarget,
+    SecurityPolicyChange, SecurityPolicyRecord,
+};
+#[cfg(windows)]
+use worlddb_storage_file::{
+    ManifestSegmentKind, ManifestSegmentReference, RecoveryManager, SecurityPolicyHistoryStore,
+    StorageVerifier,
+};
+
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TempArea(PathBuf);
@@ -112,19 +124,24 @@ fn create_audit_complete_backup(source: &Path, target: &Path) -> Result<(), Stri
         .map_err(|error| error.to_string())?;
 
     let principal_id = domain_id::<PrincipalId>(1)?;
-    let rules = [Capability::AuditRead, Capability::AuditExport]
-        .into_iter()
-        .enumerate()
-        .map(|(index, capability)| -> Result<_, String> {
-            let tail = u8::try_from(index + 1).map_err(|error| error.to_string())?;
-            Ok(CapabilityRule::new(
-                domain_id::<PolicyRuleId>(tail)?,
-                PolicySubject::Principal(principal_id),
-                CapabilityGrant::new(capability, GrantEffect::Allow),
-                PolicyScope::project(),
-            ))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let rules = [
+        Capability::ProjectRead,
+        Capability::BackupCreate,
+        Capability::AuditRead,
+        Capability::AuditExport,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, capability)| -> Result<_, String> {
+        let tail = u8::try_from(index + 1).map_err(|error| error.to_string())?;
+        Ok(CapabilityRule::new(
+            domain_id::<PolicyRuleId>(tail)?,
+            PolicySubject::Principal(principal_id),
+            CapabilityGrant::new(capability, GrantEffect::Allow),
+            PolicyScope::project(),
+        ))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
     let snapshot =
         SecurityPolicySnapshot::new(vec![Principal::new(principal_id)], vec![], vec![], rules)
             .map_err(|error| error.to_string())?;
@@ -148,6 +165,166 @@ fn create_audit_complete_backup(source: &Path, target: &Path) -> Result<(), Stri
             &audit_writer,
             policy,
             worlddb_core::PolicyTarget::default(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn create_host_policy_project(
+    root: &Path,
+    capabilities: &[Capability],
+) -> Result<PrincipalId, String> {
+    let identity = worlddb_process_adapter::current_process_identity_bytes()
+        .map_err(|error| format!("process identity unavailable: {error:?}"))?;
+    let principal = worlddb_core::derive_host_account_principal(&identity)
+        .map_err(|error| error.to_string())?;
+    let layout = DatabaseLayout::create(root).map_err(|error| error.to_string())?;
+    let lock = layout
+        .try_writer_lock()
+        .map_err(|error| error.to_string())?;
+
+    let genesis = SecurityPolicyVersion::new(
+        Revision::GENESIS,
+        SecurityEpoch::INITIAL,
+        SecurityPolicySnapshot::default(),
+    );
+    let genesis_receipt = SecurityPolicyHistoryStore::new(layout.clone())
+        .stage_version(&lock, &genesis, None, None)
+        .map_err(|error| error.to_string())?;
+
+    let rules = capabilities
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, capability)| -> Result<_, String> {
+            let tail = u8::try_from(index + 1).map_err(|error| error.to_string())?;
+            let rule_id = domain_id::<PolicyRuleId>(tail)?;
+            Ok(CapabilityRule::new(
+                rule_id,
+                PolicySubject::Principal(principal),
+                CapabilityGrant::new(capability, GrantEffect::Allow),
+                PolicyScope::project(),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let active_snapshot = SecurityPolicySnapshot::new(
+        vec![Principal::new(principal)],
+        vec![],
+        vec![],
+        rules.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    let active_epoch = SecurityEpoch::INITIAL
+        .next()
+        .map_err(|error| error.to_string())?;
+    let policy_record = SecurityPolicyRecord::new(
+        domain_id::<worlddb_core::SecurityPolicyRecordId>(10)?,
+        Revision::FIRST_COMMIT,
+        principal,
+        active_epoch,
+        std::iter::once(SecurityPolicyChange::PrincipalRegistered {
+            principal_id: principal,
+        })
+        .chain(
+            rules
+                .iter()
+                .map(|rule| SecurityPolicyChange::CapabilityRuleAdded {
+                    rule_id: rule.id(),
+                    subject: rule.subject(),
+                    capability: rule.grant().capability(),
+                    effect: rule.grant().effect(),
+                    scope: rule.scope(),
+                }),
+        )
+        .collect(),
+    )
+    .map_err(|error| error.to_string())?;
+    let active = SecurityPolicyVersion::new(
+        Revision::FIRST_COMMIT,
+        active_epoch,
+        active_snapshot.clone(),
+    );
+    let active_receipt = SecurityPolicyHistoryStore::new(layout.clone())
+        .stage_version(&lock, &active, Some(&policy_record), None)
+        .map_err(|error| error.to_string())?;
+
+    let genesis_reference = ManifestSegmentReference::new(
+        ManifestSegmentKind::SecurityPolicy,
+        genesis_receipt.id(),
+        genesis_receipt.content_digest(),
+        Revision::GENESIS,
+    );
+    let active_reference = ManifestSegmentReference::new(
+        ManifestSegmentKind::SecurityPolicy,
+        active_receipt.id(),
+        active_receipt.content_digest(),
+        Revision::FIRST_COMMIT,
+    );
+    let operation = operation_id(11)?;
+    let audit_record = AuditRecord::new(
+        AuditRecordIdentity {
+            record_id: domain_id::<worlddb_core::AuditRecordId>(12)?,
+            sequence: AuditSequence::new(1),
+            audit_operation_id: domain_id::<worlddb_core::AuditOperationId>(13)?,
+        },
+        AuditRecordDetails {
+            actor: principal,
+            action: AuditAction::SecurityPolicyChange,
+            object_class: AuditObjectClass::SecurityPolicy,
+            outcome: AuditOutcome::Succeeded,
+            commit_context: AuditCommitContext::Committed {
+                revision: Revision::FIRST_COMMIT,
+                operation_id: operation,
+            },
+            security_epoch: SecurityEpoch::INITIAL,
+            policy_fingerprint: AuditPolicyFingerprint::new(Bytes::new(
+                SecurityPolicySnapshot::default()
+                    .effective_capability_fingerprint(principal, PolicyTarget::default())
+                    .to_vec(),
+            ))
+            .map_err(|error| error.to_string())?,
+        },
+    );
+    WalPrepareLog::new(&layout)
+        .commit_audited_manifest_snapshot(
+            &lock,
+            operation,
+            vec![genesis_reference, active_reference],
+            &[genesis_reference, active_reference],
+            &audit_record,
+        )
+        .map_err(|error| error.to_string())?;
+    RecoveryManager::new(layout.clone())
+        .recover(&lock)
+        .map_err(|error| error.to_string())?;
+    let report = StorageVerifier::new(layout)
+        .verify(&lock)
+        .map_err(|error| error.to_string())?;
+    if !report.is_clean() || report.safe_revision() != Revision::FIRST_COMMIT {
+        return Err("host-policy project fixture did not verify cleanly".to_owned());
+    }
+    drop(lock);
+    Ok(principal)
+}
+
+#[cfg(windows)]
+fn append_host_raw_read_attempt(source: &Path, principal: PrincipalId) -> Result<(), String> {
+    let layout = DatabaseLayout::open(source).map_err(|error| error.to_string())?;
+    let writer = RawReadAuditWal::new(layout)
+        .try_writer()
+        .map_err(|error| error.to_string())?;
+    writer
+        .append_attempt(
+            worlddb_core::RawReadAttemptScope {
+                principal_id: principal,
+                scope_fingerprint: AuditScopeFingerprint::new(Bytes::new(vec![0x41, 0x01]))
+                    .map_err(|error| error.to_string())?,
+                snapshot_id: domain_id::<SnapshotId>(14)?,
+                security_epoch: SecurityEpoch::new(1),
+                page_ordinal: PageOrdinal::new(1),
+            },
+            domain_id::<ClientRequestId>(15)?,
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -571,7 +748,11 @@ fn backup_verify_reports_profile_scope_and_target_verification() -> Result<(), S
 fn backup_creation_requires_trusted_policy_and_scope_mismatch_is_rejected() -> Result<(), String> {
     let area = TempArea::create()?;
     let source = area.path("backup-source");
+    #[cfg(windows)]
+    create_host_policy_project(&source, &[])?;
+    #[cfg(not(windows))]
     let layout = DatabaseLayout::create(&source).map_err(|error| error.to_string())?;
+    #[cfg(not(windows))]
     drop(
         layout
             .try_writer_lock()
@@ -662,8 +843,14 @@ fn backup_creation_requires_trusted_policy_and_scope_mismatch_is_rejected() -> R
 fn restore_clone_requires_trusted_policy_before_reading_backup_or_touching_target()
 -> Result<(), String> {
     let area = TempArea::create()?;
+    let authorization_project = area.path("authorization-project");
+    #[cfg(windows)]
+    create_host_policy_project(&authorization_project, &[])?;
+    #[cfg(not(windows))]
+    let authorization_project = area.path("nonexistent-authorization-project");
     let backup = area.path("backup-path-canary");
     let destination = area.path("restore-target");
+    let authorization_arg = authorization_project.to_string_lossy().into_owned();
     let backup_arg = backup.to_string_lossy().into_owned();
     let destination_arg = destination.to_string_lossy().into_owned();
     let output = run(&[
@@ -672,6 +859,8 @@ fn restore_clone_requires_trusted_policy_before_reading_backup_or_touching_targe
         "restore",
         "clone",
         &backup_arg,
+        "--authorize-with",
+        &authorization_arg,
         "--output",
         &destination_arg,
         "--profile",
@@ -690,5 +879,148 @@ fn restore_clone_requires_trusted_policy_before_reading_backup_or_touching_targe
     assert!(!text.contains(&backup_arg));
     assert!(!text.contains(&destination_arg));
     assert!(!destination.exists());
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn authorized_cli_backup_and_restore_clone_cover_both_profiles() -> Result<(), String> {
+    let area = TempArea::create()?;
+    let source = area.path("authorized-project");
+    let principal = create_host_policy_project(
+        &source,
+        &[
+            Capability::ProjectRead,
+            Capability::BackupCreate,
+            Capability::BackupRestore,
+            Capability::AuditRead,
+            Capability::AuditExport,
+        ],
+    )?;
+    let source_arg = source.to_string_lossy().into_owned();
+
+    let exact_backup = area.path("exact-backup");
+    let exact_backup_arg = exact_backup.to_string_lossy().into_owned();
+    let exact_created = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "create",
+        &source_arg,
+        "--output",
+        &exact_backup_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(exact_created.status.success());
+    let exact_created_text = String::from_utf8_lossy(&exact_created.stdout);
+    assert!(exact_created_text.contains("\"status\":\"created\""));
+    assert!(exact_created_text.contains("\"profile\":\"ExactDatabase\""));
+    assert!(!exact_created_text.contains(&source_arg));
+    assert!(!exact_created_text.contains(&exact_backup_arg));
+
+    let nested_destination = source.join("nested-restore");
+    let nested_arg = nested_destination.to_string_lossy().into_owned();
+    let nested_restore = run(&[
+        "--format=jsonl",
+        "v1",
+        "restore",
+        "clone",
+        &area.path("backup-path-canary").to_string_lossy(),
+        "--authorize-with",
+        &source_arg,
+        "--output",
+        &nested_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert_eq!(nested_restore.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&nested_restore.stdout).contains("\"code\":\"InvalidRequest\"")
+    );
+    assert!(!nested_destination.exists());
+
+    let exact_destination = area.path("exact-clone");
+    let exact_destination_arg = exact_destination.to_string_lossy().into_owned();
+    let exact_restored = run(&[
+        "--format=jsonl",
+        "v1",
+        "restore",
+        "clone",
+        &exact_backup_arg,
+        "--authorize-with",
+        &source_arg,
+        "--output",
+        &exact_destination_arg,
+        "--profile",
+        "exact",
+        "--audit-scope",
+        "excluded",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(exact_restored.status.success());
+    let exact_restored_text = String::from_utf8_lossy(&exact_restored.stdout);
+    assert!(exact_restored_text.contains("\"type\":\"restore_clone\""));
+    assert!(exact_restored_text.contains("\"profile\":\"ExactDatabase\""));
+    assert!(exact_restored_text.contains("\"target_verified\":true"));
+    assert!(!exact_restored_text.contains(&source_arg));
+    assert!(!exact_restored_text.contains(&exact_destination_arg));
+
+    append_host_raw_read_attempt(&source, principal)?;
+    let audit_backup = area.path("audit-complete-backup");
+    let audit_backup_arg = audit_backup.to_string_lossy().into_owned();
+    let audit_created = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "create",
+        &source_arg,
+        "--output",
+        &audit_backup_arg,
+        "--profile",
+        "audit-complete",
+        "--audit-scope",
+        "included",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(audit_created.status.success());
+    let audit_created_text = String::from_utf8_lossy(&audit_created.stdout);
+    assert!(audit_created_text.contains("\"status\":\"created\""));
+    assert!(audit_created_text.contains("\"profile\":\"AuditComplete\""));
+    assert!(audit_created_text.contains("\"audit_safe_sequence\":\"1\""));
+    assert!(!audit_created_text.contains(&source_arg));
+    assert!(!audit_created_text.contains(&audit_backup_arg));
+
+    let audit_destination = area.path("audit-complete-clone");
+    let audit_destination_arg = audit_destination.to_string_lossy().into_owned();
+    let audit_restored = run(&[
+        "--format=jsonl",
+        "v1",
+        "restore",
+        "clone",
+        &audit_backup_arg,
+        "--authorize-with",
+        &source_arg,
+        "--output",
+        &audit_destination_arg,
+        "--profile",
+        "audit-complete",
+        "--audit-scope",
+        "included",
+    ])
+    .ok_or_else(|| "CLI process could not be started".to_owned())?;
+    assert!(audit_restored.status.success());
+    let audit_restored_text = String::from_utf8_lossy(&audit_restored.stdout);
+    assert!(audit_restored_text.contains("\"profile\":\"AuditComplete\""));
+    assert!(audit_restored_text.contains("\"audit_safe_sequence\":\"1\""));
+    assert!(audit_restored_text.contains("\"target_verified\":true"));
+    assert!(!audit_restored_text.contains(&source_arg));
+    assert!(!audit_restored_text.contains(&audit_destination_arg));
     Ok(())
 }

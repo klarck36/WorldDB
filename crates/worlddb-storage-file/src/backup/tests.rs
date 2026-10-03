@@ -17,7 +17,8 @@ use crate::{
 };
 
 use super::{
-    BACKUP_INCOMPLETE_FILE, BackupCheckpoint, BackupError, ExactBackupManager, verify_exact_backup,
+    BACKUP_INCOMPLETE_FILE, BackupCaptureMode, BackupCheckpoint, BackupError, ExactBackupManager,
+    verify_exact_backup,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -172,7 +173,10 @@ fn process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_targ
         let result = ExactBackupManager::new(source).create_backup_with_checkpoint_and_buffer(
             target_root,
             None,
-            None,
+            BackupCaptureMode {
+                audit_snapshot: None,
+                authorization: None,
+            },
             8,
             |_| {},
             |checkpoint| {

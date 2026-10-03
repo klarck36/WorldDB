@@ -3,19 +3,25 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fmt::Write as FmtWrite;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use worlddb_core::api::v1::{CURRENT_PROTOCOL, PublicCode, RequestId};
-use worlddb_core::{DatabaseId, DomainId};
+use worlddb_core::{
+    AuditPolicyFingerprint, AuthorizationDecision, AuthorizationMode, Bytes, Capability,
+    DatabaseId, DomainId, PolicyTarget, PrincipalId,
+};
 use worlddb_storage_file::{
     BackupAuthenticity, BackupError, BackupProfile, BackupVerification, DatabaseLayout,
-    FormatProbeError, RecoveryDisposition, RecoveryError, RecoveryManager, SalvageError,
-    SalvageInventorySource, SalvageManager, SalvageSegmentOutcome, StorageDamageClass,
+    ExactBackupManager, FormatProbeError, Manifest, ManifestSegmentKind, ManifestStore,
+    RecoveryDisposition, RecoveryError, RecoveryManager, RestoreError, RestoreManager,
+    SalvageError, SalvageInventorySource, SalvageManager, SalvageSegmentOutcome,
+    SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, StorageDamageClass,
     StorageFileError, StorageVerifier, StorageVerifyAction, StorageVerifyError,
-    StorageVerifyReport, WriterLockError, verify_audit_complete_backup, verify_exact_backup,
+    StorageVerifyReport, WriterLock, WriterLockError, verify_audit_complete_backup,
+    verify_exact_backup,
 };
 
 use crate::adapter_protocol::{
@@ -41,8 +47,8 @@ const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <
 const HELP_RECOVERY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 recovery inspect <database-directory>\n       worlddb-cli [--format human|jsonl] v1 recovery run --apply <database-directory>\n\n`inspect` is read-only. `run --apply` explicitly enables journaled recovery of eligible WAL tails and committed snapshots.";
 const HELP_OPEN_READ_ONLY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 open --read-only <database-directory>\n\nValidates and verifies the database without creating files, changing storage, or enabling writes.";
 const HELP_SALVAGE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 salvage <source-directory> --output <new-directory>\n\nCopies verified immutable data to a new marked salvage fork. The source is opened with a shared read-only lock and is never repaired or rewritten.";
-const HELP_BACKUP: &str = "Usage: worlddb-cli [--format human|jsonl] v1 backup create <source-directory> --output <new-directory> --profile exact|audit-complete --audit-scope excluded|included\n       worlddb-cli [--format human|jsonl] v1 backup verify <backup-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nThe profile and matching audit scope are mandatory and repeated in every result. Exact excludes audit history. AuditComplete includes the supported raw-read audit prefix. Creating any backup requires the current BackupCreate capability; this standalone CLI fails closed without a trusted WorldDB host policy.";
-const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore clone <backup-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nRestore requires a trusted WorldDB host policy context, which the standalone CLI does not yet provide. Same-identity disaster recovery is not supported by the storage contract.";
+const HELP_BACKUP: &str = "Usage: worlddb-cli [--format human|jsonl] v1 backup create <source-directory> --output <new-directory> --profile exact|audit-complete --audit-scope excluded|included\n       worlddb-cli [--format human|jsonl] v1 backup verify <backup-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nThe profile and matching audit scope are mandatory and repeated in every result. Exact excludes audit history. AuditComplete includes the supported raw-read audit prefix. Creation requires the current host-bound ProjectRead and BackupCreate capabilities; AuditComplete also requires AuditRead and AuditExport.";
+const HELP_RESTORE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 restore clone <backup-directory> --authorize-with <current-project-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\n\nRestore checks the current host-bound BackupRestore capability in the authorization project. AuditComplete also requires AuditRead and AuditExport. The authorization project must be the database named by the backup. Same-identity disaster recovery is not supported by the storage contract.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -64,12 +70,14 @@ enum HelpScope {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BackupAction {
+    Created,
     Verified,
 }
 
 impl BackupAction {
     const fn label(self) -> &'static str {
         match self {
+            Self::Created => "created",
             Self::Verified => "verified",
         }
     }
@@ -142,6 +150,17 @@ impl BackupSummary {
             authenticity: AuthenticityLabel::from_authenticity(verification.authenticity()),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RestoreSummary {
+    source_database_id: DatabaseId,
+    source_revision: u64,
+    restored_database_id: DatabaseId,
+    restored_revision: u64,
+    item_count: usize,
+    audit_safe_sequence: Option<u64>,
+    authenticity: AuthenticityLabel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,6 +239,11 @@ enum Success {
         profile: BackupProfile,
         audit_scope: BackupAuditScope,
         summary: BackupSummary,
+    },
+    Restore {
+        profile: BackupProfile,
+        audit_scope: BackupAuditScope,
+        summary: RestoreSummary,
     },
     AdapterRun {
         protocol_major: u16,
@@ -669,21 +693,32 @@ fn parse_restore_command(mut arguments: VecDeque<OsString>) -> Result<Success, C
     if mode != "clone" {
         return Err(CliError::unsupported_operation());
     }
-    let Some(_backup_path) = arguments.pop_front() else {
+    let Some(backup_path) = arguments.pop_front() else {
         return Err(CliError::invalid_request());
     };
-    if !take_option(&mut arguments, "--output") || arguments.pop_front().is_none() {
+    if !take_option(&mut arguments, "--authorize-with") {
         return Err(CliError::invalid_request());
     }
-    let (_profile, _audit_scope) = take_profile_and_scope(&mut arguments)?;
+    let Some(authorization_project) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if !take_option(&mut arguments, "--output") {
+        return Err(CliError::invalid_request());
+    }
+    let Some(destination) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    let (profile, audit_scope) = take_profile_and_scope(&mut arguments)?;
     if !arguments.is_empty() {
         return Err(CliError::invalid_request());
     }
-
-    // RestoreManager correctly requires a SecurityPolicyView and current BackupRestore
-    // (plus AuditRead/AuditExport for AuditComplete). The standalone CLI has no trusted host
-    // identity provider, so it must reject before inspecting the backup or touching output.
-    Err(CliError::new(PublicCode::UNAUTHORIZED))
+    run_restore_clone(
+        Path::new(&backup_path),
+        Path::new(&authorization_project),
+        Path::new(&destination),
+        profile,
+        audit_scope,
+    )
 }
 
 fn take_option(arguments: &mut VecDeque<OsString>, option: &str) -> bool {
@@ -718,15 +753,64 @@ fn take_profile_and_scope(
 }
 
 fn run_backup_create(
-    _source: &Path,
-    _target: &Path,
-    _profile: BackupProfile,
-    _audit_scope: BackupAuditScope,
+    source: &Path,
+    target: &Path,
+    profile: BackupProfile,
+    audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
-    // BackupCreate is a current database capability, including for ExactDatabaseBackup.
-    // The standalone CLI has no trusted host policy context, so reject before opening either
-    // path rather than treating filesystem access as a policy grant.
-    Err(CliError::new(PublicCode::UNAUTHORIZED))
+    let principal = current_host_principal()?;
+    let source = canonical_project_root(source)?;
+    let layout = DatabaseLayout::open(&source).map_err(map_storage_file_error)?;
+    let manager = ExactBackupManager::new(layout);
+    let verification = match profile {
+        BackupProfile::ExactDatabase => {
+            manager.create_exact_backup_authorized(target, None, principal, PolicyTarget::default())
+        }
+        BackupProfile::AuditComplete => manager.create_audit_complete_backup_authorized(
+            target,
+            None,
+            principal,
+            PolicyTarget::default(),
+        ),
+    }
+    .map_err(map_backup_error)?;
+    if verification.profile() != profile {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    Ok(Success::Backup {
+        action: BackupAction::Created,
+        profile,
+        audit_scope,
+        summary: BackupSummary::from_verification(&verification),
+    })
+}
+
+fn current_host_principal() -> Result<PrincipalId, CliError> {
+    let identity = worlddb_process_adapter::current_process_identity_bytes()
+        .map_err(|_| CliError::new(PublicCode::UNAUTHORIZED))?;
+    worlddb_core::derive_host_account_principal(&identity)
+        .map_err(|_| CliError::new(PublicCode::UNAUTHORIZED))
+}
+
+fn canonical_project_root(path: &Path) -> Result<PathBuf, CliError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    if !metadata.is_dir() || is_reparse_point(&metadata) {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    fs::canonicalize(path).map_err(|_| CliError::new(PublicCode::STORAGE_READ))
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 fn run_backup_verify(
@@ -748,6 +832,169 @@ fn run_backup_verify(
         audit_scope,
         summary: BackupSummary::from_verification(&verification),
     })
+}
+
+fn run_restore_clone(
+    backup: &Path,
+    authorization_project: &Path,
+    destination: &Path,
+    profile: BackupProfile,
+    audit_scope: BackupAuditScope,
+) -> Result<Success, CliError> {
+    let principal = current_host_principal()?;
+    let authorization_project = open_current_policy_project(authorization_project)?;
+    let policy_view = authorization_project
+        .policy_history
+        .policy()
+        .select(
+            AuthorizationMode::Now,
+            principal,
+            authorization_project.manifest.revision(),
+        )
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let policy_target = PolicyTarget::default();
+    for capability in [Capability::ProjectRead, Capability::BackupRestore] {
+        authorize_cli_capability(policy_view, capability, policy_target)?;
+    }
+    if profile == BackupProfile::AuditComplete {
+        for capability in [Capability::AuditRead, Capability::AuditExport] {
+            authorize_cli_capability(policy_view, capability, policy_target)?;
+        }
+    }
+    reject_restore_target_within_project(destination, authorization_project.layout.root())?;
+
+    let verification = match profile {
+        BackupProfile::ExactDatabase => verify_exact_backup(backup, None),
+        BackupProfile::AuditComplete => verify_audit_complete_backup(backup, None),
+    }
+    .map_err(map_backup_error)?;
+    if verification.profile() != profile {
+        return Err(CliError::invalid_request());
+    }
+    let authorization_database_id = authorization_project
+        .layout
+        .database_id()
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    if verification.database_id() != authorization_database_id {
+        return Err(CliError::new(PublicCode::UNAUTHORIZED));
+    }
+
+    let fingerprint = AuditPolicyFingerprint::new(Bytes::new(
+        policy_view
+            .current_snapshot()
+            .effective_capability_fingerprint(principal, policy_target)
+            .to_vec(),
+    ))
+    .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let restore = RestoreManager::new()
+        .restore_clone(
+            backup,
+            destination,
+            None,
+            policy_view,
+            policy_target,
+            fingerprint,
+        )
+        .map_err(map_restore_error)?;
+    if restore.profile() != profile
+        || restore.source_database_id() != verification.database_id()
+        || restore.source_revision() != verification.revision()
+        || restore.audit_safe_sequence() != verification.audit_safe_sequence()
+    {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    Ok(Success::Restore {
+        profile,
+        audit_scope,
+        summary: RestoreSummary {
+            source_database_id: restore.source_database_id(),
+            source_revision: restore.source_revision().value(),
+            restored_database_id: restore.restored_database_id(),
+            restored_revision: restore.restored_revision().value(),
+            item_count: verification.item_count(),
+            audit_safe_sequence: restore
+                .audit_safe_sequence()
+                .map(|sequence| sequence.value()),
+            authenticity: AuthenticityLabel::from_authenticity(restore.source_authenticity()),
+        },
+    })
+}
+
+struct CurrentPolicyProject {
+    layout: DatabaseLayout,
+    _lock: WriterLock,
+    manifest: Manifest,
+    policy_history: SecurityPolicyHistorySnapshot,
+}
+
+fn open_current_policy_project(path: &Path) -> Result<CurrentPolicyProject, CliError> {
+    let root = canonical_project_root(path)?;
+    let layout = DatabaseLayout::open(root).map_err(map_storage_file_error)?;
+    let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
+    let report = StorageVerifier::new(layout.clone())
+        .verify(&lock)
+        .map_err(map_storage_verify_error)?;
+    if !report.is_clean() {
+        return Err(CliError::new(PublicCode::STORAGE_READ));
+    }
+    let manifest = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|_| CliError::new(PublicCode::STORAGE_READ))?
+        .ok_or_else(|| CliError::new(PublicCode::CORRUPT_DATA))?;
+    let security_segments = manifest
+        .segments()
+        .iter()
+        .filter(|segment| segment.kind() == ManifestSegmentKind::SecurityPolicy)
+        .map(|segment| segment.id())
+        .collect::<Vec<_>>();
+    if security_segments.is_empty() {
+        return Err(CliError::new(PublicCode::CORRUPT_DATA));
+    }
+    let policy_history = SecurityPolicyHistoryStore::new(layout.clone())
+        .load_history(manifest.revision(), &security_segments)
+        .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))?;
+    Ok(CurrentPolicyProject {
+        layout,
+        _lock: lock,
+        manifest,
+        policy_history,
+    })
+}
+
+fn authorize_cli_capability(
+    policy: worlddb_core::SecurityPolicyView<'_>,
+    capability: Capability,
+    target: PolicyTarget,
+) -> Result<(), CliError> {
+    if policy
+        .current_snapshot()
+        .authorize(policy.principal_id(), capability, target)
+        == AuthorizationDecision::Allow
+    {
+        Ok(())
+    } else {
+        Err(CliError::new(PublicCode::UNAUTHORIZED))
+    }
+}
+
+fn reject_restore_target_within_project(
+    destination: &Path,
+    project_root: &Path,
+) -> Result<(), CliError> {
+    let file_name = destination
+        .file_name()
+        .ok_or_else(CliError::invalid_request)?;
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical_parent =
+        fs::canonicalize(parent).map_err(|_| CliError::new(PublicCode::STORAGE_READ))?;
+    let candidate = canonical_parent.join(file_name);
+    if candidate.starts_with(project_root) || project_root.starts_with(&candidate) {
+        return Err(CliError::invalid_request());
+    }
+    Ok(())
 }
 
 fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> {
@@ -1008,6 +1255,11 @@ fn map_backup_error(error: BackupError) -> CliError {
         | BackupError::StorageVerify(_) => CliError::new(PublicCode::STORAGE_READ),
         BackupError::WriterLock(error) => map_writer_lock_error(error),
         BackupError::AuditAccess(_) => CliError::new(PublicCode::UNAUTHORIZED),
+        BackupError::AuthorizationDenied { .. } => CliError::new(PublicCode::UNAUTHORIZED),
+        BackupError::SecurityPolicy(_) | BackupError::PolicyUnavailable => {
+            CliError::new(PublicCode::CORRUPT_DATA)
+        }
+        BackupError::AuditSnapshotConflict => CliError::new(PublicCode::INTERNAL),
         BackupError::DatabaseIdentityMissing
         | BackupError::SourceSnapshotNotClean
         | BackupError::SourceSnapshotMismatch
@@ -1027,6 +1279,18 @@ fn map_backup_error(error: BackupError) -> CliError {
         BackupError::ResourceLimit | BackupError::AllocationFailed => {
             CliError::new(PublicCode::BUDGET_EXCEEDED)
         }
+    }
+}
+
+fn map_restore_error(error: RestoreError) -> CliError {
+    match error {
+        RestoreError::AuthorizationDenied { .. } => CliError::new(PublicCode::UNAUTHORIZED),
+        RestoreError::Backup(error) => map_backup_error(error),
+        RestoreError::TargetAlreadyExists => CliError::invalid_request(),
+        RestoreError::CopyInventoryMismatch
+        | RestoreError::SourceSnapshotMismatch
+        | RestoreError::AuditLineageMismatch => CliError::new(PublicCode::CORRUPT_DATA),
+        _ => CliError::new(PublicCode::STORAGE_READ),
     }
 }
 
@@ -1256,6 +1520,25 @@ fn write_success<W: Write>(
                     .map_or_else(|| String::from("none"), |sequence| sequence.to_string()),
                 summary.authenticity.label()
             ),
+            Success::Restore {
+                profile,
+                audit_scope,
+                summary,
+            } => writeln!(
+                writer,
+                "restore clone: profile={}, audit_scope={}, source_database_id={}, source_revision={}, restored_database_id={}, restored_revision={}, item_count={}, audit_safe_sequence={}, authenticity={}, target_verified=true, source_modified=false",
+                backup_profile_label(profile),
+                audit_scope.label(),
+                summary.source_database_id.to_canonical_string(),
+                summary.source_revision,
+                summary.restored_database_id.to_canonical_string(),
+                summary.restored_revision,
+                summary.item_count,
+                summary
+                    .audit_safe_sequence
+                    .map_or_else(|| String::from("none"), |sequence| sequence.to_string()),
+                summary.authenticity.label()
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
     }
@@ -1298,7 +1581,7 @@ fn write_json_success<W: Write>(
         ),
         Success::Help(HelpScope::Restore) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"restore\",\"clone_usage\":\"v1 restore clone <backup-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\",\"same_identity_disaster_recovery\":false}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"restore\",\"clone_usage\":\"v1 restore clone <backup-directory> --authorize-with <current-project-directory> --output <new-database-directory> --profile exact|audit-complete --audit-scope excluded|included\",\"same_identity_disaster_recovery\":false}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -1383,6 +1666,33 @@ fn write_json_success<W: Write>(
                 audit_scope.label(),
                 summary.database_id.to_canonical_string(),
                 summary.revision,
+                summary.item_count
+            )?;
+            if let Some(sequence) = summary.audit_safe_sequence {
+                write!(writer, "\"{sequence}\"")?;
+            } else {
+                writer.write_all(b"null")?;
+            }
+            writeln!(
+                writer,
+                ",\"authenticity\":\"{}\",\"target_verified\":true,\"source_modified\":false}}}}}}",
+                summary.authenticity.label()
+            )
+        }
+        Success::Restore {
+            profile,
+            audit_scope,
+            summary,
+        } => {
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"restore_clone\",\"data\":{{\"status\":\"restored\",\"profile\":\"{}\",\"audit_scope\":\"{}\",\"source_database_id\":\"{}\",\"source_revision\":\"{}\",\"restored_database_id\":\"{}\",\"restored_revision\":\"{}\",\"item_count\":\"{}\",\"audit_safe_sequence\":",
+                backup_profile_label(profile),
+                audit_scope.label(),
+                summary.source_database_id.to_canonical_string(),
+                summary.source_revision,
+                summary.restored_database_id.to_canonical_string(),
+                summary.restored_revision,
                 summary.item_count
             )?;
             if let Some(sequence) = summary.audit_safe_sequence {

@@ -98,8 +98,10 @@ fn policy_fingerprint() -> Result<AuditPolicyFingerprint, String> {
         .map_err(|error| error.to_string())
 }
 
-fn all_restore_capabilities() -> [Capability; 3] {
+fn all_restore_capabilities() -> [Capability; 5] {
     [
+        Capability::ProjectRead,
+        Capability::BackupCreate,
         Capability::BackupRestore,
         Capability::AuditRead,
         Capability::AuditExport,

@@ -71,7 +71,11 @@ fn append_audit_attempt(writer: &RawReadAuditWriter, tail: u8) -> Result<(), Str
 
 fn audit_policy(include_export: bool) -> Result<SecurityPolicyHistory, String> {
     let principal = id::<PrincipalId>(1)?;
-    let mut capabilities = vec![Capability::AuditRead];
+    let mut capabilities = vec![
+        Capability::ProjectRead,
+        Capability::BackupCreate,
+        Capability::AuditRead,
+    ];
     if include_export {
         capabilities.push(Capability::AuditExport);
     }

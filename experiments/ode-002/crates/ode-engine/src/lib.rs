@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use worlddb_core::{DomainId, PrincipalId};
+use worlddb_core::PrincipalId;
 use worlddb_storage_file::{DatabaseLayout, WriterLock};
 
 mod project;
@@ -19,16 +19,8 @@ pub const ENGINE_BUILD_ID: &str = env!("WORLDDB_ODE_ENGINE_BUILD_ID");
 /// Derives the project Principal from authenticated host-account identity bytes.
 /// Callers must obtain these bytes from the operating-system process token.
 pub fn derive_host_account_principal(identity: &[u8]) -> Result<PrincipalId, ProjectError> {
-    if identity.is_empty() || identity.len() > 1024 {
-        return Err(ProjectError::UnsupportedIdentity);
-    }
-    let mut hasher = blake3::Hasher::new_derive_key("worlddb.host-account-principal.v1");
-    hasher.update(identity);
-    let mut bytes = [0_u8; 16];
-    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x80;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    PrincipalId::try_from_bytes(bytes).map_err(|_| ProjectError::UnsupportedIdentity)
+    worlddb_core::derive_host_account_principal(identity)
+        .map_err(|_| ProjectError::UnsupportedIdentity)
 }
 
 pub struct EngineHost {

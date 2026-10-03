@@ -23,27 +23,27 @@ pub(super) struct HostIdentity(Vec<u8>);
 
 impl HostIdentity {
     pub(super) fn current() -> Result<Self, HostIdentityError> {
-        #[cfg(windows)]
-        {
-            process_user_sid().map(Self)
-        }
-        #[cfg(not(windows))]
-        {
-            Err(HostIdentityError::UnsupportedPlatform)
-        }
+        worlddb_process_adapter::current_process_identity_bytes()
+            .map(Self)
+            .map_err(|error| match error {
+                worlddb_process_adapter::ProcessIdentityError::UnsupportedPlatform => {
+                    HostIdentityError::UnsupportedPlatform
+                }
+                worlddb_process_adapter::ProcessIdentityError::OperatingSystemFailure => {
+                    HostIdentityError::OperatingSystemFailure
+                }
+            })
     }
 
     pub(super) fn project_principal(&self) -> Result<worlddb_core::PrincipalId, HostIdentityError> {
-        worlddb_ode_engine::derive_host_account_principal(&self.0)
+        worlddb_core::derive_host_account_principal(&self.0)
             .map_err(|_| HostIdentityError::InvalidMapping)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum HostIdentityError {
-    #[cfg(not(windows))]
     UnsupportedPlatform,
-    #[cfg(windows)]
     OperatingSystemFailure,
     InvalidMapping,
 }
@@ -197,70 +197,6 @@ fn decode_session_id(encoded: &str) -> Option<[u8; 16]> {
         *byte = u8::from_str_radix(&encoded[start..start + 2], 16).ok()?;
     }
     Some(session_id)
-}
-
-#[cfg(windows)]
-fn process_user_sid() -> Result<Vec<u8>, HostIdentityError> {
-    use std::ffi::c_void;
-    use std::mem::size_of;
-    use std::ptr;
-
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-    use windows_sys::Win32::Security::{
-        GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
-    };
-    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-
-    struct Token(HANDLE);
-
-    impl Drop for Token {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = CloseHandle(self.0);
-            }
-        }
-    }
-
-    let mut token_handle: HANDLE = ptr::null_mut();
-    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) };
-    if opened == 0 || token_handle.is_null() {
-        return Err(HostIdentityError::OperatingSystemFailure);
-    }
-    let token = Token(token_handle);
-
-    let mut required_bytes = 0_u32;
-    unsafe {
-        let _ = GetTokenInformation(token.0, TokenUser, ptr::null_mut(), 0, &mut required_bytes);
-    }
-    if required_bytes < size_of::<TOKEN_USER>() as u32 || required_bytes > 4096 {
-        return Err(HostIdentityError::OperatingSystemFailure);
-    }
-    let word_count = (required_bytes as usize).div_ceil(size_of::<usize>());
-    let mut aligned_buffer = vec![0_usize; word_count];
-    let buffer = aligned_buffer.as_mut_ptr().cast::<c_void>();
-    let read_token = unsafe {
-        GetTokenInformation(
-            token.0,
-            TokenUser,
-            buffer,
-            required_bytes,
-            &mut required_bytes,
-        )
-    };
-    if read_token == 0 {
-        return Err(HostIdentityError::OperatingSystemFailure);
-    }
-
-    let token_user = unsafe { &*buffer.cast::<TOKEN_USER>() };
-    if token_user.User.Sid.is_null() {
-        return Err(HostIdentityError::OperatingSystemFailure);
-    }
-    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) } as usize;
-    if sid_length == 0 || sid_length > 1024 {
-        return Err(HostIdentityError::OperatingSystemFailure);
-    }
-    let sid = unsafe { std::slice::from_raw_parts(token_user.User.Sid.cast::<u8>(), sid_length) };
-    Ok(sid.to_vec())
 }
 
 #[cfg(test)]

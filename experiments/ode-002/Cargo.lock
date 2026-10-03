@@ -4459,9 +4459,9 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
- "windows-sys 0.61.2",
  "worlddb-core",
  "worlddb-ode-engine",
+ "worlddb-process-adapter",
 ]
 
 [[package]]
@@ -4471,9 +4471,16 @@ dependencies = [
  "blake3",
  "serde",
  "serde_json",
- "windows-sys 0.61.2",
  "worlddb-core",
+ "worlddb-process-adapter",
  "worlddb-storage-file",
+]
+
+[[package]]
+name = "worlddb-process-adapter"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

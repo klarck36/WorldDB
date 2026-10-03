@@ -12,7 +12,7 @@ Der Prozessadapter erzeugt einen Windows Job mit `JOB_OBJECT_LIMIT_PROCESS_MEMOR
 
 Die Jobgrenze gilt für den Adapter und seine Nachkommen. Beim erfolgreichen Ende beendet der Host verbliebene Nachkommen; beim Abbruch schließt der Job-Guard und beendet den Prozessbaum. Der CLI-Zeitwächter deckelt Verhandlung und Ausführung zusammen. Die OS-Grenze deckelt committed memory; außerdem deckeln die Protokoll-Decoder sämtliche Hostpuffer und Eingabe-/Ausgabebytes.
 
-`worlddb-process-adapter/src/windows.rs` ist die einzige neue lokale Unsafe-Grenze. Die Calls verweisen auf WDB-EXC-0005 und tragen jeweils SAFETY-, TEST- und REVIEW-Belege. Die Crate verschärft das Workspace-Lint weiterhin mit `#![deny(unsafe_code)]`.
+`worlddb-process-adapter/src/windows.rs` ist die einzige lokale Unsafe-Grenze. Job- und Prozesskontrollaufrufe verweisen auf WDB-EXC-0005. M8-04 ergänzt die gebundene Leseroutine für die primäre SID des aktuellen Prozess-Tokens unter WDB-EXC-0006; Desktophost, Sidecar und CLI erhalten dadurch dieselben Identitätsbytes. Alle Aufrufe tragen SAFETY-, TEST- und REVIEW-Belege. Die Crate verschärft das Workspace-Lint weiterhin mit `#![deny(unsafe_code)]`.
 
 ## Plattformen
 

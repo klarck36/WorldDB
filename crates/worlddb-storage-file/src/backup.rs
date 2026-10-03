@@ -8,7 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use worlddb_core::{
-    AuditSequence, DatabaseId, DomainId, PolicyTarget, Revision, SecurityPolicyView,
+    AuditSequence, AuthorizationDecision, AuthorizationMode, Capability, DatabaseId, DomainId,
+    PolicyTarget, PrincipalId, Revision, SecurityPolicyView,
 };
 
 use crate::compaction::{CompactionError, DurableBackupPin, SegmentPin};
@@ -17,9 +18,9 @@ use crate::segment::segment_path;
 use crate::wal::segment_file_name;
 use crate::{
     CompactionManager, DatabaseLayout, RawReadAuditAccessError, RawReadAuditError,
-    RawReadAuditSnapshot, RawReadAuditWal, RawReadAuditWriter, SegmentId, StorageFileError,
-    StorageVerifier, StorageVerifyError, StorageVerifyReport, WalCommitHash, WalError,
-    WalPrepareLog, WriterLockError,
+    RawReadAuditSnapshot, RawReadAuditWal, RawReadAuditWriter, SecurityPolicyHistoryStore,
+    SecurityPolicyStorageError, SegmentId, StorageFileError, StorageVerifier, StorageVerifyError,
+    StorageVerifyReport, WalCommitHash, WalError, WalPrepareLog, WriterLockError,
 };
 
 mod restore;
@@ -67,6 +68,14 @@ pub enum BackupError {
     Audit(RawReadAuditError),
     /// Audit backup snapshot was not authorized for both reading and export.
     AuditAccess(RawReadAuditAccessError),
+    /// One current capability required by the selected operation is denied.
+    AuthorizationDenied { capability: Capability },
+    /// Current policy history was missing or could not be reconstructed.
+    SecurityPolicy(SecurityPolicyStorageError),
+    /// The caller supplied both an external and a policy-bound audit snapshot.
+    AuditSnapshotConflict,
+    /// A policy-gated backup operation has no complete current project policy.
+    PolicyUnavailable,
     /// An independent storage verification pass could not finish.
     StorageVerify(StorageVerifyError),
     /// The source database has no durable database identity.
@@ -118,6 +127,24 @@ impl fmt::Display for BackupError {
             Self::Compaction(error) => write!(formatter, "backup snapshot pin failed: {error}"),
             Self::Audit(error) => write!(formatter, "audit backup snapshot failed: {error}"),
             Self::AuditAccess(error) => write!(formatter, "audit backup access denied: {error}"),
+            Self::AuthorizationDenied { capability } => {
+                write!(
+                    formatter,
+                    "backup requires current {capability:?} permission"
+                )
+            }
+            Self::SecurityPolicy(error) => {
+                write!(
+                    formatter,
+                    "current backup policy could not be verified: {error}"
+                )
+            }
+            Self::AuditSnapshotConflict => {
+                formatter.write_str("backup audit snapshot has conflicting authorization sources")
+            }
+            Self::PolicyUnavailable => {
+                formatter.write_str("source database has no complete current security policy")
+            }
             Self::StorageVerify(error) => write!(formatter, "storage verification failed: {error}"),
             Self::DatabaseIdentityMissing => {
                 formatter.write_str("source database has no persistent DatabaseId")
@@ -180,6 +207,7 @@ impl std::error::Error for BackupError {
             Self::Compaction(error) => Some(error),
             Self::Audit(error) => Some(error),
             Self::AuditAccess(error) => Some(error),
+            Self::SecurityPolicy(error) => Some(error),
             Self::StorageVerify(error) => Some(error),
             _ => None,
         }
@@ -409,6 +437,70 @@ impl ExactBackupManager {
         self.create_backup_with_progress(target, key, None, progress)
     }
 
+    /// Creates an exact backup after checking the current source-project policy while holding
+    /// its writer lock. `principal` must come from the authenticated host process identity.
+    pub fn create_exact_backup_authorized(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        principal: PrincipalId,
+        policy_target: PolicyTarget,
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_authorization(
+            target,
+            key,
+            BackupProfile::ExactDatabase,
+            principal,
+            policy_target,
+            |_| {},
+        )
+    }
+
+    /// Creates an audit-complete backup after checking the current source-project policy and
+    /// capturing the authorized audit prefix under the same source snapshot operation.
+    pub fn create_audit_complete_backup_authorized(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        principal: PrincipalId,
+        policy_target: PolicyTarget,
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_authorization(
+            target,
+            key,
+            BackupProfile::AuditComplete,
+            principal,
+            policy_target,
+            |_| {},
+        )
+    }
+
+    fn create_backup_with_authorization(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        profile: BackupProfile,
+        principal: PrincipalId,
+        policy_target: PolicyTarget,
+        progress: impl FnMut(BackupProgressEvent),
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_checkpoint_and_buffer(
+            target,
+            key,
+            BackupCaptureMode {
+                audit_snapshot: None,
+                authorization: Some(CurrentBackupAuthorization {
+                    principal,
+                    target: policy_target,
+                    profile,
+                }),
+            },
+            COPY_BUFFER_BYTES,
+            progress,
+            |_| {},
+        )
+    }
+
     /// Creates an `AuditCompleteBackup` from the exact database snapshot and a pinned audit head.
     pub fn create_audit_complete_backup(
         &self,
@@ -438,6 +530,8 @@ impl ExactBackupManager {
         audit_target: PolicyTarget,
         progress: impl FnMut(BackupProgressEvent),
     ) -> Result<BackupVerification, BackupError> {
+        authorize_backup_capability(policy, Capability::ProjectRead, audit_target)?;
+        authorize_backup_capability(policy, Capability::BackupCreate, audit_target)?;
         let audit_snapshot = audit_writer
             .snapshot_for_backup(policy, audit_target)
             .map_err(BackupError::AuditAccess)?;
@@ -466,7 +560,10 @@ impl ExactBackupManager {
         self.create_backup_with_checkpoint_and_buffer(
             target,
             key,
-            audit_snapshot,
+            BackupCaptureMode {
+                audit_snapshot,
+                authorization: None,
+            },
             COPY_BUFFER_BYTES,
             progress,
             checkpoint,
@@ -477,13 +574,17 @@ impl ExactBackupManager {
         &self,
         target: impl AsRef<Path>,
         key: Option<&BackupMacKey>,
-        audit_snapshot: Option<RawReadAuditSnapshot>,
+        capture: BackupCaptureMode,
         copy_buffer_bytes: usize,
         mut progress: impl FnMut(BackupProgressEvent),
         mut checkpoint: impl FnMut(BackupCheckpoint),
     ) -> Result<BackupVerification, BackupError> {
-        let target_root = normalize_target(target.as_ref(), self.source.root())?;
-        let mut snapshot = self.capture_snapshot()?;
+        let (mut snapshot, policy_audit_snapshot) = self.capture_snapshot(capture.authorization)?;
+        let audit_snapshot = match (capture.audit_snapshot, policy_audit_snapshot) {
+            (Some(_), Some(_)) => return Err(BackupError::AuditSnapshotConflict),
+            (Some(snapshot), None) | (None, Some(snapshot)) => Some(snapshot),
+            (None, None) => None,
+        };
         if let Some(audit_snapshot) = audit_snapshot {
             let (audit_database_id, audit_head, audit_bytes) = audit_snapshot.into_parts();
             if audit_database_id != Some(snapshot.metadata.database_id) {
@@ -513,6 +614,7 @@ impl ExactBackupManager {
                 commit_hash: *audit_head.commit_hash(),
             });
         }
+        let target_root = normalize_target(target.as_ref(), self.source.root())?;
         let target_layout =
             DatabaseLayout::create(&target_root).map_err(BackupError::StorageFile)?;
         checkpoint(BackupCheckpoint::TargetLayoutCreated);
@@ -603,11 +705,10 @@ impl ExactBackupManager {
         Ok(verification)
     }
 
-    fn capture_snapshot(&self) -> Result<PinnedSnapshot, BackupError> {
-        let database_id = self
-            .source
-            .database_id()
-            .ok_or(BackupError::DatabaseIdentityMissing)?;
+    fn capture_snapshot(
+        &self,
+        authorization: Option<CurrentBackupAuthorization>,
+    ) -> Result<(PinnedSnapshot, Option<RawReadAuditSnapshot>), BackupError> {
         let lock = self
             .source
             .try_writer_lock()
@@ -634,6 +735,49 @@ impl ExactBackupManager {
             None if head.revision() == Revision::GENESIS => {}
             _ => return Err(BackupError::SourceSnapshotMismatch),
         }
+
+        let policy_audit_snapshot = if let Some(authorization) = authorization {
+            let manifest = manifest.as_ref().ok_or(BackupError::PolicyUnavailable)?;
+            let security_segments = manifest
+                .segments()
+                .iter()
+                .filter(|segment| segment.kind() == ManifestSegmentKind::SecurityPolicy)
+                .map(|segment| segment.id())
+                .collect::<Vec<_>>();
+            if security_segments.is_empty() {
+                return Err(BackupError::PolicyUnavailable);
+            }
+            let policy_history = SecurityPolicyHistoryStore::new(self.source.clone())
+                .load_history(head.revision(), &security_segments)
+                .map_err(BackupError::SecurityPolicy)?;
+            let policy = policy_history
+                .policy()
+                .select(
+                    AuthorizationMode::Now,
+                    authorization.principal,
+                    head.revision(),
+                )
+                .map_err(|_| BackupError::PolicyUnavailable)?;
+            authorize_backup_capability(policy, Capability::ProjectRead, authorization.target)?;
+            authorize_backup_capability(policy, Capability::BackupCreate, authorization.target)?;
+            if authorization.profile == BackupProfile::AuditComplete {
+                ensure_empty_audit_segments(&self.source)?;
+                Some(
+                    RawReadAuditWal::new(self.source.clone())
+                        .snapshot_for_backup(policy, authorization.target)
+                        .map_err(BackupError::AuditAccess)?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let database_id = self
+            .source
+            .database_id()
+            .ok_or(BackupError::DatabaseIdentityMissing)?;
 
         let wal_checkpoint = wal
             .checkpoint(&lock, head.revision())
@@ -728,12 +872,43 @@ impl ExactBackupManager {
             audit_head: None,
         };
         drop(lock);
-        Ok(PinnedSnapshot {
-            metadata,
-            sources,
-            _segment_pins: segment_pins,
-            _durable_pin: durable_pin,
-        })
+        Ok((
+            PinnedSnapshot {
+                metadata,
+                sources,
+                _segment_pins: segment_pins,
+                _durable_pin: durable_pin,
+            },
+            policy_audit_snapshot,
+        ))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CurrentBackupAuthorization {
+    principal: PrincipalId,
+    target: PolicyTarget,
+    profile: BackupProfile,
+}
+
+struct BackupCaptureMode {
+    audit_snapshot: Option<RawReadAuditSnapshot>,
+    authorization: Option<CurrentBackupAuthorization>,
+}
+
+fn authorize_backup_capability(
+    policy: SecurityPolicyView<'_>,
+    capability: Capability,
+    target: PolicyTarget,
+) -> Result<(), BackupError> {
+    if policy
+        .current_snapshot()
+        .authorize(policy.principal_id(), capability, target)
+        == AuthorizationDecision::Allow
+    {
+        Ok(())
+    } else {
+        Err(BackupError::AuthorizationDenied { capability })
     }
 }
 

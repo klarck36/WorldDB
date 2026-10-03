@@ -8,6 +8,31 @@ use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitSta
 #[cfg(windows)]
 mod windows;
 
+/// Why the current operating-system process identity is unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessIdentityError {
+    /// The platform has no verified identity reader in this build.
+    UnsupportedPlatform,
+    /// The operating system did not return a valid process-token identity.
+    OperatingSystemFailure,
+}
+
+/// Reads opaque identity bytes from the current process token.
+///
+/// On Windows this returns the binary user SID. Other platforms fail closed until M9-07.
+pub fn current_process_identity_bytes() -> Result<Vec<u8>, ProcessIdentityError> {
+    #[cfg(windows)]
+    {
+        windows::current_process_identity_bytes()
+            .map_err(|_| ProcessIdentityError::OperatingSystemFailure)
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err(ProcessIdentityError::UnsupportedPlatform)
+    }
+}
+
 /// A child process contained by an OS job with a hard committed-memory limit.
 ///
 /// Windows applies the limit to the child process tree. Other platforms fail
@@ -95,6 +120,19 @@ impl IsolatedChild {
                 io::ErrorKind::Unsupported,
                 "process-tree termination is not implemented on this platform",
             ))
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod process_identity_tests {
+    #[test]
+    fn current_process_identity_is_a_bounded_binary_sid() {
+        let identity = super::current_process_identity_bytes();
+        assert!(identity.is_ok());
+        if let Ok(identity) = identity {
+            assert!(!identity.is_empty());
+            assert!(identity.len() <= 1024);
         }
     }
 }

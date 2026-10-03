@@ -8,11 +8,43 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::ids::{
-    EventAttributeId, EventKindId, EventRoleId, HistorySpaceId, LayerId, PolicyRuleId, PredicateId,
-    PrincipalId, Revision, RoleAssignmentId, RoleId, SecurityEpoch,
+    DomainId, EventAttributeId, EventKindId, EventRoleId, HistorySpaceId, LayerId, PolicyRuleId,
+    PredicateId, PrincipalId, Revision, RoleAssignmentId, RoleId, SecurityEpoch,
 };
 use crate::query_context::{AuthorizationMode, QueryContext};
 use crate::record_refs::RecordRef;
+
+/// Stable, domain-separated mapping failure for a host-authenticated identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostAccountPrincipalError {
+    /// The operating-system identity was empty, too large, or produced an invalid identifier.
+    InvalidIdentity,
+}
+
+impl fmt::Display for HostAccountPrincipalError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("host account identity cannot be mapped to a WorldDB Principal")
+    }
+}
+
+impl std::error::Error for HostAccountPrincipalError {}
+
+/// Maps opaque bytes obtained from an authenticated operating-system identity to a stable
+/// WorldDB Principal ID. Callers must obtain `identity` from the host process token.
+pub fn derive_host_account_principal(
+    identity: &[u8],
+) -> Result<PrincipalId, HostAccountPrincipalError> {
+    if identity.is_empty() || identity.len() > 1024 {
+        return Err(HostAccountPrincipalError::InvalidIdentity);
+    }
+    let mut hasher = blake3::Hasher::new_derive_key("worlddb.host-account-principal.v1");
+    hasher.update(identity);
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    PrincipalId::try_from_bytes(bytes).map_err(|_| HostAccountPrincipalError::InvalidIdentity)
+}
 
 /// Current lifecycle state of an authenticated project principal.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1384,6 +1416,33 @@ mod tests {
         fn from(e: crate::ids::RevisionError) -> Self {
             Self::Revision(e)
         }
+    }
+
+    #[test]
+    fn host_account_principal_mapping_is_stable_domain_separated_uuid_v8() {
+        use crate::ids::DomainId;
+
+        let first = derive_host_account_principal(&[1, 2, 3, 4]);
+        let repeat = derive_host_account_principal(&[1, 2, 3, 4]);
+        let other = derive_host_account_principal(&[1, 2, 3, 5]);
+        assert!(first.is_ok());
+        assert!(repeat.is_ok());
+        assert!(other.is_ok());
+        if let (Ok(first), Ok(repeat), Ok(other)) = (first, repeat, other) {
+            assert_eq!(first, repeat);
+            assert_ne!(first, other);
+            let bytes = first.to_bytes();
+            assert_eq!(bytes[6] >> 4, 8);
+            assert_eq!(bytes[8] & 0xc0, 0x80);
+        }
+        assert_eq!(
+            derive_host_account_principal(&[]),
+            Err(HostAccountPrincipalError::InvalidIdentity)
+        );
+        assert_eq!(
+            derive_host_account_principal(&[0; 1025]),
+            Err(HostAccountPrincipalError::InvalidIdentity)
+        );
     }
 
     #[test]

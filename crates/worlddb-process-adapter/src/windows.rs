@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
@@ -5,7 +6,10 @@ use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
 use std::ptr::null;
 
-use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Security::{
+    GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
@@ -16,10 +20,104 @@ use windows_sys::Win32::System::JobObjects::{
     JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, GetCurrentProcess, OpenProcessToken, OpenThread,
+    ResumeThread, THREAD_SUSPEND_RESUME,
 };
 
 use crate::IsolatedChild;
+
+struct ProcessToken(HANDLE);
+
+impl Drop for ProcessToken {
+    fn drop(&mut self) {
+        // SAFETY: this wrapper uniquely owns the token returned by OpenProcessToken.
+        // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+        // REVIEW: process-platform-adapter-owner.
+        #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+pub(super) fn current_process_identity_bytes() -> io::Result<Vec<u8>> {
+    let mut token_handle: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle; token_handle is writable.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) };
+    if opened == 0 || token_handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let token = ProcessToken(token_handle);
+
+    let mut required_bytes = 0_u32;
+    // SAFETY: the first call requests only the required size; no output buffer is supplied.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let _ = unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut required_bytes,
+        )
+    };
+    if required_bytes < size_of::<TOKEN_USER>() as u32 || required_bytes > 4096 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process token user information has an invalid size",
+        ));
+    }
+    let word_count = (required_bytes as usize).div_ceil(size_of::<usize>());
+    let mut aligned_buffer = vec![0_usize; word_count];
+    let buffer = aligned_buffer.as_mut_ptr().cast::<c_void>();
+    // SAFETY: the DWORD-aligned buffer is large enough for the reported TOKEN_USER size.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let read_token = unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            buffer,
+            required_bytes,
+            &mut required_bytes,
+        )
+    };
+    if read_token == 0 || required_bytes as usize > aligned_buffer.len() * size_of::<usize>() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: GetTokenInformation initialized a complete TOKEN_USER in the aligned buffer.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let token_user = unsafe { &*buffer.cast::<TOKEN_USER>() };
+    if token_user.User.Sid.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process token contains a null user SID",
+        ));
+    }
+    // SAFETY: TOKEN_USER::Sid is owned by the live token information buffer.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) } as usize;
+    if sid_length == 0 || sid_length > 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "process token user SID has an invalid size",
+        ));
+    }
+    // SAFETY: GetLengthSid validated the initialized SID span inside this token buffer.
+    // TEST: process_identity::current_process_identity_is_a_bounded_binary_sid.
+    // REVIEW: process-platform-adapter-owner.
+    #[allow(unsafe_code, reason = "WDB-EXC-0006")]
+    let sid = unsafe { std::slice::from_raw_parts(token_user.User.Sid.cast::<u8>(), sid_length) };
+    Ok(sid.to_vec())
+}
 
 pub(super) struct JobObject(OwnedHandle);
 
