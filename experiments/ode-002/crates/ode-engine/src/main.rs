@@ -1,6 +1,9 @@
+use std::ffi::OsStr;
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 
+#[cfg(windows)]
+use worlddb_core::PrincipalId;
 use worlddb_ode_engine::{
     EngineHost, Request, Response, StreamConsumer, StreamPlan, stream_response,
 };
@@ -10,12 +13,39 @@ const FRAME_END: u8 = 2;
 const FRAME_CANCEL: u8 = 3;
 
 fn main() {
-    let Some(database_root) = std::env::args_os().nth(1).map(PathBuf::from) else {
+    let mut arguments = std::env::args_os().skip(1);
+    let Some(database_root) = arguments.next().map(PathBuf::from) else {
         std::process::exit(64);
     };
-    let engine = match EngineHost::open(&database_root) {
-        Ok(engine) => engine,
-        Err(_) => std::process::exit(73),
+    let host_authenticated = match arguments.next() {
+        None => false,
+        Some(argument)
+            if argument == OsStr::new("--host-account") && arguments.next().is_none() =>
+        {
+            true
+        }
+        Some(_) => std::process::exit(64),
+    };
+    let engine = if host_authenticated {
+        #[cfg(windows)]
+        {
+            let principal_id = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
+            match EngineHost::open_authorized(&database_root, principal_id) {
+                Ok((engine, _access)) => engine,
+                Err(_) => std::process::exit(73),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            std::process::exit(73)
+        }
+    } else if cfg!(debug_assertions) {
+        match EngineHost::open(&database_root) {
+            Ok(engine) => engine,
+            Err(_) => std::process::exit(73),
+        }
+    } else {
+        std::process::exit(73)
     };
     if write_response(&Response::Ready {
         engine_process_id: std::process::id(),
@@ -132,6 +162,74 @@ fn main() {
             }
         }
     }
+}
+
+#[cfg(windows)]
+fn current_host_principal() -> Result<PrincipalId, ()> {
+    let identity = current_user_sid()?;
+    worlddb_ode_engine::derive_host_account_principal(&identity).map_err(|_| ())
+}
+
+#[cfg(windows)]
+fn current_user_sid() -> Result<Vec<u8>, ()> {
+    use std::ffi::c_void;
+    use std::mem::size_of;
+    use std::ptr;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetLengthSid, GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    struct Token(HANDLE);
+    impl Drop for Token {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    let mut token_handle: HANDLE = ptr::null_mut();
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token_handle) };
+    if opened == 0 || token_handle.is_null() {
+        return Err(());
+    }
+    let token = Token(token_handle);
+
+    let mut required_bytes = 0_u32;
+    unsafe {
+        let _ = GetTokenInformation(token.0, TokenUser, ptr::null_mut(), 0, &mut required_bytes);
+    }
+    if required_bytes < size_of::<TOKEN_USER>() as u32 || required_bytes > 4096 {
+        return Err(());
+    }
+    let word_count = (required_bytes as usize).div_ceil(size_of::<usize>());
+    let mut aligned_buffer = vec![0_usize; word_count];
+    let buffer = aligned_buffer.as_mut_ptr().cast::<c_void>();
+    let read_token = unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            buffer,
+            required_bytes,
+            &mut required_bytes,
+        )
+    };
+    if read_token == 0 {
+        return Err(());
+    }
+    let token_user = unsafe { &*buffer.cast::<TOKEN_USER>() };
+    if token_user.User.Sid.is_null() {
+        return Err(());
+    }
+    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) } as usize;
+    if sid_length == 0 || sid_length > 1024 {
+        return Err(());
+    }
+    let sid = unsafe { std::slice::from_raw_parts(token_user.User.Sid.cast::<u8>(), sid_length) };
+    Ok(sid.to_vec())
 }
 
 fn read_binary_chunk<R: Read>(reader: &mut R, expected_length: u32) -> io::Result<Vec<u8>> {

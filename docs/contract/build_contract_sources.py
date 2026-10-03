@@ -1051,6 +1051,9 @@ def build_outputs(root: Path) -> tuple[dict[Path, bytes], dict[str, int]]:
             "ADR-036-rust-msrv.md",
             "ADR-037-uuidv7-generator.md",
             "ADR-038-project-license.md",
+            "ADR-041-ode-002-desktop-process.md",
+            "ADR-042-desktop-ipc.md",
+            "ADR-043-project-host-binding.md",
             "__pycache__",
         }
         and path.name not in expected_names

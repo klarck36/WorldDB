@@ -24,6 +24,8 @@ $reportPath = Join-Path $testRoot 'startup.json'
 $ipcPrefix = Join-Path $testRoot 'ipc.json'
 $primaryPath = Join-Path $testRoot 'ipc-primary.json'
 $secondaryPath = Join-Path $testRoot 'ipc-secondary.json'
+$primaryProjectPath = Join-Path $testRoot 'ipc-project-primary.json'
+$secondaryProjectPath = Join-Path $testRoot 'ipc-project-secondary.json'
 $process = $null
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -43,10 +45,11 @@ function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
 }
 
 try {
-    $env:WORLDDB_ODE_DATABASE = $databaseRoot
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
-    $env:WORLDDB_ODE_AUTOCLOSE_MS = '12000'
+    $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
+    $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
+    $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
     if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
         $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)
     } else {
@@ -58,20 +61,29 @@ try {
     $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
 
-    Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath)
+    Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath)
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
+    $primaryProject = Get-Content -LiteralPath $primaryProjectPath -Raw | ConvertFrom-Json
+    $secondaryProject = Get-Content -LiteralPath $secondaryProjectPath -Raw | ConvertFrom-Json
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
             throw "The $($entry.Label) window did not complete the versioned authenticated health call."
         }
     }
+    foreach ($entry in @(@{ Value = $primaryProject; Label = 'primary' }, @{ Value = $secondaryProject; Label = 'secondary' })) {
+        if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or -not $entry.Value.project_open -or $entry.Value.revision -ne 1 -or $entry.Value.role -ne 'gm' -or [string]::IsNullOrWhiteSpace($entry.Value.snapshot_id) -or $null -eq $entry.Value.engine.engine_process_id) {
+            throw "The $($entry.Label) window did not complete the authenticated project open/create flow."
+        }
+    }
+    if ($primaryProject.database_id -ne $secondaryProject.database_id) { throw 'Both windows did not resolve the same WorldDB project.' }
+    if ($primaryProject.snapshot_id -eq $secondaryProject.snapshot_id) { throw 'The native windows received the same project snapshot identity.' }
 
     $process.Refresh()
     $processIds = @([int]$process.Id)
-    if ($Mode -eq 'sidecar') { $processIds += [int]$report.engine.engine_process_id }
+    $processIds += [int]$primaryProject.engine.engine_process_id
     foreach ($processId in $processIds) {
         $listeners = @(Get-NetTCPConnection -State Listen -OwningProcess $processId -ErrorAction SilentlyContinue)
         if ($listeners.Count -gt 0) {
@@ -90,16 +102,19 @@ try {
         mode = $Mode
         primary_window_authenticated_health = 'PASS'
         secondary_window_authenticated_health = 'PASS'
+        authenticated_project_bootstrap = 'PASS'
+        shared_project_with_distinct_window_snapshots = 'PASS'
         versioned_ipc_protocol = 'PASS'
         invalid_session_rejected_in_both_windows = 'PASS'
         renderer_selected_path_rejected_in_both_windows = 'PASS'
         filesystem_plugin_command_rejected_in_both_windows = 'PASS'
+        host_principal_not_selected_by_environment = 'PASS'
         core_network_listeners = 'PASS'
         process_shutdown = 'PASS'
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {

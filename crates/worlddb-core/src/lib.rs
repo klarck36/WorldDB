@@ -687,6 +687,15 @@ pub mod storage_internal {
 
     pub use crate::ids::SegmentId;
 
+    /// Creates a version-7 WorldDB identity for one host-owned product operation.
+    ///
+    /// This adapter-only generator keeps UUID construction and validation in the core.
+    #[doc(hidden)]
+    pub fn generate_project_bootstrap_id<T: crate::DomainId>()
+    -> Result<T, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates the persistent identity for one newly initialized database.
     #[doc(hidden)]
     pub fn generate_database_id() -> Result<crate::ids::DatabaseId, crate::ids::IdGenerationError> {

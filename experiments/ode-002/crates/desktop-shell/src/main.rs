@@ -1,13 +1,13 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Instant;
 
 #[cfg(feature = "sidecar")]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "sidecar")]
-use std::path::Path;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 #[cfg(feature = "in-process")]
 use worlddb_ode_engine::EngineHost;
 #[cfg(feature = "sidecar")]
@@ -25,6 +25,8 @@ use transfer::{
     FinishTransferRequestV1, IPC_PROTOCOL_VERSION, MAX_TRANSFER_CHUNK_BYTES, TransferCompletionV1,
     TransferError, TransferManager,
 };
+use worlddb_core::PrincipalId;
+use worlddb_ode_engine::ProjectError;
 
 #[cfg(feature = "sidecar")]
 const FRAME_DATA: u8 = 1;
@@ -47,23 +49,18 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let database_root = std::env::var_os("WORLDDB_ODE_DATABASE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::temp_dir().join(format!("worlddb-ode-002-{}", std::process::id()))
-        });
+    let database_root = cfg!(debug_assertions)
+        .then(|| std::env::var_os("WORLDDB_ODE_DATABASE").map(PathBuf::from))
+        .flatten();
 
     let host_sessions = HostIdentity::current()
         .map(HostSessionManager::new)
         .map_err(|_| "operating system account identity unavailable".to_owned())?;
 
-    #[cfg(feature = "sidecar")]
-    let backend = Backend::Sidecar(std::sync::Mutex::new(Sidecar::start(&database_root)?));
-    #[cfg(feature = "in-process")]
-    let backend =
-        Backend::InProcess(EngineHost::open(&database_root).map_err(|error| error.to_string())?);
+    let backend = Backend::new(database_root.as_deref())?;
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(backend)
         .manage(host_sessions)
         .manage(TransferManager::new())
@@ -74,7 +71,11 @@ fn run() -> Result<(), String> {
                 return Err("two native windows were not created".into());
             }
             let state = app.state::<Backend>();
-            let engine_at_start = state.health().map_err(std::io::Error::other)?;
+            let engine_at_start = state
+                .health()
+                .map_err(std::io::Error::other)?
+                .map(|health| serde_json::to_value(health).map_err(std::io::Error::other))
+                .transpose()?;
             let mut report = serde_json::json!({
                 "mode": if cfg!(feature = "sidecar") { "sidecar" } else { "in_process" },
                 "application_process_id": std::process::id(),
@@ -156,7 +157,12 @@ fn run() -> Result<(), String> {
             health,
             begin_transfer,
             push_transfer_chunk,
-            finish_transfer
+            finish_transfer,
+            project_dialog_mode,
+            project_status,
+            create_project,
+            open_project,
+            close_project
         ])
         .run(tauri::generate_context!())
         .map_err(|error| error.to_string())
@@ -186,7 +192,8 @@ struct HealthRequestV1 {
 #[derive(Serialize)]
 struct HealthResponseV1 {
     protocol_version: u16,
-    engine: Response,
+    engine: Option<Response>,
+    project: ProjectStatusV1,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,6 +204,44 @@ struct IpcErrorV1 {
 
 #[derive(Serialize)]
 struct SecuritySmokeModeV1 {
+    protocol_version: u16,
+    enabled: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct ProjectStatusV1 {
+    protocol_version: u16,
+    window: String,
+    project_open: bool,
+    project_name: Option<String>,
+    database_id: Option<String>,
+    revision: Option<u64>,
+    role: Option<String>,
+    snapshot_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateProjectRequestV1 {
+    protocol_version: u16,
+    project_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenProjectRequestV1 {
+    protocol_version: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CloseProjectRequestV1 {
+    protocol_version: u16,
+}
+
+#[derive(Serialize)]
+struct ProjectDialogModeV1 {
     protocol_version: u16,
     enabled: bool,
 }
@@ -238,11 +283,232 @@ fn health(
     let engine = state
         .health()
         .map_err(|_| IpcErrorV1::new("engine_unavailable"))?;
+    let project = state
+        .project_status(window.label())
+        .map_err(map_project_error)?;
     record_ipc_probe(window.label())?;
     Ok(HealthResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         engine,
+        project,
     })
+}
+
+#[tauri::command]
+fn project_dialog_mode() -> ProjectDialogModeV1 {
+    ProjectDialogModeV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        enabled: cfg!(debug_assertions)
+            && std::env::var_os("WORLDDB_ODE_PROJECT_SMOKE_ROOT").is_some(),
+    }
+}
+
+#[tauri::command]
+fn project_status(
+    window: tauri::WebviewWindow,
+    session_id: String,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<ProjectStatusV1, IpcErrorV1> {
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .project_status(window.label())
+        .map_err(map_project_error)
+}
+
+#[tauri::command]
+async fn create_project(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: CreateProjectRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<ProjectStatusV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectCreate)
+        .map_err(map_session_error)?;
+    let principal_id = sessions.project_principal().map_err(map_session_error)?;
+    let name = validate_project_name(&request.project_name)?;
+    let root = if let Some(test_root) = project_smoke_root() {
+        test_root
+    } else {
+        let parent =
+            pick_project_parent(app.clone(), window.clone(), "Neues WorldDB-Projekt").await?;
+        parent.join(format!("{name}.worlddb"))
+    };
+    let status = backend
+        .create_project(window.label(), &root, principal_id)
+        .map_err(map_project_error)?;
+    let engine = backend
+        .health()
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    app.emit("project-state-changed", ())
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    record_project_smoke(window.label(), &status, engine.as_ref())?;
+    Ok(status)
+}
+
+#[tauri::command]
+async fn open_project(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: OpenProjectRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<ProjectStatusV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let principal_id = sessions.project_principal().map_err(map_session_error)?;
+    let root = if let Some(test_root) = project_smoke_root() {
+        test_root
+    } else {
+        pick_project_folder(app.clone(), window.clone(), "WorldDB-Projekt öffnen").await?
+    };
+    let status = backend
+        .open_project(window.label(), &root, principal_id)
+        .map_err(map_project_error)?;
+    let engine = backend
+        .health()
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    app.emit("project-state-changed", ())
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    record_project_smoke(window.label(), &status, engine.as_ref())?;
+    Ok(status)
+}
+
+#[tauri::command]
+fn close_project(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: CloseProjectRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<ProjectStatusV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectClose)
+        .map_err(map_session_error)?;
+    backend.close_project().map_err(map_project_error)?;
+    app.emit("project-state-changed", ())
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    backend
+        .project_status(window.label())
+        .map_err(map_project_error)
+}
+
+async fn pick_project_parent(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    title: &'static str,
+) -> Result<PathBuf, IpcErrorV1> {
+    pick_project_folder(app, window, title).await
+}
+
+async fn pick_project_folder(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    title: &'static str,
+) -> Result<PathBuf, IpcErrorV1> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .blocking_pick_folders()
+            .and_then(|mut paths| paths.pop())
+            .and_then(|path| path.into_path().ok())
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    selected.ok_or_else(|| IpcErrorV1::new("selection_cancelled"))
+}
+
+fn project_smoke_root() -> Option<PathBuf> {
+    cfg!(debug_assertions)
+        .then(|| std::env::var_os("WORLDDB_ODE_PROJECT_SMOKE_ROOT").map(PathBuf::from))
+        .flatten()
+}
+
+fn validate_project_name(value: &str) -> Result<String, IpcErrorV1> {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed != value
+        || trimmed.chars().count() > 80
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.ends_with('.')
+        || trimmed.ends_with(' ')
+        || trimmed
+            .chars()
+            .any(|character| character.is_control() || "<>:\"/\\|?*".contains(character))
+    {
+        return Err(IpcErrorV1::new("invalid_request"));
+    }
+    let stem = trimmed
+        .split('.')
+        .next()
+        .unwrap_or(trimmed)
+        .to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0')
+    {
+        return Err(IpcErrorV1::new("invalid_request"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn record_project_smoke(
+    window_label: &str,
+    status: &ProjectStatusV1,
+    engine: Option<&Response>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_IPC_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-project-{window_label}.json"));
+    let record = serde_json::json!({
+        "protocol_version": status.protocol_version,
+        "window": window_label,
+        "project_open": status.project_open,
+        "database_id": status.database_id,
+        "revision": status.revision,
+        "role": status.role,
+        "snapshot_id": status.snapshot_id,
+        "engine": engine,
+    });
+    std::fs::write(
+        result_path,
+        serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?,
+    )
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))
 }
 
 fn record_ipc_probe(window_label: &str) -> Result<(), IpcErrorV1> {
@@ -326,7 +592,10 @@ fn chunk_metadata(headers: &tauri::http::HeaderMap) -> Result<ChunkMetadata<'_>,
 
 #[cfg(test)]
 mod ipc_security_tests {
-    use super::{HealthRequestV1, chunk_metadata};
+    use super::{
+        CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, OpenProjectRequestV1,
+        chunk_metadata, validate_project_name,
+    };
     use tauri::http::{HeaderMap, HeaderValue};
 
     fn valid_headers() -> HeaderMap {
@@ -374,6 +643,33 @@ mod ipc_security_tests {
             "principal": "renderer-selected-principal"
         });
         assert!(serde_json::from_value::<HealthRequestV1>(invalid).is_err());
+    }
+
+    #[test]
+    fn project_dtos_reject_renderer_selected_paths_and_principals() {
+        let invalid = serde_json::json!({
+            "protocol_version": 1,
+            "project_name": "Campaign",
+            "project_path": "C:/renderer/chosen/database",
+            "principal": "renderer-selected-principal"
+        });
+        assert!(serde_json::from_value::<CreateProjectRequestV1>(invalid.clone()).is_err());
+        assert!(serde_json::from_value::<OpenProjectRequestV1>(invalid.clone()).is_err());
+        assert!(serde_json::from_value::<CloseProjectRequestV1>(invalid).is_err());
+    }
+
+    #[test]
+    fn project_names_are_single_safe_windows_directory_names() {
+        assert_eq!(
+            validate_project_name("Campaign 2026").unwrap(),
+            "Campaign 2026"
+        );
+        for invalid in ["", ".", "..", "CON", "LPT1", "folder/name", "campaign."] {
+            assert!(
+                validate_project_name(invalid).is_err(),
+                "accepted {invalid:?}"
+            );
+        }
     }
 }
 
@@ -444,17 +740,376 @@ fn map_transfer_error(error: TransferError) -> IpcErrorV1 {
     }
 }
 
+struct WindowProjectSnapshot {
+    snapshot_id: String,
+    revision: u64,
+}
+
+struct BackendState {
+    engine: Option<EngineBackend>,
+    project: Option<worlddb_ode_engine::ProjectAccess>,
+    windows: HashMap<String, WindowProjectSnapshot>,
+}
+
+struct Backend {
+    state: Mutex<BackendState>,
+}
+
+impl Backend {
+    fn new(database_root: Option<&Path>) -> Result<Self, String> {
+        let engine = if let Some(database_root) = database_root {
+            #[cfg(feature = "sidecar")]
+            {
+                Some(EngineBackend::Sidecar(Mutex::new(Sidecar::start(
+                    database_root,
+                )?)))
+            }
+            #[cfg(feature = "in-process")]
+            {
+                Some(EngineBackend::InProcess(
+                    EngineHost::open(database_root).map_err(|error| error.to_string())?,
+                ))
+            }
+        } else {
+            None
+        };
+        Ok(Self {
+            state: Mutex::new(BackendState {
+                engine,
+                project: None,
+                windows: HashMap::new(),
+            }),
+        })
+    }
+
+    fn health(&self) -> Result<Option<Response>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        state.engine.as_ref().map(EngineBackend::health).transpose()
+    }
+
+    fn project_status(&self, window_label: &str) -> Result<ProjectStatusV1, ProjectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProjectError::HostUnavailable)?;
+        let Some((root, database_id, project_revision, role_symbol)) =
+            state.project.as_ref().map(|project| {
+                (
+                    project.canonical_root().to_owned(),
+                    project.database_id(),
+                    project.revision().value(),
+                    project.role_symbol().to_owned(),
+                )
+            })
+        else {
+            return Ok(ProjectStatusV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                window: window_label.to_owned(),
+                project_open: false,
+                project_name: None,
+                database_id: None,
+                revision: None,
+                role: None,
+                snapshot_id: None,
+            });
+        };
+        if !state.windows.contains_key(window_label) {
+            let snapshot_id = new_window_snapshot_id()?;
+            state.windows.insert(
+                window_label.to_owned(),
+                WindowProjectSnapshot {
+                    snapshot_id,
+                    revision: project_revision,
+                },
+            );
+        }
+        let view = state
+            .windows
+            .get(window_label)
+            .ok_or(ProjectError::HostUnavailable)?;
+        let project_name = root
+            .file_stem()
+            .or_else(|| root.file_name())
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("WorldDB-Projekt")
+            .to_owned();
+        Ok(ProjectStatusV1 {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            window: window_label.to_owned(),
+            project_open: true,
+            project_name: Some(project_name),
+            database_id: Some(database_id.to_string()),
+            revision: Some(view.revision),
+            role: Some(role_symbol),
+            snapshot_id: Some(view.snapshot_id.clone()),
+        })
+    }
+
+    fn create_project(
+        &self,
+        window_label: &str,
+        root: &Path,
+        principal_id: PrincipalId,
+    ) -> Result<ProjectStatusV1, ProjectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProjectError::HostUnavailable)?;
+        if state.project.is_some() || state.engine.is_some() {
+            return Err(ProjectError::AlreadyOpen);
+        }
+        let access = worlddb_ode_engine::create_project(root, principal_id)?;
+        let canonical_root = access.canonical_root().to_owned();
+        #[cfg(feature = "in-process")]
+        let engine = {
+            let (engine, opened) = EngineHost::open_authorized(&canonical_root, principal_id)?;
+            if opened.database_id() != access.database_id() {
+                return Err(ProjectError::InvalidProject);
+            }
+            EngineBackend::InProcess(engine)
+        };
+        #[cfg(feature = "sidecar")]
+        let engine = EngineBackend::Sidecar(Mutex::new(
+            Sidecar::start_for_project(&canonical_root)
+                .map_err(|_| ProjectError::HostUnavailable)?,
+        ));
+        state.engine = Some(engine);
+        state.project = Some(access);
+        state.windows.clear();
+        attach_window_snapshot(&mut state, window_label)?;
+        self.project_status_locked(&mut state, window_label)
+    }
+
+    fn open_project(
+        &self,
+        window_label: &str,
+        root: &Path,
+        principal_id: PrincipalId,
+    ) -> Result<ProjectStatusV1, ProjectError> {
+        let metadata = std::fs::symlink_metadata(root).map_err(|_| ProjectError::InvalidProject)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
+            return Err(ProjectError::InvalidProject);
+        }
+        let canonical_root =
+            std::fs::canonicalize(root).map_err(|_| ProjectError::InvalidProject)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProjectError::HostUnavailable)?;
+        if let Some(project) = state.project.as_ref() {
+            if project.canonical_root() != canonical_root || project.principal_id() != principal_id
+            {
+                return Err(ProjectError::AlreadyOpen);
+            }
+            attach_window_snapshot(&mut state, window_label)?;
+            return self.project_status_locked(&mut state, window_label);
+        }
+        if state.engine.is_some() {
+            return Err(ProjectError::AlreadyOpen);
+        }
+        #[cfg(feature = "in-process")]
+        let (engine, access) = {
+            let (engine, access) = EngineHost::open_authorized(&canonical_root, principal_id)?;
+            (EngineBackend::InProcess(engine), access)
+        };
+        #[cfg(feature = "sidecar")]
+        let (engine, access) = {
+            let access = worlddb_ode_engine::open_project(&canonical_root, principal_id)?;
+            let engine = Sidecar::start_for_project(&canonical_root)
+                .map_err(|_| ProjectError::HostUnavailable)?;
+            (EngineBackend::Sidecar(Mutex::new(engine)), access)
+        };
+        state.engine = Some(engine);
+        state.project = Some(access);
+        state.windows.clear();
+        attach_window_snapshot(&mut state, window_label)?;
+        self.project_status_locked(&mut state, window_label)
+    }
+
+    fn close_project(&self) -> Result<(), ProjectError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProjectError::HostUnavailable)?;
+        if state.project.is_some() {
+            state.windows.clear();
+            state.project = None;
+            state.engine = None;
+        }
+        Ok(())
+    }
+
+    fn project_status_locked(
+        &self,
+        state: &mut BackendState,
+        window_label: &str,
+    ) -> Result<ProjectStatusV1, ProjectError> {
+        if !state.windows.contains_key(window_label) {
+            attach_window_snapshot(state, window_label)?;
+        }
+        let (root, database_id, role_symbol) = state
+            .project
+            .as_ref()
+            .map(|project| {
+                (
+                    project.canonical_root().to_owned(),
+                    project.database_id(),
+                    project.role_symbol().to_owned(),
+                )
+            })
+            .ok_or(ProjectError::HostUnavailable)?;
+        let view = state
+            .windows
+            .get(window_label)
+            .map(|view| (view.revision, view.snapshot_id.clone()))
+            .ok_or(ProjectError::HostUnavailable)?;
+        let project_name = root
+            .file_stem()
+            .or_else(|| root.file_name())
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("WorldDB-Projekt")
+            .to_owned();
+        Ok(ProjectStatusV1 {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            window: window_label.to_owned(),
+            project_open: true,
+            project_name: Some(project_name),
+            database_id: Some(database_id.to_string()),
+            revision: Some(view.0),
+            role: Some(role_symbol),
+            snapshot_id: Some(view.1),
+        })
+    }
+
+    fn begin_stream(
+        &self,
+        transfer_id: &str,
+        total_bytes: u64,
+        chunk_bytes: u32,
+    ) -> Result<(), String> {
+        self.with_engine(|engine| engine.begin_stream(transfer_id, total_bytes, chunk_bytes))
+    }
+
+    fn push_stream_chunk(
+        &self,
+        transfer_id: &str,
+        sequence: u64,
+        chunk: &[u8],
+    ) -> Result<u64, String> {
+        self.with_engine(|engine| engine.push_stream_chunk(transfer_id, sequence, chunk))
+    }
+
+    fn finish_stream(
+        &self,
+        transfer_id: &str,
+        cancelled: bool,
+    ) -> Result<worlddb_ode_engine::StreamReport, String> {
+        self.with_engine(|engine| engine.finish_stream(transfer_id, cancelled))
+    }
+
+    fn stream(&self, plan: StreamPlan) -> Result<serde_json::Value, String> {
+        self.with_engine(|engine| engine.stream(plan))
+    }
+
+    fn exercise_engine_panic(&self) -> Result<serde_json::Value, String> {
+        self.with_engine(EngineBackend::exercise_engine_panic)
+    }
+
+    fn exercise_engine_update(&self) -> Result<serde_json::Value, String> {
+        self.with_engine(EngineBackend::exercise_engine_update)
+    }
+
+    fn with_engine<T>(
+        &self,
+        operation: impl FnOnce(&EngineBackend) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        let engine = state
+            .engine
+            .as_ref()
+            .ok_or_else(|| "no WorldDB project is open".to_owned())?;
+        operation(engine)
+    }
+}
+
+fn attach_window_snapshot(
+    state: &mut BackendState,
+    window_label: &str,
+) -> Result<(), ProjectError> {
+    let revision = state
+        .project
+        .as_ref()
+        .ok_or(ProjectError::HostUnavailable)?
+        .revision()
+        .value();
+    if !state.windows.contains_key(window_label) {
+        state.windows.insert(
+            window_label.to_owned(),
+            WindowProjectSnapshot {
+                snapshot_id: new_window_snapshot_id()?,
+                revision,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn new_window_snapshot_id() -> Result<String, ProjectError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| ProjectError::HostUnavailable)?;
+    let mut id = String::with_capacity(32);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut id, "{byte:02x}").map_err(|_| ProjectError::HostUnavailable)?;
+    }
+    Ok(id)
+}
+
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+fn map_project_error(error: worlddb_ode_engine::ProjectError) -> IpcErrorV1 {
+    use worlddb_ode_engine::ProjectError;
+    match error {
+        ProjectError::AlreadyExists => IpcErrorV1::new("project_already_exists"),
+        ProjectError::AlreadyOpen => IpcErrorV1::new("project_already_open"),
+        ProjectError::AccessDenied => IpcErrorV1::new("project_unavailable"),
+        ProjectError::InvalidProject => IpcErrorV1::new("invalid_project"),
+        ProjectError::RecoveryRequired => IpcErrorV1::new("recovery_required"),
+        ProjectError::UnsupportedIdentity | ProjectError::HostUnavailable => {
+            IpcErrorV1::new("host_unavailable")
+        }
+        ProjectError::UnknownCommitOutcome => IpcErrorV1::new("unknown_commit_outcome"),
+    }
+}
+
 #[cfg(feature = "in-process")]
-enum Backend {
+enum EngineBackend {
     InProcess(EngineHost),
 }
 
 #[cfg(feature = "sidecar")]
-enum Backend {
-    Sidecar(std::sync::Mutex<Sidecar>),
+enum EngineBackend {
+    Sidecar(Mutex<Sidecar>),
 }
 
-impl Backend {
+impl EngineBackend {
     fn health(&self) -> Result<Response, String> {
         match self {
             #[cfg(feature = "in-process")]
@@ -617,35 +1272,59 @@ struct Sidecar {
     response_reader: Option<std::thread::JoinHandle<()>>,
     database_root: PathBuf,
     executable: PathBuf,
+    host_authenticated: bool,
     engine_process_id: u32,
     engine_build_id: String,
 }
 
 #[cfg(feature = "sidecar")]
+fn sidecar_executable() -> Result<PathBuf, String> {
+    match std::env::var_os("WORLDDB_ODE_ENGINE_EXECUTABLE") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => Ok(std::env::current_exe()
+            .map_err(|_| "application executable path unavailable".to_owned())?
+            .with_file_name(if cfg!(windows) {
+                "worlddb_ode_engine.exe"
+            } else {
+                "worlddb_ode_engine"
+            })),
+    }
+}
+
+#[cfg(feature = "sidecar")]
 impl Sidecar {
     fn start(database_root: &Path) -> Result<Self, String> {
-        let executable = match std::env::var_os("WORLDDB_ODE_ENGINE_EXECUTABLE") {
-            Some(path) => PathBuf::from(path),
-            None => std::env::current_exe()
-                .map_err(|_| "application executable path unavailable".to_owned())?
-                .with_file_name(if cfg!(windows) {
-                    "worlddb_ode_engine.exe"
-                } else {
-                    "worlddb_ode_engine"
-                }),
-        };
+        let executable = sidecar_executable()?;
         Self::start_with(database_root, &executable)
     }
 
+    fn start_for_project(database_root: &Path) -> Result<Self, String> {
+        Self::start_with_authentication(database_root, &sidecar_executable()?, true)
+    }
+
     fn start_with(database_root: &Path, executable: &Path) -> Result<Self, String> {
+        Self::start_with_authentication(database_root, executable, false)
+    }
+
+    fn start_with_authentication(
+        database_root: &Path,
+        executable: &Path,
+        host_authenticated: bool,
+    ) -> Result<Self, String> {
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
 
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .arg(database_root)
+            .env_remove("WORLDDB_ODE_ENGINE_PRINCIPAL_ID")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        if host_authenticated {
+            command.arg("--host-account");
+        }
+        let mut child = command
             .spawn()
             .map_err(|error| format!("engine sidecar could not start: {error}"))?;
         let input = child.stdin.take().ok_or("sidecar input unavailable")?;
@@ -683,6 +1362,7 @@ impl Sidecar {
             response_reader: Some(response_reader),
             database_root: database_root.to_owned(),
             executable: executable.to_owned(),
+            host_authenticated,
             engine_process_id: 0,
             engine_build_id: String::new(),
         };
@@ -756,7 +1436,11 @@ impl Sidecar {
             return Ok(());
         }
         self.join_response_reader();
-        let mut replacement = Self::start_with(&self.database_root, &self.executable)?;
+        let mut replacement = Self::start_with_authentication(
+            &self.database_root,
+            &self.executable,
+            self.host_authenticated,
+        )?;
         let response = replacement.request_without_recovery(Request::Health)?;
         if !matches!(
             response,
@@ -908,7 +1592,11 @@ impl Sidecar {
         if status.success() {
             return Err("injected sidecar panic exited successfully".to_owned());
         }
-        let mut replacement = Self::start_with(&self.database_root, &self.executable)?;
+        let mut replacement = Self::start_with_authentication(
+            &self.database_root,
+            &self.executable,
+            self.host_authenticated,
+        )?;
         let replacement_health = replacement.health_for_validation()?;
         let replacement_process_id = replacement.engine_process_id;
         let replacement_build_id = replacement.engine_build_id.clone();
@@ -940,7 +1628,11 @@ impl Sidecar {
         let previous_build_id = self.engine_build_id.clone();
         let previous_process_id = self.engine_process_id;
         self.shutdown_child()?;
-        let mut replacement = Self::start_with(&self.database_root, updated_executable)?;
+        let mut replacement = Self::start_with_authentication(
+            &self.database_root,
+            updated_executable,
+            self.host_authenticated,
+        )?;
         let replacement_health = replacement.health_for_validation()?;
         let replacement_build_id = replacement.engine_build_id.clone();
         let replacement_process_id = replacement.engine_process_id;

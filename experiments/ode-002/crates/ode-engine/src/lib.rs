@@ -4,7 +4,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use worlddb_core::{DomainId, PrincipalId};
 use worlddb_storage_file::{DatabaseLayout, WriterLock};
+
+mod project;
+pub use project::{ProjectAccess, ProjectError, create_project, open_project};
 
 pub const MAX_STREAM_BYTES: u64 = 100 * 1024 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: u32 = 1024 * 1024;
@@ -12,9 +16,25 @@ const MAX_ACTIVE_STREAMS: usize = 16;
 const STREAM_LIFETIME: Duration = Duration::from_secs(5 * 60);
 pub const ENGINE_BUILD_ID: &str = env!("WORLDDB_ODE_ENGINE_BUILD_ID");
 
+/// Derives the project Principal from authenticated host-account identity bytes.
+/// Callers must obtain these bytes from the operating-system process token.
+pub fn derive_host_account_principal(identity: &[u8]) -> Result<PrincipalId, ProjectError> {
+    if identity.is_empty() || identity.len() > 1024 {
+        return Err(ProjectError::UnsupportedIdentity);
+    }
+    let mut hasher = blake3::Hasher::new_derive_key("worlddb.host-account-principal.v1");
+    hasher.update(identity);
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&hasher.finalize().as_bytes()[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    PrincipalId::try_from_bytes(bytes).map_err(|_| ProjectError::UnsupportedIdentity)
+}
+
 pub struct EngineHost {
     _layout: DatabaseLayout,
     _writer_lock: WriterLock,
+    principal_id: Option<PrincipalId>,
     health: Mutex<()>,
     streams: Mutex<HashMap<[u8; 16], ActiveStream>>,
 }
@@ -200,9 +220,42 @@ impl EngineHost {
         Ok(Self {
             _layout: layout,
             _writer_lock: writer_lock,
+            principal_id: None,
             health: Mutex::new(()),
             streams: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Opens a verified project only when the authenticated host Principal has current
+    /// `ProjectRead` permission. The Principal is supplied by the trusted desktop host.
+    pub fn open_authorized(
+        project_root: &Path,
+        principal_id: PrincipalId,
+    ) -> Result<(Self, ProjectAccess), ProjectError> {
+        let layout =
+            DatabaseLayout::open(project_root).map_err(|_| ProjectError::InvalidProject)?;
+        let writer_lock = layout.try_writer_lock().map_err(|error| match error {
+            worlddb_storage_file::WriterLockError::AlreadyHeld => ProjectError::AlreadyOpen,
+            worlddb_storage_file::WriterLockError::LockFileMissing
+            | worlddb_storage_file::WriterLockError::Io(_) => ProjectError::HostUnavailable,
+        })?;
+        let access = project::resolve_open_access(&layout, &writer_lock, principal_id)?;
+        Ok((
+            Self {
+                _layout: layout,
+                _writer_lock: writer_lock,
+                principal_id: Some(principal_id),
+                health: Mutex::new(()),
+                streams: Mutex::new(HashMap::new()),
+            },
+            access,
+        ))
+    }
+
+    /// The internally bound host Principal, if this host opened an authorized project.
+    #[must_use]
+    pub const fn principal_id(&self) -> Option<PrincipalId> {
+        self.principal_id
     }
 
     pub fn health(&self) -> Result<Response, EngineError> {

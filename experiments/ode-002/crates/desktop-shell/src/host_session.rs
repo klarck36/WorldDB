@@ -13,6 +13,9 @@ const IPC_PROTOCOL_VERSION: u16 = 1;
 pub(super) enum HostCapability {
     HealthRead,
     TransferWrite,
+    ProjectOpen,
+    ProjectCreate,
+    ProjectClose,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -29,6 +32,11 @@ impl HostIdentity {
             Err(HostIdentityError::UnsupportedPlatform)
         }
     }
+
+    pub(super) fn project_principal(&self) -> Result<worlddb_core::PrincipalId, HostIdentityError> {
+        worlddb_ode_engine::derive_host_account_principal(&self.0)
+            .map_err(|_| HostIdentityError::InvalidMapping)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +45,7 @@ pub(super) enum HostIdentityError {
     UnsupportedPlatform,
     #[cfg(windows)]
     OperatingSystemFailure,
+    InvalidMapping,
 }
 
 #[derive(Serialize)]
@@ -49,7 +58,7 @@ pub(super) struct HostSessionTicket {
 struct SessionRecord {
     identity: HostIdentity,
     window_label: String,
-    capabilities: [HostCapability; 2],
+    capabilities: [HostCapability; 5],
     expires_at: Instant,
 }
 
@@ -64,6 +73,12 @@ impl HostSessionManager {
             identity,
             sessions: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(super) fn project_principal(&self) -> Result<worlddb_core::PrincipalId, SessionError> {
+        self.identity
+            .project_principal()
+            .map_err(|_| SessionError::Unavailable)
     }
 
     pub(super) fn issue(&self, window_label: &str) -> Result<HostSessionTicket, SessionError> {
@@ -96,7 +111,13 @@ impl HostSessionManager {
                 entry.insert(SessionRecord {
                     identity: self.identity.clone(),
                     window_label: window_label.to_owned(),
-                    capabilities: [HostCapability::HealthRead, HostCapability::TransferWrite],
+                    capabilities: [
+                        HostCapability::HealthRead,
+                        HostCapability::TransferWrite,
+                        HostCapability::ProjectOpen,
+                        HostCapability::ProjectCreate,
+                        HostCapability::ProjectClose,
+                    ],
                     expires_at,
                 });
                 return Ok(HostSessionTicket {
@@ -271,6 +292,11 @@ mod tests {
         );
         assert!(
             sessions
+                .authorize("primary", &ticket.session_id, HostCapability::ProjectOpen)
+                .is_ok()
+        );
+        assert!(
+            sessions
                 .authorize("secondary", &ticket.session_id, HostCapability::HealthRead)
                 .is_err()
         );
@@ -324,5 +350,29 @@ mod tests {
             sessions.issue("primary").expect("session issued");
         }
         assert!(sessions.issue("primary").is_err());
+    }
+
+    #[test]
+    fn host_account_maps_to_a_stable_valid_worlddb_principal() {
+        use worlddb_core::DomainId;
+
+        let identity = vec![1, 2, 3, 4];
+        let first = HostIdentity(identity.clone())
+            .project_principal()
+            .expect("valid principal");
+        let repeated = HostIdentity(vec![1, 2, 3, 4])
+            .project_principal()
+            .expect("same principal");
+        let other = HostIdentity(vec![1, 2, 3, 5])
+            .project_principal()
+            .expect("different principal");
+        assert_eq!(first, repeated);
+        assert_ne!(first, other);
+        assert_eq!(first.to_bytes()[6] >> 4, 8);
+        assert_eq!(first.to_bytes()[8] >> 6, 2);
+        assert_eq!(
+            first,
+            worlddb_ode_engine::derive_host_account_principal(&identity).expect("same mapping")
+        );
     }
 }
