@@ -57,4 +57,4 @@ Checked on Windows at 2026-10-03T04:20:38+02:00. `python -X utf8 WorldDB_1.0_Pla
 
 The M7-16 plan/inventory commit `3df80f7` was pushed to `origin/codex/worlddb-project-integration`; `git ls-remote` confirmed the remote ref at that commit.
 
-Follow-up: M7-16a completed on Windows; see `docs/M7-16a-backup-crash-matrix.md`. M7-16b is now the next READY task.
+Follow-up: M7-16a completed on Windows; see `docs/M7-16a-backup-crash-matrix.md`. M7-16b completed on Windows (docs/M7-16b-restore-crash-matrix.md). M7-16c is now READY. Linux/macOS execution remains deferred to M9-07.

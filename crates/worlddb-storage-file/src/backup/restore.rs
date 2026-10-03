@@ -863,21 +863,61 @@ fn replace_file(stage: &Path, target: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestoreCheckpoint, RestoreError, RestoreManager, RestoreRequest};
+    use super::{BackupProfile, RestoreCheckpoint, RestoreError, RestoreManager, RestoreRequest};
     use crate::{
-        DatabaseLayout, ExactBackupManager, RecoveryManager, StorageVerifier, WalPrepareLog,
+        DatabaseLayout, ExactBackupManager, RawReadAuditWal, RawReadAuditWriter, RecoveryManager,
+        StorageVerifier, WalPrepareLog,
     };
     use std::fs;
     use std::path::PathBuf;
+    use std::process::{Command, Output};
     use std::sync::atomic::{AtomicU64, Ordering};
     use worlddb_core::{
-        AuditPolicyFingerprint, AuthorizationMode, Bytes, Capability, CapabilityGrant,
-        CapabilityRule, DomainId, GrantEffect, PolicyRuleId, PolicyScope, PolicySubject, Principal,
-        PrincipalId, Revision, SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot,
-        SecurityPolicyVersion,
+        AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
+        AuditScopeFingerprint, AuthorizationMode, Bytes, Capability, CapabilityGrant,
+        CapabilityRule, ClientRequestId, DomainId, GrantEffect, PageOrdinal, PolicyRuleId,
+        PolicyScope, PolicySubject, Principal, PrincipalId, RawReadAttemptScope, Revision,
+        SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot, SecurityPolicyVersion,
+        SnapshotId,
     };
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    const CRASH_EXIT_CODE: i32 = 86;
+    const BACKUP_ENV: &str = "WORLDDB_M7_16B_RESTORE_BACKUP";
+    const TARGET_ENV: &str = "WORLDDB_M7_16B_RESTORE_TARGET";
+    const CHECKPOINT_ENV: &str = "WORLDDB_M7_16B_RESTORE_CHECKPOINT";
+    const CRASH_TEST_NAME: &str = "backup::restore::tests::process_crash_before_or_after_atomic_publication_leaves_only_absent_or_verified_audited_target";
+
+    fn checkpoint_name(checkpoint: RestoreCheckpoint) -> &'static str {
+        match checkpoint {
+            RestoreCheckpoint::BeforePublish => "before_publish",
+            RestoreCheckpoint::AfterPublish => "after_publish",
+        }
+    }
+
+    fn restore_child(
+        executable: &std::path::Path,
+        backup: &std::path::Path,
+        target: &std::path::Path,
+        checkpoint: &str,
+    ) -> Result<Output, String> {
+        Command::new(executable)
+            .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
+            .env(BACKUP_ENV, backup)
+            .env(TARGET_ENV, target)
+            .env(CHECKPOINT_ENV, checkpoint)
+            .output()
+            .map_err(|error| format!("spawn restore child for {checkpoint}: {error}"))
+    }
+
+    fn output_text(output: &Output) -> String {
+        format!(
+            "stdout: {}; stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    }
 
     struct TempArea(PathBuf);
 
@@ -909,19 +949,24 @@ mod tests {
 
     fn restore_policy() -> Result<SecurityPolicyHistory, String> {
         let principal = id::<PrincipalId>(1)?;
-        let rule = CapabilityRule::new(
-            id::<PolicyRuleId>(2)?,
-            PolicySubject::Principal(principal),
-            CapabilityGrant::new(Capability::BackupRestore, GrantEffect::Allow),
-            PolicyScope::project(),
-        );
-        let snapshot = SecurityPolicySnapshot::new(
-            vec![Principal::new(principal)],
-            vec![],
-            vec![],
-            vec![rule],
-        )
-        .map_err(|error| error.to_string())?;
+        let rules = [
+            (2, Capability::BackupRestore),
+            (3, Capability::AuditRead),
+            (4, Capability::AuditExport),
+        ]
+        .into_iter()
+        .map(|(tail, capability)| -> Result<_, String> {
+            Ok(CapabilityRule::new(
+                id::<PolicyRuleId>(tail)?,
+                PolicySubject::Principal(principal),
+                CapabilityGrant::new(capability, GrantEffect::Allow),
+                PolicyScope::project(),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let snapshot =
+            SecurityPolicySnapshot::new(vec![Principal::new(principal)], vec![], vec![], rules)
+                .map_err(|error| error.to_string())?;
         SecurityPolicyHistory::new(
             Revision::GENESIS,
             vec![SecurityPolicyVersion::new(
@@ -931,6 +976,23 @@ mod tests {
             )],
         )
         .map_err(|error| error.to_string())
+    }
+
+    fn append_audit_attempt(writer: &RawReadAuditWriter) -> Result<(), String> {
+        writer
+            .append_attempt(
+                RawReadAttemptScope {
+                    principal_id: id::<PrincipalId>(1)?,
+                    scope_fingerprint: AuditScopeFingerprint::new(Bytes::new(vec![0x55, 0xaa]))
+                        .map_err(|error| error.to_string())?,
+                    snapshot_id: id::<SnapshotId>(2)?,
+                    security_epoch: SecurityEpoch::INITIAL,
+                    page_ordinal: PageOrdinal::new(1),
+                },
+                id::<ClientRequestId>(3)?,
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 
     fn fingerprint() -> Result<AuditPolicyFingerprint, String> {
@@ -1023,6 +1085,240 @@ mod tests {
                 .any(|entry| entry.operation_id() == operation_id)
         );
         assert!(!after_target.join("EXACT_BACKUP").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn process_crash_before_or_after_atomic_publication_leaves_only_absent_or_verified_audited_target()
+    -> Result<(), String> {
+        if std::env::var_os(BACKUP_ENV).is_some()
+            || std::env::var_os(TARGET_ENV).is_some()
+            || std::env::var_os(CHECKPOINT_ENV).is_some()
+        {
+            let backup = std::env::var_os(BACKUP_ENV)
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("child environment is missing {BACKUP_ENV}"))?;
+            let target = std::env::var_os(TARGET_ENV)
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("child environment is missing {TARGET_ENV}"))?;
+            let wanted = std::env::var(CHECKPOINT_ENV).map_err(|error| {
+                format!("child environment is missing {CHECKPOINT_ENV}: {error}")
+            })?;
+            let permissions = restore_policy()?;
+            let policy = permissions
+                .select(
+                    AuthorizationMode::Now,
+                    id::<PrincipalId>(1)?,
+                    Revision::GENESIS,
+                )
+                .map_err(|error| error.to_string())?;
+            let result = RestoreManager::new().restore_clone_with_checkpoint(
+                RestoreRequest {
+                    backup_root: &backup,
+                    destination: &target,
+                    key: None,
+                    policy,
+                    policy_target: worlddb_core::PolicyTarget::default(),
+                    policy_fingerprint: fingerprint()?,
+                },
+                |checkpoint| {
+                    if checkpoint_name(checkpoint) == wanted {
+                        std::process::exit(CRASH_EXIT_CODE);
+                    }
+                    false
+                },
+            );
+            if wanted == "existing_destination" {
+                return match result {
+                    Err(RestoreError::TargetAlreadyExists) => Ok(()),
+                    other => Err(format!("existing target was not rejected: {other:?}")),
+                };
+            }
+            return Err(format!(
+                "restore child did not exit at {wanted}; restore returned {result:?}"
+            ));
+        }
+
+        let area = TempArea::create()?;
+        let source =
+            DatabaseLayout::create(area.0.join("source")).map_err(|error| error.to_string())?;
+        let source_id = source
+            .database_id()
+            .ok_or("source database identity missing")?;
+        let exact_backup = area.0.join("backup-exact");
+        ExactBackupManager::new(source.clone())
+            .create_exact_backup(&exact_backup, None)
+            .map_err(|error| error.to_string())?;
+        let audit_writer = RawReadAuditWal::new(source.clone())
+            .try_writer()
+            .map_err(|error| error.to_string())?;
+        append_audit_attempt(&audit_writer)?;
+        let audit_permissions = restore_policy()?;
+        let audit_policy = audit_permissions
+            .select(
+                AuthorizationMode::Now,
+                id::<PrincipalId>(1)?,
+                Revision::GENESIS,
+            )
+            .map_err(|error| error.to_string())?;
+        let audit_complete_backup = area.0.join("backup-audit-complete");
+        ExactBackupManager::new(source.clone())
+            .create_audit_complete_backup(
+                &audit_complete_backup,
+                None,
+                &audit_writer,
+                audit_policy,
+                worlddb_core::PolicyTarget::default(),
+            )
+            .map_err(|error| error.to_string())?;
+        drop(audit_writer);
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+
+        let existing_target = area.0.join("existing-target");
+        fs::create_dir(&existing_target).map_err(|error| error.to_string())?;
+        let sentinel = existing_target.join("keep.bin");
+        fs::write(&sentinel, b"preserve-existing-destination")
+            .map_err(|error| error.to_string())?;
+        let existing = restore_child(
+            &executable,
+            &exact_backup,
+            &existing_target,
+            "existing_destination",
+        )?;
+        if !existing.status.success() {
+            return Err(format!(
+                "existing-target child exited with {:?}; {}",
+                existing.status.code(),
+                output_text(&existing)
+            ));
+        }
+        assert_eq!(
+            fs::read(&sentinel).map_err(|error| error.to_string())?,
+            b"preserve-existing-destination"
+        );
+        assert_eq!(
+            fs::read_dir(&existing_target)
+                .map_err(|error| error.to_string())?
+                .count(),
+            1,
+            "restore must not add files to an existing destination"
+        );
+
+        for (profile, backup) in [
+            ("exact", exact_backup.as_path()),
+            ("audit-complete", audit_complete_backup.as_path()),
+        ] {
+            let initial_backup_verification = super::super::verify_exact_backup(backup, None)
+                .map_err(|error| error.to_string())?;
+            for checkpoint in ["before_publish", "after_publish"] {
+                let target = area.0.join(format!("crash-{profile}-{checkpoint}"));
+                let output = restore_child(&executable, backup, &target, checkpoint)?;
+                if output.status.code() != Some(CRASH_EXIT_CODE) {
+                    return Err(format!(
+                        "restore child for {profile} at {checkpoint} exited with {:?}, expected process exit {CRASH_EXIT_CODE}; {}",
+                        output.status.code(),
+                        output_text(&output)
+                    ));
+                }
+
+                if checkpoint == "before_publish" {
+                    assert!(
+                        !target.exists(),
+                        "destination became visible before atomic publication for {profile}"
+                    );
+                } else {
+                    assert!(
+                        target.is_dir(),
+                        "published {profile} destination disappeared after crash"
+                    );
+                    assert!(!target.join("EXACT_BACKUP").exists());
+                    assert!(!target.join("EXACT_BACKUP.INCOMPLETE").exists());
+
+                    let restored =
+                        DatabaseLayout::open(&target).map_err(|error| error.to_string())?;
+                    let restored_id = restored
+                        .database_id()
+                        .ok_or("published clone database identity missing")?;
+                    assert_ne!(restored_id, source_id);
+                    let lock = restored
+                        .try_writer_lock()
+                        .map_err(|error| error.to_string())?;
+                    RecoveryManager::new(restored.clone())
+                        .recover(&lock)
+                        .map_err(|error| error.to_string())?;
+                    let report = StorageVerifier::new(restored.clone())
+                        .verify(&lock)
+                        .map_err(|error| error.to_string())?;
+                    assert!(report.is_clean(), "{report}");
+                    let current = crate::ManifestStore::new(restored.clone())
+                        .read_current()
+                        .map_err(|error| error.to_string())?
+                        .ok_or("published restore has no CURRENT manifest")?;
+                    assert_eq!(current.revision(), report.safe_revision());
+
+                    let audits = WalPrepareLog::new(&restored)
+                        .committed_required_audit_records(&lock)
+                        .map_err(|error| error.to_string())?;
+                    assert_eq!(
+                        audits.len(),
+                        1,
+                        "restore must publish one Required Audit record"
+                    );
+                    let entry = audits
+                        .first()
+                        .ok_or("restore publication audit record is missing")?;
+                    let record = entry.record();
+                    assert_eq!(record.action(), AuditAction::RestorePublication);
+                    assert_eq!(record.object_class(), AuditObjectClass::Database);
+                    assert_eq!(record.outcome(), AuditOutcome::Succeeded);
+                    assert_eq!(record.actor(), id::<PrincipalId>(1)?);
+                    assert_eq!(entry.revision(), report.safe_revision());
+                    assert_eq!(
+                        record.commit_context(),
+                        AuditCommitContext::Committed {
+                            revision: report.safe_revision(),
+                            operation_id: entry.operation_id(),
+                        }
+                    );
+
+                    if initial_backup_verification.profile() == BackupProfile::AuditComplete {
+                        for audit_path in ["audit/AUDIT_MANIFEST", "audit/wal/raw-read.wal"] {
+                            assert_eq!(
+                                fs::read(target.join(audit_path))
+                                    .map_err(|error| error.to_string())?,
+                                fs::read(backup.join(audit_path))
+                                    .map_err(|error| error.to_string())?,
+                                "restored AuditComplete lineage changed at {audit_path}"
+                            );
+                        }
+                    }
+                }
+
+                let backup_verification = super::super::verify_exact_backup(backup, None)
+                    .map_err(|error| error.to_string())?;
+                assert_eq!(
+                    backup_verification.manifest_digest(),
+                    initial_backup_verification.manifest_digest()
+                );
+                assert_eq!(
+                    backup_verification.inventory_digest(),
+                    initial_backup_verification.inventory_digest()
+                );
+                let source_lock = source
+                    .try_writer_lock()
+                    .map_err(|error| error.to_string())?;
+                let source_report = StorageVerifier::new(source.clone())
+                    .verify(&source_lock)
+                    .map_err(|error| error.to_string())?;
+                assert!(source_report.is_clean(), "{source_report}");
+                drop(source_lock);
+            }
+        }
+
+        assert_eq!(
+            fs::read(&sentinel).map_err(|error| error.to_string())?,
+            b"preserve-existing-destination"
+        );
         Ok(())
     }
 }
