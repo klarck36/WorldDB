@@ -26,4 +26,4 @@ These policy-dependent CLI operations remain open for integration with the trust
 
 ## Windows evidence scope
 
-`crates/worlddb-cli/tests/cli_contract.rs` verifies Exact profile verification, explicit scope reporting, fail-closed Exact/AuditComplete creation, scope mismatch rejection, and that unauthorized clone restore neither inspects an arbitrary backup path nor touches its destination. Linux/macOS checks remain deferred to M9-07 as requested.
+`crates/worlddb-cli/tests/cli_contract.rs` verifies Exact and AuditComplete profile verification, explicit scope reporting, fail-closed Exact/AuditComplete creation, scope mismatch rejection, and that unauthorized clone restore neither inspects an arbitrary backup path nor touches its destination. The JSONL results for both profiles parse successfully. Linux/macOS checks remain deferred to M9-07 as requested.

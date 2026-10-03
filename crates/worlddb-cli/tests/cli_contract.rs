@@ -6,10 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use worlddb_core::{DomainId, OperationId};
+use worlddb_core::{
+    AuditScopeFingerprint, AuthorizationMode, Capability, CapabilityGrant, CapabilityRule,
+    ClientRequestId, DomainId, GrantEffect, OperationId, PageOrdinal, PolicyRuleId, PolicyScope,
+    PolicySubject, Principal, PrincipalId, Revision, SecurityEpoch, SecurityPolicyHistory,
+    SecurityPolicySnapshot, SecurityPolicyVersion, SnapshotId,
+};
 use worlddb_storage_file::{
-    DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, WalPrepareLog,
-    WriterLockError,
+    DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, RawReadAuditWal,
+    WalPrepareLog, WriterLockError,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -75,6 +80,77 @@ fn operation_id(tail: u8) -> Result<OperationId, String> {
         tail,
     ])
     .map_err(|error| error.to_string())
+}
+
+fn domain_id<T: DomainId>(tail: u8) -> Result<T, String> {
+    let mut bytes = [0_u8; 16];
+    bytes[6] = 0x70;
+    bytes[8] = 0x80;
+    bytes[15] = tail;
+    T::try_from_bytes(bytes).map_err(|error| error.to_string())
+}
+
+fn create_audit_complete_backup(source: &Path, target: &Path) -> Result<(), String> {
+    let layout = DatabaseLayout::open(source).map_err(|error| error.to_string())?;
+    let audit_writer = RawReadAuditWal::new(layout.clone())
+        .try_writer()
+        .map_err(|error| error.to_string())?;
+    audit_writer
+        .append_attempt(
+            worlddb_core::RawReadAttemptScope {
+                principal_id: domain_id::<PrincipalId>(1)?,
+                scope_fingerprint: AuditScopeFingerprint::new(worlddb_core::Bytes::new(vec![
+                    0x31, 0x01,
+                ]))
+                .map_err(|error| error.to_string())?,
+                snapshot_id: domain_id::<SnapshotId>(2)?,
+                security_epoch: SecurityEpoch::INITIAL,
+                page_ordinal: PageOrdinal::new(1),
+            },
+            domain_id::<ClientRequestId>(3)?,
+        )
+        .map_err(|error| error.to_string())?;
+
+    let principal_id = domain_id::<PrincipalId>(1)?;
+    let rules = [Capability::AuditRead, Capability::AuditExport]
+        .into_iter()
+        .enumerate()
+        .map(|(index, capability)| -> Result<_, String> {
+            let tail = u8::try_from(index + 1).map_err(|error| error.to_string())?;
+            Ok(CapabilityRule::new(
+                domain_id::<PolicyRuleId>(tail)?,
+                PolicySubject::Principal(principal_id),
+                CapabilityGrant::new(capability, GrantEffect::Allow),
+                PolicyScope::project(),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let snapshot =
+        SecurityPolicySnapshot::new(vec![Principal::new(principal_id)], vec![], vec![], rules)
+            .map_err(|error| error.to_string())?;
+    let policy_history = SecurityPolicyHistory::new(
+        Revision::GENESIS,
+        vec![SecurityPolicyVersion::new(
+            Revision::GENESIS,
+            SecurityEpoch::INITIAL,
+            snapshot,
+        )],
+    )
+    .map_err(|error| error.to_string())?;
+    let policy = policy_history
+        .select(AuthorizationMode::Now, principal_id, Revision::GENESIS)
+        .map_err(|error| error.to_string())?;
+
+    ExactBackupManager::new(layout)
+        .create_audit_complete_backup(
+            target,
+            None,
+            &audit_writer,
+            policy,
+            worlddb_core::PolicyTarget::default(),
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[test]
@@ -413,7 +489,7 @@ fn recovery_apply_is_explicit_and_reports_its_effect() -> Result<(), String> {
 }
 
 #[test]
-fn exact_backup_verify_reports_profile_scope_and_target_verification() -> Result<(), String> {
+fn backup_verify_reports_profile_scope_and_target_verification() -> Result<(), String> {
     let area = TempArea::create()?;
     let source = area.path("backup-source");
     let layout = DatabaseLayout::create(&source).map_err(|error| error.to_string())?;
@@ -455,6 +531,39 @@ fn exact_backup_verify_reports_profile_scope_and_target_verification() -> Result
     assert!(verified_text.contains("\"audit_safe_sequence\":null"));
     assert!(!verified_text.contains(&backup_arg));
     assert!(!verified_text.contains(&source_arg));
+
+    let audit_source = area.path("audit-backup-source");
+    DatabaseLayout::create(&audit_source).map_err(|error| error.to_string())?;
+    let audit_backup = area.path("audit-complete-backup");
+    create_audit_complete_backup(&audit_source, &audit_backup)?;
+    let audit_source_arg = audit_source.to_string_lossy().into_owned();
+    let audit_backup_arg = audit_backup.to_string_lossy().into_owned();
+    let audit_verified = run(&[
+        "--format=jsonl",
+        "v1",
+        "backup",
+        "verify",
+        &audit_backup_arg,
+        "--profile",
+        "audit-complete",
+        "--audit-scope",
+        "included",
+    ]);
+    assert!(audit_verified.is_some());
+    let Some(audit_verified) = audit_verified else {
+        return Err("CLI process could not be started".to_owned());
+    };
+    assert!(audit_verified.status.success());
+    assert!(audit_verified.stderr.is_empty());
+    let audit_text = String::from_utf8_lossy(&audit_verified.stdout);
+    assert!(audit_text.contains("\"status\":\"verified\""));
+    assert!(audit_text.contains("\"profile\":\"AuditComplete\""));
+    assert!(audit_text.contains("\"audit_scope\":\"Included\""));
+    assert!(audit_text.contains("\"audit_safe_sequence\":\"1\""));
+    assert!(audit_text.contains("\"target_verified\":true"));
+    assert!(audit_text.contains("\"source_modified\":false"));
+    assert!(!audit_text.contains(&audit_source_arg));
+    assert!(!audit_text.contains(&audit_backup_arg));
     Ok(())
 }
 

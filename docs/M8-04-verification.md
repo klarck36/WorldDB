@@ -19,4 +19,4 @@
 - `cargo fmt --all -- --check`: PASS.
 - `git diff --check`: PASS.
 
-The new CLI backup-verification JSONL result was parsed successfully. `cargo xtask verify` passed on Windows with 39 PASS, 1 expected M0-14 `ci-matrix` SKIP, and 0 FAIL. The task remains `RUNNING`; do not treat the above as full CLI Backup/Restore acceptance. Linux/macOS runs remain deferred to M9-07.
+The Exact and AuditComplete CLI backup-verification JSONL results were both parsed successfully. The final `cargo xtask verify` passed on Windows with 39 PASS, 1 expected M0-14 `ci-matrix` SKIP, and 0 FAIL after both profile cases were present. The task remains `RUNNING`; do not treat the above as full CLI Backup/Restore acceptance. Linux/macOS runs remain deferred to M9-07.
