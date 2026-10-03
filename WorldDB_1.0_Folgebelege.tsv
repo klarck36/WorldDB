@@ -176,17 +176,17 @@ WDB-EVT-004	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_referenc
 WDB-EVT-005	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
 WDB-EVT-007	M4-04b	DONE	artifact:docs/M4-04b-verification.md;test:write_reference_validation::tests::event_references_check_event_kind_role_entity_and_time;test:write_reference_validation::tests::event_reference_rejects_role_outside_selected_post_transaction_schema;test:events::tests::participants_are_canonical_unique_and_cardinality_checked	PASS	2026-10-01T12:19:07+02:00	Event reference success and rejection against the selected post-state are tested; the event constructor separately enforces allowed roles and cardinality.
 WDB-SCH-010	M4-09	DONE	artifact:docs/M4-09-verification.md;test:schema_write_validation::tests::deprecated_opt_in_and_exact_scoped_capability_return_typed_warning	PASS	2026-10-01T12:19:07+02:00	Accepted deprecated-write warnings survive as typed CommitReceipt data; the same test rejects missing opt-in and denied scope.
-WDB-BKP-001	M7-16a	READY	-	-	-	Not started
+WDB-BKP-001	M7-16a	DONE	artifact:docs/M7-16a-backup-crash-matrix.md;test:backup::tests::process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_target;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T04:45:51+02:00	Every copied item and manifest survives independent verification after completion; interrupted backups remain explicitly incomplete.
 WDB-BKP-001	M7-16h	PLANNED	-	-	-	Not started
-WDB-BKP-002	M7-16a	READY	-	-	-	Not started
-WDB-SNP-003	M7-16a	READY	-	-	-	Not started
+WDB-BKP-002	M7-16a	DONE	artifact:docs/M7-16a-backup-crash-matrix.md;test:backup::tests::process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_target;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T04:45:51+02:00	Every prepublication exit returns IncompleteTarget; only exits after marker removal yield a fully verified backup. Retries never overwrite.
+WDB-SNP-003	M7-16a	DONE	artifact:docs/M7-16a-backup-crash-matrix.md;test:backup::tests::process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_target;test:backup::tests::process_crash_releases_stale_pin_after_reopen_without_reclaiming_live_snapshot_segment;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T04:45:51+02:00	A live cross-process pin retains a retired segment; after child exit, reopen removes the stale pin before safe reclamation.
 WDB-SNP-003	M7-16f	PLANNED	-	-	-	Not started
-WDB-STO-006	M7-16a	READY	-	-	-	Not started
-WDB-STO-006	M7-16b	PLANNED	-	-	-	Not started
-WDB-BKP-003	M7-16b	PLANNED	-	-	-	Not started
+WDB-STO-006	M7-16a	DONE	artifact:docs/M7-16a-backup-crash-matrix.md;test:backup::tests::process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_target;run:cargo xtask verify on Windows (38 PASS, 1 expected M0-14 ci-matrix SKIP, 0 FAIL)	PASS	2026-10-03T04:45:51+02:00	Copied item lengths and digests are checked by independent verification after each publication boundary.
+WDB-STO-006	M7-16b	READY	-	-	-	Not started
+WDB-BKP-003	M7-16b	READY	-	-	-	Not started
 WDB-BKP-003	M7-16h	PLANNED	-	-	-	Not started
-WDB-AUD-013	M7-16b	PLANNED	-	-	-	Not started
-WDB-AUD-003	M7-16b	PLANNED	-	-	-	Not started
+WDB-AUD-013	M7-16b	READY	-	-	-	Not started
+WDB-AUD-003	M7-16b	READY	-	-	-	Not started
 WDB-AUD-003	M7-16c	PLANNED	-	-	-	Not started
 WDB-AUD-003	M7-16f	PLANNED	-	-	-	Not started
 WDB-AUD-003	M7-16g	PLANNED	-	-	-	Not started

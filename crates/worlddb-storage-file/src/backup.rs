@@ -23,6 +23,8 @@ use crate::{
 };
 
 mod restore;
+#[cfg(test)]
+mod tests;
 pub(crate) use restore::publish_restore_directory;
 pub use restore::{RestoreError, RestoreManager, RestoreReport};
 mod migration_restore_point;
@@ -274,6 +276,23 @@ pub enum BackupProgressEvent {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BackupCheckpoint {
+    TargetLayoutCreated,
+    IncompleteMarkerWritten,
+    IncompleteMarkerSynced,
+    ItemCreated(usize),
+    ItemFirstChunkWritten(usize),
+    ItemSynced(usize),
+    ManifestFileWritten,
+    ManifestFileSynced,
+    ManifestDirectorySynced,
+    PrepublicationVerified,
+    CompletionMarkerRemoved,
+    CompletionDirectorySynced,
+    FinalVerified,
+}
+
 /// Result of independent exact-backup verification.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackupVerification {
@@ -431,7 +450,37 @@ impl ExactBackupManager {
         target: impl AsRef<Path>,
         key: Option<&BackupMacKey>,
         audit_snapshot: Option<RawReadAuditSnapshot>,
+        progress: impl FnMut(BackupProgressEvent),
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_checkpoint(target, key, audit_snapshot, progress, |_| {})
+    }
+
+    fn create_backup_with_checkpoint(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        audit_snapshot: Option<RawReadAuditSnapshot>,
+        progress: impl FnMut(BackupProgressEvent),
+        checkpoint: impl FnMut(BackupCheckpoint),
+    ) -> Result<BackupVerification, BackupError> {
+        self.create_backup_with_checkpoint_and_buffer(
+            target,
+            key,
+            audit_snapshot,
+            COPY_BUFFER_BYTES,
+            progress,
+            checkpoint,
+        )
+    }
+
+    fn create_backup_with_checkpoint_and_buffer(
+        &self,
+        target: impl AsRef<Path>,
+        key: Option<&BackupMacKey>,
+        audit_snapshot: Option<RawReadAuditSnapshot>,
+        copy_buffer_bytes: usize,
         mut progress: impl FnMut(BackupProgressEvent),
+        mut checkpoint: impl FnMut(BackupCheckpoint),
     ) -> Result<BackupVerification, BackupError> {
         let target_root = normalize_target(target.as_ref(), self.source.root())?;
         let mut snapshot = self.capture_snapshot()?;
@@ -466,7 +515,11 @@ impl ExactBackupManager {
         }
         let target_layout =
             DatabaseLayout::create(&target_root).map_err(BackupError::StorageFile)?;
-        write_incomplete_marker(target_layout.root())?;
+        checkpoint(BackupCheckpoint::TargetLayoutCreated);
+        write_incomplete_marker(target_layout.root(), || {
+            checkpoint(BackupCheckpoint::IncompleteMarkerWritten);
+        })?;
+        checkpoint(BackupCheckpoint::IncompleteMarkerSynced);
 
         progress(BackupProgressEvent::SnapshotPinned {
             database_id: snapshot.metadata.database_id,
@@ -484,8 +537,15 @@ impl ExactBackupManager {
             .try_reserve_exact(total)
             .map_err(|_| BackupError::AllocationFailed)?;
         for (index, item) in snapshot.sources.iter().enumerate() {
-            let copied = copy_source_item(item, self.source.root(), target_layout.root())?;
             let completed = index.checked_add(1).ok_or(BackupError::ResourceLimit)?;
+            let copied = copy_source_item_with_checkpoint(
+                item,
+                self.source.root(),
+                target_layout.root(),
+                completed,
+                copy_buffer_bytes,
+                &mut checkpoint,
+            )?;
             progress(BackupProgressEvent::ItemCopied {
                 completed,
                 total,
@@ -497,31 +557,37 @@ impl ExactBackupManager {
 
         let manifest = BackupManifest::new(snapshot.metadata, items)?;
         let manifest_bytes = manifest.encode(key)?;
-        write_new_file(
+        write_new_file_with_checkpoint(
             &target_layout.root().join(BACKUP_MANIFEST_FILE),
             &manifest_bytes,
             "write exact backup manifest",
+            || checkpoint(BackupCheckpoint::ManifestFileWritten),
         )?;
+        checkpoint(BackupCheckpoint::ManifestFileSynced);
         crate::manifest::sync_directory(target_layout.root()).map_err(|source| {
             BackupError::Io {
                 operation: "sync exact backup manifest directory",
                 source,
             }
         })?;
+        checkpoint(BackupCheckpoint::ManifestDirectorySynced);
 
         let _prepublication_check = verify_exact_backup_internal(target_layout.root(), key, true)?;
+        checkpoint(BackupCheckpoint::PrepublicationVerified);
         fs::remove_file(target_layout.root().join(BACKUP_INCOMPLETE_FILE)).map_err(|source| {
             BackupError::Io {
                 operation: "publish exact backup completion",
                 source,
             }
         })?;
+        checkpoint(BackupCheckpoint::CompletionMarkerRemoved);
         crate::manifest::sync_directory(target_layout.root()).map_err(|source| {
             BackupError::Io {
                 operation: "sync exact backup completion",
                 source,
             }
         })?;
+        checkpoint(BackupCheckpoint::CompletionDirectorySynced);
 
         let verification = verify_exact_backup(target_layout.root(), key)?;
         if key.is_some()
@@ -532,6 +598,7 @@ impl ExactBackupManager {
         {
             return Err(BackupError::IntegrityMismatch);
         }
+        checkpoint(BackupCheckpoint::FinalVerified);
         drop(snapshot);
         Ok(verification)
     }
@@ -1451,6 +1518,28 @@ fn copy_source_item(
     source_root: &Path,
     target_root: &Path,
 ) -> Result<BackupItem, BackupError> {
+    let mut checkpoint = |_| {};
+    copy_source_item_with_checkpoint(
+        source,
+        source_root,
+        target_root,
+        0,
+        COPY_BUFFER_BYTES,
+        &mut checkpoint,
+    )
+}
+
+fn copy_source_item_with_checkpoint(
+    source: &SourceItem,
+    source_root: &Path,
+    target_root: &Path,
+    ordinal: usize,
+    copy_buffer_bytes: usize,
+    checkpoint: &mut impl FnMut(BackupCheckpoint),
+) -> Result<BackupItem, BackupError> {
+    if copy_buffer_bytes == 0 || copy_buffer_bytes > COPY_BUFFER_BYTES {
+        return Err(BackupError::ResourceLimit);
+    }
     let destination = join_item_path(target_root, &source.path)?;
     validate_destination_parent(target_root, &destination)?;
     let kind = BackupItemKind::from_path(&source.path)?;
@@ -1472,6 +1561,7 @@ fn copy_source_item(
             operation: "create exact backup item",
             source,
         })?;
+    checkpoint(BackupCheckpoint::ItemCreated(ordinal));
     let mut input: Box<dyn Read + '_> = match &source.input {
         CopyInput::File(path) => {
             validate_regular_file(path, source_root)?;
@@ -1485,8 +1575,9 @@ fn copy_source_item(
     let mut hasher = blake3::Hasher::new();
     let mut remaining = source.length;
     let mut buffer = [0_u8; COPY_BUFFER_BYTES];
+    let mut first_chunk_written = false;
     while remaining > 0 {
-        let chunk_length = usize::try_from(remaining.min(COPY_BUFFER_BYTES as u64))
+        let chunk_length = usize::try_from(remaining.min(copy_buffer_bytes as u64))
             .map_err(|_| BackupError::ResourceLimit)?;
         let chunk = buffer
             .get_mut(..chunk_length)
@@ -1503,6 +1594,12 @@ fn copy_source_item(
             operation: "write exact backup item",
             source,
         })?;
+        if !first_chunk_written {
+            first_chunk_written = true;
+            if remaining > u64::try_from(read).map_err(|_| BackupError::ResourceLimit)? {
+                checkpoint(BackupCheckpoint::ItemFirstChunkWritten(ordinal));
+            }
+        }
         hasher.update(bytes);
         remaining = remaining
             .checked_sub(u64::try_from(read).map_err(|_| BackupError::ResourceLimit)?)
@@ -1512,6 +1609,7 @@ fn copy_source_item(
         operation: "sync exact backup item",
         source,
     })?;
+    checkpoint(BackupCheckpoint::ItemSynced(ordinal));
     Ok(BackupItem {
         path: source.path.clone(),
         kind,
@@ -1590,15 +1688,25 @@ fn validate_destination_parent(root: &Path, destination: &Path) -> Result<(), Ba
     Ok(())
 }
 
-fn write_incomplete_marker(root: &Path) -> Result<(), BackupError> {
-    write_new_file(
+fn write_incomplete_marker(root: &Path, after_write: impl FnOnce()) -> Result<(), BackupError> {
+    write_new_file_with_checkpoint(
         &root.join(BACKUP_INCOMPLETE_FILE),
         INCOMPLETE_MARKER,
         "write incomplete-backup marker",
+        after_write,
     )
 }
 
 fn write_new_file(path: &Path, bytes: &[u8], operation: &'static str) -> Result<(), BackupError> {
+    write_new_file_with_checkpoint(path, bytes, operation, || {})
+}
+
+fn write_new_file_with_checkpoint(
+    path: &Path,
+    bytes: &[u8],
+    operation: &'static str,
+    after_write: impl FnOnce(),
+) -> Result<(), BackupError> {
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -1606,6 +1714,7 @@ fn write_new_file(path: &Path, bytes: &[u8], operation: &'static str) -> Result<
         .map_err(|source| BackupError::Io { operation, source })?;
     file.write_all(bytes)
         .map_err(|source| BackupError::Io { operation, source })?;
+    after_write();
     file.sync_all()
         .map_err(|source| BackupError::Io { operation, source })
 }

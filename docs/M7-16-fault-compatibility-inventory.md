@@ -56,3 +56,5 @@ The sequence intentionally places M7-16c before migration crash testing: current
 Checked on Windows at 2026-10-03T04:20:38+02:00. `python -X utf8 WorldDB_1.0_Plancheck.py` passed with 252 tasks, 253 invariants, and 209 follow-up pairs. `python -X utf8 WorldDB_1.0_Sourcecheck.py` passed all source and ZIP hash checks. `cargo xtask verify` passed with 38 PASS, 1 expected M0-14 ci-matrix SKIP, and 0 FAIL. `git diff --check HEAD` passed. These checks validate the inventory and plan structure; the new crash rounds remain unimplemented under their separate task IDs.
 
 The M7-16 plan/inventory commit `3df80f7` was pushed to `origin/codex/worlddb-project-integration`; `git ls-remote` confirmed the remote ref at that commit.
+
+Follow-up: M7-16a completed on Windows; see `docs/M7-16a-backup-crash-matrix.md`. M7-16b is now the next READY task.
