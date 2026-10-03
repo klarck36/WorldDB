@@ -28,3 +28,5 @@ cargo test --locked -p worlddb-storage-file backup::tests -- --nocapture
 ```
 
 Result: 2 passed, 0 failed. Full `cargo xtask verify` passed with 38 PASS, 1 expected M0-14 ci-matrix SKIP, and 0 FAIL. Plancheck, Sourcecheck, and `git diff --check HEAD` passed. Linux/macOS execution remains deferred to M9-07.
+
+Commit `b42a243` was pushed to `origin/codex/worlddb-project-integration`; `git ls-remote` confirmed the branch at that commit.
