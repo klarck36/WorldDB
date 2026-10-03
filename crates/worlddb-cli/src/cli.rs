@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use worlddb_core::api::v1::{CURRENT_PROTOCOL, PublicCode, RequestId};
+use worlddb_core::{DatabaseId, DomainId};
+use worlddb_storage_file::{
+    DatabaseLayout, FormatProbeError, RecoveryDisposition, RecoveryError, RecoveryManager,
+    SalvageError, SalvageInventorySource, SalvageManager, SalvageSegmentOutcome,
+    StorageDamageClass, StorageFileError, StorageVerifier, StorageVerifyAction, StorageVerifyError,
+    StorageVerifyReport, WriterLockError,
+};
 
 use crate::adapter_protocol::{
     AdapterManifest, AdapterProcessHost, AdapterProtocolError, MAX_ADAPTER_MANIFEST_ENCODED_BYTES,
@@ -26,9 +33,13 @@ const EXIT_CANCELLED: u8 = 9;
 const EXIT_BUDGET_EXCEEDED: u8 = 10;
 const EXIT_INTERNAL: u8 = 70;
 
-const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                 Show version 1 command help\n  v1 version              Show CLI and protocol versions\n  v1 adapter run          Run an isolated import/export adapter\n  --help                  Show this help\n  --version               Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
+const HELP_ROOT: &str = "WorldDB CLI\n\nUsage: worlddb-cli [--format human|jsonl] <COMMAND>\n\nCommands:\n  v1 help                    Show version 1 command help\n  v1 version                 Show CLI and protocol versions\n  v1 verify <database>       Read-only storage verification\n  v1 recovery inspect <db>   Read-only recovery and damage report\n  v1 recovery run --apply <db>  Explicit journaled recovery\n  v1 open --read-only <db>   Validate a database without writing\n  v1 salvage <source> --output <new-dir>  Copy verified data to a new fork\n  v1 adapter run             Run an isolated import/export adapter\n  --help                     Show this help\n  --version                  Show version information\n\nThe unversioned `adapter run` command remains available as a compatibility alias.";
 
 const HELP_ADAPTER_RUN: &str = "Usage: worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\n\nThe manifest binds the operation, deterministic seed, ID mapping, protocol capabilities, and process budgets. The adapter receives only framed stdin/stdout data; the output file is written only after a clean adapter exit.";
+const HELP_VERIFY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 verify <database-directory>\n\nRuns read-only storage verification under a shared lock. The report includes safe_revision, disposition, observed damage classes, and safe next actions.";
+const HELP_RECOVERY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 recovery inspect <database-directory>\n       worlddb-cli [--format human|jsonl] v1 recovery run --apply <database-directory>\n\n`inspect` is read-only. `run --apply` explicitly enables journaled recovery of eligible WAL tails and committed snapshots.";
+const HELP_OPEN_READ_ONLY: &str = "Usage: worlddb-cli [--format human|jsonl] v1 open --read-only <database-directory>\n\nValidates and verifies the database without creating files, changing storage, or enabling writes.";
+const HELP_SALVAGE: &str = "Usage: worlddb-cli [--format human|jsonl] v1 salvage <source-directory> --output <new-directory>\n\nCopies verified immutable data to a new marked salvage fork. The source is opened with a shared read-only lock and is never repaired or rewritten.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
@@ -40,12 +51,83 @@ enum OutputFormat {
 enum HelpScope {
     Root,
     AdapterRun,
+    Verify,
+    Recovery,
+    OpenReadOnly,
+    Salvage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CheckKind {
+    Verify,
+    RecoveryInspect,
+    OpenReadOnly,
+}
+
+impl CheckKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Verify => "verify",
+            Self::RecoveryInspect => "recovery_inspect",
+            Self::OpenReadOnly => "open_read_only",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct DamageSummary {
+    counts: [usize; 6],
+    actions: [bool; 6],
+}
+
+impl DamageSummary {
+    fn from_report(report: &StorageVerifyReport) -> Self {
+        let mut summary = Self::default();
+        for finding in report.findings() {
+            if let Some(count) = summary.counts.get_mut(damage_class_index(finding.class())) {
+                *count = (*count).saturating_add(1);
+            }
+            for action in finding.safe_next_actions() {
+                if let Some(selected) = summary.actions.get_mut(verify_action_index(*action)) {
+                    *selected = true;
+                }
+            }
+        }
+        summary
+    }
+
+    fn finding_count(self) -> usize {
+        self.counts.iter().copied().sum()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Success {
     Help(HelpScope),
     Version,
+    StorageCheck {
+        kind: CheckKind,
+        safe_revision: u64,
+        disposition: RecoveryDisposition,
+        damage: DamageSummary,
+    },
+    RecoveryApplied {
+        safe_revision: u64,
+        disposition: RecoveryDisposition,
+        damage: DamageSummary,
+        quarantined_tails: usize,
+        replayed_snapshots: usize,
+        manifest_published: bool,
+    },
+    Salvage {
+        database_id: DatabaseId,
+        safe_revision: u64,
+        disposition: RecoveryDisposition,
+        inventory_source: SalvageInventorySource,
+        copied_segments: usize,
+        omitted_segments: usize,
+        finding_count: usize,
+    },
     AdapterRun {
         protocol_major: u16,
         protocol_minor: u16,
@@ -236,6 +318,18 @@ fn parse_help_scope(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     {
         return Ok(Success::Help(HelpScope::AdapterRun));
     }
+    if scope == "verify" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Verify));
+    }
+    if scope == "recovery" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Recovery));
+    }
+    if scope == "open" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::OpenReadOnly));
+    }
+    if scope == "salvage" && arguments.is_empty() {
+        return Ok(Success::Help(HelpScope::Salvage));
+    }
     Err(CliError::invalid_request())
 }
 
@@ -258,6 +352,18 @@ fn parse_v1_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliErr
     }
     if command == "adapter" {
         return parse_adapter_command(arguments);
+    }
+    if command == "verify" {
+        return parse_verify_command(arguments);
+    }
+    if command == "recovery" {
+        return parse_recovery_command(arguments);
+    }
+    if command == "open" {
+        return parse_open_command(arguments);
+    }
+    if command == "salvage" {
+        return parse_salvage_command(arguments);
     }
     Err(CliError::unsupported_operation())
 }
@@ -284,6 +390,173 @@ fn parse_adapter_command(mut arguments: VecDeque<OsString>) -> Result<Success, C
         return Ok(Success::Help(HelpScope::AdapterRun));
     }
     run_adapter(arguments)
+}
+
+fn parse_verify_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::Verify));
+    }
+    let Some(database_path) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if !arguments.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+    run_storage_check(Path::new(&database_path), CheckKind::Verify)
+}
+
+fn parse_open_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::OpenReadOnly));
+    }
+    if arguments.pop_front().as_deref() != Some(OsString::from("--read-only").as_os_str()) {
+        return Err(CliError::invalid_request());
+    }
+    let Some(database_path) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if !arguments.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+    run_storage_check(Path::new(&database_path), CheckKind::OpenReadOnly)
+}
+
+fn parse_recovery_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    let Some(subcommand) = arguments.pop_front() else {
+        return Ok(Success::Help(HelpScope::Recovery));
+    };
+    if subcommand == "--help" || subcommand == "-h" || subcommand == "help" {
+        return if arguments.is_empty() {
+            Ok(Success::Help(HelpScope::Recovery))
+        } else {
+            Err(CliError::invalid_request())
+        };
+    }
+    if subcommand == "inspect" {
+        if arguments.len() == 1
+            && arguments
+                .front()
+                .is_some_and(|argument| argument == "--help")
+        {
+            return Ok(Success::Help(HelpScope::Recovery));
+        }
+        let Some(database_path) = arguments.pop_front() else {
+            return Err(CliError::invalid_request());
+        };
+        if !arguments.is_empty() {
+            return Err(CliError::invalid_request());
+        }
+        return run_storage_check(Path::new(&database_path), CheckKind::RecoveryInspect);
+    }
+    if subcommand == "run" {
+        if arguments.len() == 1
+            && arguments
+                .front()
+                .is_some_and(|argument| argument == "--help")
+        {
+            return Ok(Success::Help(HelpScope::Recovery));
+        }
+        if arguments.pop_front().as_deref() != Some(OsString::from("--apply").as_os_str()) {
+            return Err(CliError::invalid_request());
+        }
+        let Some(database_path) = arguments.pop_front() else {
+            return Err(CliError::invalid_request());
+        };
+        if !arguments.is_empty() {
+            return Err(CliError::invalid_request());
+        }
+        return run_recovery(Path::new(&database_path));
+    }
+    Err(CliError::unsupported_operation())
+}
+
+fn parse_salvage_command(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    if arguments.len() == 1
+        && arguments
+            .front()
+            .is_some_and(|argument| argument == "--help")
+    {
+        return Ok(Success::Help(HelpScope::Salvage));
+    }
+    let Some(source_path) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if arguments.pop_front().as_deref() != Some(OsString::from("--output").as_os_str()) {
+        return Err(CliError::invalid_request());
+    }
+    let Some(target_path) = arguments.pop_front() else {
+        return Err(CliError::invalid_request());
+    };
+    if !arguments.is_empty() {
+        return Err(CliError::invalid_request());
+    }
+    run_salvage(Path::new(&source_path), Path::new(&target_path))
+}
+
+fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> {
+    let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
+    let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
+    let report = StorageVerifier::new(layout)
+        .verify(&lock)
+        .map_err(map_storage_verify_error)?;
+    Ok(Success::StorageCheck {
+        kind,
+        safe_revision: report.safe_revision().value(),
+        disposition: report.disposition(),
+        damage: DamageSummary::from_report(&report),
+    })
+}
+
+fn run_recovery(path: &Path) -> Result<Success, CliError> {
+    let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
+    let lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
+    let outcome = RecoveryManager::new(layout.clone())
+        .recover(&lock)
+        .map_err(map_recovery_error)?;
+    let report = StorageVerifier::new(layout)
+        .verify(&lock)
+        .map_err(map_storage_verify_error)?;
+    Ok(Success::RecoveryApplied {
+        safe_revision: report.safe_revision().value(),
+        disposition: report.disposition(),
+        damage: DamageSummary::from_report(&report),
+        quarantined_tails: outcome.quarantined_tails(),
+        replayed_snapshots: outcome.replayed_snapshots(),
+        manifest_published: outcome.manifest_receipt().is_some(),
+    })
+}
+
+fn run_salvage(source: &Path, target: &Path) -> Result<Success, CliError> {
+    let layout = DatabaseLayout::open(source).map_err(map_storage_file_error)?;
+    let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
+    let report = SalvageManager::new(layout)
+        .salvage(&lock, target)
+        .map_err(map_salvage_error)?;
+    let mut copied_segments = 0;
+    let mut omitted_segments = 0;
+    for segment in report.segments() {
+        match segment.outcome() {
+            SalvageSegmentOutcome::Copied { .. } => copied_segments += 1,
+            SalvageSegmentOutcome::Omitted { .. } => omitted_segments += 1,
+        }
+    }
+    Ok(Success::Salvage {
+        database_id: report.database_id(),
+        safe_revision: report.safe_revision().value(),
+        disposition: report.disposition(),
+        inventory_source: report.inventory_source(),
+        copied_segments,
+        omitted_segments,
+        finding_count: report.findings().len(),
+    })
 }
 
 fn is_version_namespace(value: &str) -> bool {
@@ -403,6 +676,167 @@ fn map_adapter_error(error: AdapterProtocolError) -> CliError {
     CliError::new(code)
 }
 
+fn map_storage_file_error(error: StorageFileError) -> CliError {
+    match error {
+        StorageFileError::DatabaseAlreadyExists => CliError::invalid_request(),
+        StorageFileError::Identity(_) | StorageFileError::StagingNameExhausted => {
+            CliError::new(PublicCode::INTERNAL)
+        }
+        StorageFileError::InvalidDatabaseId(_)
+        | StorageFileError::InvalidLayoutEntry { .. }
+        | StorageFileError::PathEscapesDatabaseRoot { .. } => {
+            CliError::new(PublicCode::CORRUPT_DATA)
+        }
+        StorageFileError::Io { .. } => CliError::new(PublicCode::STORAGE_READ),
+        StorageFileError::Format(FormatProbeError::UnsupportedRequiredCapabilities { .. }) => {
+            CliError::unsupported_operation()
+        }
+        StorageFileError::Format(_) => CliError::new(PublicCode::CORRUPT_DATA),
+        StorageFileError::WriterLock(error) => map_writer_lock_error(error),
+        StorageFileError::RecoveryRequired => CliError::unsupported_operation(),
+    }
+}
+
+fn map_writer_lock_error(error: WriterLockError) -> CliError {
+    match error {
+        WriterLockError::AlreadyHeld
+        | WriterLockError::LockFileMissing
+        | WriterLockError::Io(_) => CliError::new(PublicCode::STORAGE_READ),
+    }
+}
+
+fn map_storage_verify_error(error: StorageVerifyError) -> CliError {
+    match error {
+        StorageVerifyError::Recovery(_) | StorageVerifyError::Wal(_) => {
+            CliError::new(PublicCode::STORAGE_READ)
+        }
+        StorageVerifyError::HistorySegment(_) | StorageVerifyError::SecuritySegment(_) => {
+            CliError::new(PublicCode::CORRUPT_DATA)
+        }
+    }
+}
+
+fn map_recovery_error(error: RecoveryError) -> CliError {
+    match error {
+        RecoveryError::UnsafeFindings(_)
+        | RecoveryError::InvalidReplayPayload
+        | RecoveryError::ReplaySegmentMissing
+        | RecoveryError::ReplayRevisionInvalid
+        | RecoveryError::TailJournalMismatch
+        | RecoveryError::TailSourceInvalid => CliError::new(PublicCode::CORRUPT_DATA),
+        RecoveryError::ForeignWriterLock | RecoveryError::WriteAccessDenied => {
+            CliError::unsupported_operation()
+        }
+        RecoveryError::Interrupted => CliError::new(PublicCode::CANCELLED),
+        RecoveryError::Scan(_)
+        | RecoveryError::Journal(_)
+        | RecoveryError::Wal(_)
+        | RecoveryError::Manifest(_)
+        | RecoveryError::HistorySegment(_)
+        | RecoveryError::SecuritySegment(_)
+        | RecoveryError::Io { .. } => CliError::new(PublicCode::STORAGE_READ),
+    }
+}
+
+fn map_salvage_error(error: SalvageError) -> CliError {
+    match error {
+        SalvageError::ForeignWriterLock => CliError::unsupported_operation(),
+        SalvageError::Scan(_) => CliError::new(PublicCode::STORAGE_READ),
+        SalvageError::Identity(_) => CliError::new(PublicCode::INTERNAL),
+        SalvageError::InvalidTarget | SalvageError::TargetExists => CliError::invalid_request(),
+        SalvageError::Io { .. } => CliError::new(PublicCode::STORAGE_READ),
+    }
+}
+
+fn damage_class_index(class: StorageDamageClass) -> usize {
+    match class {
+        StorageDamageClass::Bitflip => 0,
+        StorageDamageClass::Truncation => 1,
+        StorageDamageClass::Reorder => 2,
+        StorageDamageClass::DuplicateFrame => 3,
+        StorageDamageClass::SemanticInvalidity => 4,
+        StorageDamageClass::Other => 5,
+    }
+}
+
+fn damage_class_label(index: usize) -> &'static str {
+    match index {
+        0 => "Bitflip",
+        1 => "Truncation",
+        2 => "Reorder",
+        3 => "DuplicateFrame",
+        4 => "SemanticInvalidity",
+        _ => "Other",
+    }
+}
+
+fn verify_action_index(action: StorageVerifyAction) -> usize {
+    match action {
+        StorageVerifyAction::PreserveOriginal => 0,
+        StorageVerifyAction::KeepReadOnly => 1,
+        StorageVerifyAction::RunJournaledTailRecovery => 2,
+        StorageVerifyAction::RunJournaledRecovery => 3,
+        StorageVerifyAction::RestoreVerifiedBackupToNewDestination => 4,
+        StorageVerifyAction::SalvageIntoNewDatabase => 5,
+    }
+}
+
+fn verify_action_label(index: usize) -> &'static str {
+    match index {
+        0 => "PreserveOriginal",
+        1 => "KeepReadOnly",
+        2 => "RunJournaledTailRecovery",
+        3 => "RunJournaledRecovery",
+        4 => "RestoreVerifiedBackupToNewDestination",
+        _ => "SalvageIntoNewDatabase",
+    }
+}
+
+const fn disposition_label(disposition: RecoveryDisposition) -> &'static str {
+    match disposition {
+        RecoveryDisposition::Clean => "Clean",
+        RecoveryDisposition::RecoveryRequired => "RecoveryRequired",
+        RecoveryDisposition::QuarantinedReadOnly => "QuarantinedReadOnly",
+    }
+}
+
+const fn salvage_inventory_label(source: SalvageInventorySource) -> &'static str {
+    match source {
+        SalvageInventorySource::CommittedWalSnapshot { .. } => "CommittedWalSnapshot",
+        SalvageInventorySource::CurrentManifest { .. } => "CurrentManifest",
+        SalvageInventorySource::NoVerifiedInventory => "NoVerifiedInventory",
+    }
+}
+
+fn format_damage_counts(summary: DamageSummary) -> String {
+    let mut output = String::from("{");
+    for (index, count) in summary.counts.iter().enumerate() {
+        if index > 0 {
+            output.push(',');
+        }
+        let _ = write!(output, "{}={count}", damage_class_label(index));
+    }
+    output.push('}');
+    output
+}
+
+fn format_safe_actions(summary: DamageSummary) -> String {
+    let mut output = String::new();
+    for (index, selected) in summary.actions.iter().enumerate() {
+        if *selected {
+            if !output.is_empty() {
+                output.push(',');
+            }
+            output.push_str(verify_action_label(index));
+        }
+    }
+    if output.is_empty() {
+        String::from("none")
+    } else {
+        output
+    }
+}
+
 fn new_request_id() -> Result<RequestId, ()> {
     let mut bytes = [0_u8; 16];
     getrandom::fill(&mut bytes).map_err(|_| ())?;
@@ -440,6 +874,10 @@ fn write_success<W: Write>(
         OutputFormat::Human => match success {
             Success::Help(HelpScope::Root) => writeln!(writer, "{HELP_ROOT}"),
             Success::Help(HelpScope::AdapterRun) => writeln!(writer, "{HELP_ADAPTER_RUN}"),
+            Success::Help(HelpScope::Verify) => writeln!(writer, "{HELP_VERIFY}"),
+            Success::Help(HelpScope::Recovery) => writeln!(writer, "{HELP_RECOVERY}"),
+            Success::Help(HelpScope::OpenReadOnly) => writeln!(writer, "{HELP_OPEN_READ_ONLY}"),
+            Success::Help(HelpScope::Salvage) => writeln!(writer, "{HELP_SALVAGE}"),
             Success::Version => writeln!(
                 writer,
                 "worlddb-cli {} (CLI protocol {}.{})",
@@ -455,6 +893,59 @@ fn write_success<W: Write>(
                 writer,
                 "adapter completed: protocol {protocol_major}.{protocol_minor}, {output_bytes} output bytes"
             ),
+            Success::StorageCheck {
+                kind,
+                safe_revision,
+                disposition,
+                damage,
+            } => writeln!(
+                writer,
+                "{}: disposition={}, safe_revision={}, findings={}, damage_classes={}, safe_actions={}, source_modified=false",
+                kind.label(),
+                disposition_label(disposition),
+                safe_revision,
+                damage.finding_count(),
+                format_damage_counts(damage),
+                format_safe_actions(damage)
+            ),
+            Success::RecoveryApplied {
+                safe_revision,
+                disposition,
+                damage,
+                quarantined_tails,
+                replayed_snapshots,
+                manifest_published,
+            } => writeln!(
+                writer,
+                "recovery: disposition={}, safe_revision={}, findings={}, damage_classes={}, quarantined_tails={}, replayed_snapshots={}, manifest_published={}, source_modified={}",
+                disposition_label(disposition),
+                safe_revision,
+                damage.finding_count(),
+                format_damage_counts(damage),
+                quarantined_tails,
+                replayed_snapshots,
+                manifest_published,
+                quarantined_tails > 0 || replayed_snapshots > 0 || manifest_published
+            ),
+            Success::Salvage {
+                database_id,
+                safe_revision,
+                disposition,
+                inventory_source,
+                copied_segments,
+                omitted_segments,
+                finding_count,
+            } => writeln!(
+                writer,
+                "salvage: new_database_id={}, inventory_source={}, disposition={}, safe_revision={}, copied_segments={}, omitted_segments={}, findings={}, source_modified=false",
+                database_id.to_canonical_string(),
+                salvage_inventory_label(inventory_source),
+                disposition_label(disposition),
+                safe_revision,
+                copied_segments,
+                omitted_segments,
+                finding_count
+            ),
         },
         OutputFormat::JsonLines => write_json_success(writer, request_id, success),
     }
@@ -469,11 +960,27 @@ fn write_json_success<W: Write>(
     match success {
         Success::Help(HelpScope::Root) => writeln!(
             writer,
-            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1\",\"v1 version\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"root\",\"usage\":\"worlddb-cli [--format human|jsonl] <COMMAND>\",\"commands\":[\"v1 verify\",\"v1 recovery inspect\",\"v1 recovery run --apply\",\"v1 open --read-only\",\"v1 salvage\",\"v1 adapter run\",\"help\",\"--version\"]}}}}}}"
         ),
         Success::Help(HelpScope::AdapterRun) => writeln!(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"adapter_run\",\"usage\":\"worlddb-cli [--format human|jsonl] v1 adapter run --manifest <file> --input <file> --output <file> -- <adapter-executable> [arguments...]\",\"required_options\":[\"--manifest\",\"--input\",\"--output\"],\"separator\":\"--\"}}}}}}"
+        ),
+        Success::Help(HelpScope::Verify) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"verify\",\"usage\":\"worlddb-cli [--format human|jsonl] v1 verify <database-directory>\"}}}}}}"
+        ),
+        Success::Help(HelpScope::Recovery) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"recovery\",\"inspect_usage\":\"v1 recovery inspect <database-directory>\",\"apply_usage\":\"v1 recovery run --apply <database-directory>\"}}}}}}"
+        ),
+        Success::Help(HelpScope::OpenReadOnly) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"open_read_only\",\"usage\":\"v1 open --read-only <database-directory>\"}}}}}}"
+        ),
+        Success::Help(HelpScope::Salvage) => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"help\",\"data\":{{\"scope\":\"salvage\",\"usage\":\"v1 salvage <source-directory> --output <new-directory>\"}}}}}}"
         ),
         Success::Version => writeln!(
             writer,
@@ -490,7 +997,85 @@ fn write_json_success<W: Write>(
             writer,
             "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"adapter_run\",\"data\":{{\"status\":\"completed\",\"adapter_protocol\":{{\"major\":{protocol_major},\"minor\":{protocol_minor}}},\"output_bytes\":\"{output_bytes}\"}}}}}}"
         ),
+        Success::StorageCheck {
+            kind,
+            safe_revision,
+            disposition,
+            damage,
+        } => {
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"{}\",\"data\":{{\"status\":\"completed\",\"safe_revision\":\"{safe_revision}\",\"disposition\":\"{}\",\"finding_count\":\"{}\",\"source_modified\":false,\"damage_classes\":{{",
+                kind.label(),
+                disposition_label(disposition),
+                damage.finding_count()
+            )?;
+            write_json_damage_counts(writer, damage)?;
+            writer.write_all(b"},\"safe_actions\":[")?;
+            write_json_safe_actions(writer, damage)?;
+            writer.write_all(b"]}}}\n")
+        }
+        Success::RecoveryApplied {
+            safe_revision,
+            disposition,
+            damage,
+            quarantined_tails,
+            replayed_snapshots,
+            manifest_published,
+        } => {
+            let source_modified =
+                quarantined_tails > 0 || replayed_snapshots > 0 || manifest_published;
+            write!(
+                writer,
+                "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"recovery\",\"data\":{{\"status\":\"applied\",\"safe_revision\":\"{safe_revision}\",\"disposition\":\"{}\",\"finding_count\":\"{}\",\"source_modified\":{source_modified},\"quarantined_tails\":\"{quarantined_tails}\",\"replayed_snapshots\":\"{replayed_snapshots}\",\"manifest_published\":{manifest_published},\"damage_classes\":{{",
+                disposition_label(disposition),
+                damage.finding_count()
+            )?;
+            write_json_damage_counts(writer, damage)?;
+            writer.write_all(b"},\"safe_actions\":[")?;
+            write_json_safe_actions(writer, damage)?;
+            writer.write_all(b"]}}}\n")
+        }
+        Success::Salvage {
+            database_id,
+            safe_revision,
+            disposition,
+            inventory_source,
+            copied_segments,
+            omitted_segments,
+            finding_count,
+        } => writeln!(
+            writer,
+            "{{\"cli_protocol\":{{\"major\":1,\"minor\":0}},\"request_id\":\"{request_id}\",\"outcome\":{{\"type\":\"salvage\",\"data\":{{\"status\":\"completed\",\"new_database_id\":\"{}\",\"inventory_source\":\"{}\",\"safe_revision\":\"{safe_revision}\",\"disposition\":\"{}\",\"copied_segments\":\"{copied_segments}\",\"omitted_segments\":\"{omitted_segments}\",\"finding_count\":\"{finding_count}\",\"archive_created\":true,\"source_modified\":false}}}}}}",
+            database_id.to_canonical_string(),
+            salvage_inventory_label(inventory_source),
+            disposition_label(disposition)
+        ),
     }
+}
+
+fn write_json_damage_counts<W: Write>(writer: &mut W, damage: DamageSummary) -> io::Result<()> {
+    for (index, count) in damage.counts.iter().enumerate() {
+        if index > 0 {
+            writer.write_all(b",")?;
+        }
+        write!(writer, "\"{}\":\"{}\"", damage_class_label(index), count)?;
+    }
+    Ok(())
+}
+
+fn write_json_safe_actions<W: Write>(writer: &mut W, damage: DamageSummary) -> io::Result<()> {
+    let mut first = true;
+    for (index, selected) in damage.actions.iter().enumerate() {
+        if *selected {
+            if !first {
+                writer.write_all(b",")?;
+            }
+            first = false;
+            write!(writer, "\"{}\"", verify_action_label(index))?;
+        }
+    }
+    Ok(())
 }
 
 fn write_human_error<W: Write>(writer: &mut W, error: CliError) -> io::Result<()> {

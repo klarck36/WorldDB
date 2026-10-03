@@ -412,6 +412,15 @@ impl DatabaseLayout {
         Ok(lock)
     }
 
+    /// Acquires a shared lock for read-only scans without creating a lock file.
+    ///
+    /// This fails with [`WriterLockError::LockFileMissing`] when the database
+    /// has never established its stable lock file. Callers can then report that
+    /// read-only access is unavailable without modifying the database.
+    pub fn try_read_only_lock(&self) -> Result<WriterLock, WriterLockError> {
+        WriterLock::try_acquire_read_only(&self.root, &self.writer_lock_file())
+    }
+
     /// Rewrites the format probe to a same-volume staging file and publishes
     /// it with one rename while holding the exclusive writer lock.
     pub fn resave_format(&self) -> Result<(), StorageFileError> {

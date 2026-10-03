@@ -16,7 +16,7 @@ worlddb-cli --version
 
 ## Output envelopes
 
-CLI command results use the closed versioned envelope below. The `outcome` is an adjacent-tagged union (`type` plus `data`); version 1.0 defines `help`, `version`, `adapter_run`, and `error` outcomes. Query commands use the query `ResponseEnvelope` from [the query transport contract](query_transport_contract.md), with the same protocol version and request ID rules.
+CLI command results use the closed versioned envelope below. The `outcome` is an adjacent-tagged union (`type` plus `data`); version 1.0 defines `help`, `version`, `adapter_run`, `verify`, `recovery_inspect`, `recovery`, `open_read_only`, `salvage`, and `error` outcomes. Storage outcomes and their read-only/write guarantees are specified in [the M8-03 storage CLI contract](M8-03-cli-storage-contract.md). Query commands use the query `ResponseEnvelope` from [the query transport contract](query_transport_contract.md), with the same protocol version and request ID rules.
 
 ```json
 {"cli_protocol":{"major":1,"minor":0},"request_id":"00112233-4455-4677-8899-aabbccddeeff","outcome":{"type":"error","data":{"code":"InvalidRequest","retryable":false,"message_key":"InvalidRequest"}}}
