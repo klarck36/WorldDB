@@ -21,3 +21,8 @@ Prüfbelege vom 4. Oktober 2026:
 - git diff --check — PASS.
 
 Es wurden keine Produkttests ausgeführt, da diese Planungs-Task keinen Produktcode ändert. M8-14a ist nachweislich die einzige READY-Task.
+
+Veröffentlichung:
+
+- Commit: 65f4bf0b428b4caf0e24352358f79cb889c9b195 (docs: split M8-14 into implementation tasks).
+- Push zu origin/codex/worlddb-project-integration erfolgreich; der anschließende Remote-Head-Abgleich lieferte denselben vollständigen Commit-Hash.
