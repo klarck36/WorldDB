@@ -26,3 +26,5 @@ cargo test --locked -p worlddb-storage-file backup::restore::tests::process_cras
 ```
 
 Result: 1 matrix test passed; it exercises four child-process exits plus the existing-destination child attempt across both backup profiles. Full `cargo xtask verify` passed with 38 PASS, 1 expected M0-14 ci-matrix SKIP, and 0 FAIL. Plancheck passed with 252 tasks, 253 invariants, and 209 follow-up pairs; Sourcecheck, `cargo fmt --all -- --check`, and `git diff --check HEAD` passed. Linux/macOS execution remains deferred to M9-07.
+
+Commit 3ed95ec was pushed to origin/codex/worlddb-project-integration; the remote branch ref was verified at that commit.
