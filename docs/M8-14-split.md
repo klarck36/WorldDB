@@ -7,7 +7,7 @@ Die ursprüngliche Abnahme M8-14 erfordert drei noch nicht vorhandene Bausteine:
 | Task | Inhalt | Voraussetzung |
 |---|---|---|
 | M8-14 | Planung/Abdeckung der Zerlegung; genau die erste Untertask freigeben | M8-13a |
-| M8-14a | WAL-/Manifest-/Audit-gebundene Assertion-, Mask- und Boundary-Erfassung mit Validierung | M8-14 |
+| M8-14a | WAL-/Manifest-gebundene Assertion-, Mask- und Boundary-Erfassung mit Validierung; policy-geforderter AuditRecord im selben Commit | M8-14 |
 | M8-14b | Auflösungsvorschau mit Known/Unknown/Conflict, technischen Fehlern und explizit leerer Menge | M8-14a |
 | M8-14c | Windows-Desktop-Formulare und getrennte Darstellung der Auflösungsergebnisse; vollständige ursprüngliche Abnahme | M8-14b |
 | M8-14d | Die zuvor geplante Korrektur-, Archive- und Retraction-Oberfläche | M8-14c |
