@@ -26,3 +26,5 @@ Prüfbelege vom 4. Oktober 2026:
 - Keine Produkttests ausgeführt, da diese Planungs-Task keinen Produktcode ändert. M8-14a ist die einzige READY-Task.
 
 Die erste Planfassung wurde in 65f4bf0b428b4caf0e24352358f79cb889c9b195 erfasst. Die Dokumentation des Pushs steht in 9cd251b; die Policy-required-Audit-Klarstellung in 9aae209.
+
+Die ADR-032-Erweiterung wurde in Commit d50016d (docs: add ADR-032 time registry prerequisite to M8-14) gespeichert und nach origin/codex/worlddb-project-integration gepusht.
