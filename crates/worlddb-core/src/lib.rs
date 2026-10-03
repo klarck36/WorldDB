@@ -2,6 +2,10 @@
 
 //! Initial owner crate for WorldDB domain, resolution, and engine modules.
 //!
+//! Application code should depend on the versioned `api::v1` facade. The
+//! remaining crate-root exports preserve compatibility for current internal
+//! adapters and are not the stable application API.
+//!
 //! Domain identifiers are distinct validated types. Their UUID timestamp bits
 //! are operational data and never represent WorldDB time or authority.
 //!
@@ -560,6 +564,7 @@
 //! ```
 
 mod admin_raw;
+pub mod api;
 mod archive;
 mod archive_projection;
 mod archive_transaction;
