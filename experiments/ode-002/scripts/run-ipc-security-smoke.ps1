@@ -238,8 +238,23 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $eventMaskRetractions = @($lifecycle | Where-Object { $_.family -eq 'event_mask' -and $_.result_kind -eq 'retracted' }).Count
             $graphConflicts = @($operations | Where-Object { $_.kind -eq 'event_graph_conflict' })
             $safeGraphConflicts = @($graphConflicts | Where-Object { $_.result_kind -eq 'not_saved' -and $_.outcome_kind -eq 'no_automatic_inference' }).Count
-            $allTimes = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'all_times' }).Count
-            $points = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'point' }).Count
+            $allTimes = @($operations | Where-Object {
+                $_.succeeded -and (($_.operation -eq 'preview' -and $_.result_kind -eq 'all_times') -or
+                    ($_.operation -eq 'query' -and $_.result_kind -eq 'resolved_all_times'))
+            }).Count
+            $points = @($operations | Where-Object {
+                $_.succeeded -and (($_.operation -eq 'preview' -and $_.result_kind -eq 'point') -or
+                    ($_.operation -eq 'query' -and $_.result_kind -eq 'resolved_point'))
+            }).Count
+            $historyQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'history' -and $_.result_kind -eq 'history' }).Count
+            $explainQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'explain' -and $_.result_kind -eq 'explain' }).Count
+            $historicalSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'historical' }).Count
+            $currentSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'current' }).Count
+            $explicitSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'explicit' }).Count
+            $olderRecordedAsOfQueries = @($operations | Where-Object {
+                $_.operation -eq 'query' -and $null -ne $_.recorded_as_of -and
+                    [decimal]::Parse([string]$_.recorded_as_of) -lt [decimal]::Parse([string]$_.snapshot_revision_exact)
+            }).Count
             $selectors = @($masks | Select-Object -ExpandProperty selector_kind -Unique)
             $hasExact = $selectors -contains 'exact_assertion'
             $hasProposition = $selectors -contains 'proposition'
@@ -256,6 +271,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $provenance -ge 1 -and $evidenceRetractions -ge 1 -and $provenanceRetractions -ge 1 -and
                 $metaHistoryComplete -and $projectSmokeComplete -and
                 $allTimes -ge 7 -and $points -ge 1 -and
+                $historyQueries -ge 1 -and $explainQueries -ge 1 -and
+                $historicalSchemaQueries -ge 1 -and $currentSchemaQueries -ge 1 -and
+                $explicitSchemaQueries -ge 1 -and $olderRecordedAsOfQueries -ge 1 -and
                 $hasExact -and $hasProposition -and $hasSlot
             ) {
                 return
@@ -266,7 +284,7 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
         Start-Sleep -Milliseconds 100
     }
     $events = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
-    throw "Timed out waiting for factual-record, Event, EventMask, graph-conflict, and resolution-preview IPC workflows. Recorded: $events"
+    throw "Timed out waiting for factual-record, Event, EventMask, graph-conflict, History, Resolved, and Explain IPC workflows. Recorded: $events"
 }
 
 try {
@@ -516,6 +534,8 @@ try {
         assertion_mask_and_replacement_boundary_forms = 'PASS'
         exact_proposition_and_slot_mask_selectors = 'PASS'
         point_and_all_times_resolution_previews = 'PASS'
+        raw_history_resolved_explain_queries = 'PASS'
+        recorded_as_of_and_explicit_schema_modes = 'PASS'
         event_roles_attributes_and_instant_span_creation = 'PASS'
         explicit_event_span_closure_and_event_retractions = 'PASS'
         event_mask_priority_and_separate_retraction = 'PASS'

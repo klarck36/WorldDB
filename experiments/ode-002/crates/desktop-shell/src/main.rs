@@ -15,10 +15,11 @@ use worlddb_ode_engine::EngineHost;
 use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
-    FactCommand, FactResponse, HistorySpaceTransferCommand, HistorySpaceTransferResponse,
-    MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView,
-    ResolutionResultView, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
-    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
+    FactCommand, FactQueryModeInput, FactQuerySchemaModeInput, FactResponse,
+    HistorySpaceTransferCommand, HistorySpaceTransferResponse, MaskSelectorInput,
+    PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView, ResolutionResultView, Response,
+    SchemaCommand, SchemaResponse, SecurityPolicyCommand, SecurityPolicyResponse,
+    SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -687,7 +688,10 @@ fn manage_facts(
         .map_err(map_session_error)?;
     let is_write = !matches!(
         &request.command,
-        FactCommand::Snapshot | FactCommand::Preview { .. } | FactCommand::CommitStatus { .. }
+        FactCommand::Snapshot
+            | FactCommand::Preview { .. }
+            | FactCommand::Query { .. }
+            | FactCommand::CommitStatus { .. }
     );
     let operation = facts_smoke_operation(&request.command);
     let selector_kind = facts_smoke_selector_kind(&request.command);
@@ -1054,6 +1058,7 @@ fn facts_smoke_operation(command: &FactCommand) -> &'static str {
         FactCommand::CorrectEvent { .. } => "correct_event",
         FactCommand::CommitStatus { .. } => "commit_status",
         FactCommand::Lifecycle { .. } => "lifecycle",
+        FactCommand::Query { .. } => "query",
         FactCommand::Preview { .. } => "preview",
     }
 }
@@ -1135,6 +1140,50 @@ fn record_facts_smoke(
                         outcome_kind,
                     )
                 }
+                FactResponse::Query(query) => {
+                    let (result_kind, item_count, outcome_kind) = match &query.result {
+                        worlddb_ode_engine::FactQueryResultView::History { records } => {
+                            ("history", Some(records.len()), None)
+                        }
+                        worlddb_ode_engine::FactQueryResultView::Resolved { result } => {
+                            match result {
+                                ResolutionResultView::Point { outcome, .. } => (
+                                    "resolved_point",
+                                    None,
+                                    Some(resolution_outcome_kind(outcome)),
+                                ),
+                                ResolutionResultView::AllTimes { slices } => (
+                                    "resolved_all_times",
+                                    Some(slices.len()),
+                                    slices
+                                        .first()
+                                        .map(|slice| resolution_outcome_kind(&slice.outcome)),
+                                ),
+                                ResolutionResultView::CompleteEmpty => {
+                                    ("resolved_complete_empty", Some(0), None)
+                                }
+                            }
+                        }
+                        worlddb_ode_engine::FactQueryResultView::Explain {
+                            outcome,
+                            stages,
+                            ..
+                        } => (
+                            "explain",
+                            Some(stages.len()),
+                            Some(resolution_outcome_kind(outcome)),
+                        ),
+                    };
+                    (
+                        Some("query"),
+                        query.snapshot_revision.parse::<u64>().ok(),
+                        None,
+                        None,
+                        Some(result_kind),
+                        item_count,
+                        outcome_kind,
+                    )
+                }
                 FactResponse::AssertionCorrected(correction) => (
                     Some("assertion_corrected"),
                     Some(correction.revision),
@@ -1198,6 +1247,24 @@ fn record_facts_smoke(
                 ),
             },
         );
+    let (query_mode, recorded_as_of, schema_mode, schema_revision) =
+        result.map_or((None, None, None, None), |response| match response {
+            FactResponse::Query(query) => (
+                Some(match query.query_mode {
+                    FactQueryModeInput::History => "history",
+                    FactQueryModeInput::Resolved => "resolved",
+                    FactQueryModeInput::Explain => "explain",
+                }),
+                Some(query.recorded_as_of.clone()),
+                Some(match &query.schema_mode {
+                    FactQuerySchemaModeInput::Historical { .. } => "historical",
+                    FactQuerySchemaModeInput::Current => "current",
+                    FactQuerySchemaModeInput::Explicit { .. } => "explicit",
+                }),
+                Some(query.schema_revision.clone()),
+            ),
+            _ => (None, None, None, None),
+        });
     let record = serde_json::json!({
         "window": window_label,
         "operation": operation,
@@ -1210,6 +1277,14 @@ fn record_facts_smoke(
         "result_kind": result_kind,
         "slice_count": slice_count,
         "outcome_kind": outcome_kind,
+        "query_mode": query_mode,
+        "recorded_as_of": recorded_as_of,
+        "schema_mode": schema_mode,
+        "schema_revision": schema_revision,
+        "snapshot_revision_exact": result.and_then(|response| match response {
+            FactResponse::Query(query) => Some(query.snapshot_revision.clone()),
+            _ => None,
+        }),
     });
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -2695,7 +2770,7 @@ impl Sidecar {
         match self.request(Request::Facts {
             command: Box::new(command),
         })? {
-            Response::Facts { result } => Ok(result),
+            Response::Facts { result } => Ok(*result),
             Response::Error { .. } => Err("sidecar rejected factual-record operation".to_owned()),
             _ => Err("sidecar returned an unexpected factual-record response".to_owned()),
         }

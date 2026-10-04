@@ -700,14 +700,20 @@
         </fieldset>
         <p id="facts-write-status" class="muted" role="status" aria-live="polite"></p>
         <fieldset>
-          <legend>M8-14d-Auflösungsvorschau</legend>
-          <p class="muted">Abfrage derselben Assertion-, Mask- und Boundary-Historie im ausgewählten Branch, Layer und epistemischen Kontext.</p>
+          <legend>Historie, Auflösung und Erklärung</legend>
+          <p class="muted">Jede Abfrage bindet den aktuellen Snapshot, den gewählten Datenstand, Branch, Layer, Perspektive, Aussagekontext, Weltzeit und Schema-Modus ausdrücklich.</p>
+          <div class="grid">
+            <div><label for="facts-query-operation">Ansicht</label><select id="facts-query-operation"><option value="history">Raw History</option><option value="resolved" selected>Resolved View</option><option value="explain">Explain</option></select></div>
+            <div><label for="facts-query-recorded-as-of">Datenstand (RecordedAsOf)</label><input id="facts-query-recorded-as-of" inputmode="numeric" autocomplete="off" value="0" data-auto="true" /></div>
+            <div><label for="facts-query-schema-mode">Schema-Modus</label><select id="facts-query-schema-mode"><option value="historical" selected>Historical</option><option value="current">Current</option><option value="explicit">Explicit revision</option></select></div>
+            <div id="facts-query-schema-revision-wrap" hidden><label for="facts-query-schema-revision">Schema-Revision</label><input id="facts-query-schema-revision" inputmode="numeric" autocomplete="off" value="0" data-auto="true" /></div>
+          </div>
           <div class="grid">
             <div><label for="facts-query-time-mode">Weltzeit</label><select id="facts-query-time-mode"><option value="all_times">Alle Zeiten</option><option value="at">Zeitpunkt</option></select></div>
             <div id="facts-query-point-wrap" hidden><label for="facts-query-timeline">Timeline</label><select id="facts-query-timeline"></select></div>
             <div id="facts-query-nanoseconds-wrap" hidden><label for="facts-query-nanoseconds">Zeitpunkt (Nanosekunden)</label><input id="facts-query-nanoseconds" inputmode="numeric" autocomplete="off" value="0" /></div>
           </div>
-          <div class="actions"><button id="facts-preview" type="button" disabled>Auflösung anzeigen</button></div>
+          <div class="actions"><button id="facts-preview" type="button" disabled>Abfrage ausführen</button></div>
           <p id="facts-preview-status" class="muted" role="status" aria-live="polite"></p>
           <div id="facts-preview-results" aria-live="polite"></div>
         </fieldset>

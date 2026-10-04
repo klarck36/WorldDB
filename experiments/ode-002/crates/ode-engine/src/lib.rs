@@ -42,10 +42,13 @@ pub use facts::{
     EventDraftInput, EventGraphConflictView, EventParticipantInput, EventRelationKindInput,
     EventTimeInput, FactCatalogRecordView, FactCatalogView, FactCommand, FactContextInput,
     FactLifecycleActionInput, FactLifecycleView, FactOperationStatusKind, FactOperationStatusView,
-    FactPublicationView, FactResponse, FactTargetInput, FactValueInput, MaskSelectorInput,
-    PolarityInput, ResolutionConflictView, ResolutionOutcomeView, ResolutionPreviewView,
-    ResolutionResultView, ResolutionSliceView, ResolutionValueView, ValidityInput,
-    WorldTimeSelectorInput,
+    FactPublicationView, FactQueryExplainStageView, FactQueryHistoryDetailView,
+    FactQueryHistoryRecordView, FactQueryMaskSelectorView, FactQueryModeInput,
+    FactQueryRecordContextView, FactQueryResultView, FactQuerySchemaModeInput,
+    FactQueryValidityView, FactQueryView, FactResponse, FactTargetInput, FactValueInput,
+    MaskSelectorInput, PolarityInput, ResolutionConflictView, ResolutionOutcomeView,
+    ResolutionPreviewView, ResolutionResultView, ResolutionSliceView, ResolutionValueView,
+    ValidityInput, WorldTimeSelectorInput,
 };
 mod schema;
 pub use schema::{
@@ -179,7 +182,7 @@ pub enum Response {
         result: HistorySpaceTransferResponse,
     },
     Facts {
-        result: FactResponse,
+        result: Box<FactResponse>,
     },
     Shutdown,
     Error {

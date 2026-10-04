@@ -215,7 +215,9 @@ fn main() {
             }
             Request::Facts { command } => {
                 let response = match engine.facts(*command) {
-                    Ok(result) => Response::Facts { result },
+                    Ok(result) => Response::Facts {
+                        result: Box::new(result),
+                    },
                     Err(worlddb_ode_engine::EngineError::Fact(_)) => Response::Error {
                         code: "facts_rejected".to_owned(),
                     },

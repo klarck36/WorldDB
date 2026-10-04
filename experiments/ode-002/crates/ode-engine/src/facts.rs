@@ -12,19 +12,20 @@ use worlddb_core::{
     EventMaskRetractionId, EventParticipant, EventRelationId, EventRelationInputKind,
     EventRelationKind, EventRelationRetractionId, EventRetractionId, EventRoleId,
     EventSpanClosureId, EventTime, EvidenceId, EvidenceRelation, EvidenceRetractionId,
-    EvidenceTargetRef, HistorySpaceId, Int, LayerId, LayerSelection, MaskId, MaskRetractionId,
-    MaskSelector, MaskSlotSelector, MultiValueConflict, MultiValueEntry, MultiValueOutcome,
-    NonEmptySet, PerspectiveId, PerspectiveScope, Polarity, PredicateId, PropositionKey,
-    ProvenanceEndpointRef, ProvenanceId, ProvenanceRelation, ProvenanceRetractionId,
-    QueryEngineOutput, RecordRef, RecordedAsOf, ReplacementBoundaryId,
+    EvidenceTargetRef, ExplainStageKind, HistorySpaceId, Int, LayerId, LayerSelection, MaskId,
+    MaskRetractionId, MaskSelector, MaskSlotSelector, MultiValueConflict, MultiValueEntry,
+    MultiValueOutcome, NonEmptySet, PerspectiveId, PerspectiveScope, Polarity, PredicateId,
+    PropositionKey, ProvenanceEndpointRef, ProvenanceId, ProvenanceRelation,
+    ProvenanceRetractionId, QueryEngineOutput, RecordRef, RecordedAsOf, ReplacementBoundaryId,
     ReplacementBoundaryRetractionId, ResolutionPreview, ResolvedOutcome, ResolvedView, Revision,
-    SchemaDefinition, SchemaMode, SourceContentDigest, SourceId, SourceLocator, SourceMetadata,
-    SourceMetadataEntry, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId, UInt, Value,
-    WorldTime, WorldTimeSelector,
+    SchemaDefinition, SchemaMode, SchemaRevision, SourceContentDigest, SourceId, SourceLocator,
+    SourceMetadata, SourceMetadataEntry, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId,
+    UInt, Value, WorldTime, WorldTimeSelector,
 };
 use worlddb_storage_file::{
-    AssertionCorrectionReceipt, EventCorrectionReceipt, FactResolutionPreviewRequest, FactSnapshot,
-    FileFactManager, FileSchemaManager, ReplacementBoundaryDraft, SourceDraft,
+    AssertionCorrectionReceipt, EventCorrectionReceipt, FactHistoryRecord, FactQueryHistoryRow,
+    FactQueryOperation, FactQueryRequest, FactQueryResult, FactResolutionPreviewRequest,
+    FactSnapshot, FileFactManager, FileSchemaManager, ReplacementBoundaryDraft, SourceDraft,
     SourceSupersessionDraft,
 };
 
@@ -161,6 +162,16 @@ pub enum FactCommand {
         expected_base_revision: u64,
         target: FactTargetInput,
         action: FactLifecycleActionInput,
+    },
+    /// Executes one explicit History, Resolved, or Explain query for an Assertion slot.
+    Query {
+        context: FactContextInput,
+        subject_id: String,
+        predicate_id: String,
+        recorded_as_of: String,
+        schema_mode: FactQuerySchemaModeInput,
+        query_mode: FactQueryModeInput,
+        world_time: WorldTimeSelectorInput,
     },
     /// Evaluates one slot through the productive resolution-preview path.
     Preview {
@@ -386,6 +397,27 @@ pub enum WorldTimeSelectorInput {
     },
 }
 
+/// User-visible query operation; it never changes renderer-controlled security state.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum FactQueryModeInput {
+    History,
+    Resolved,
+    Explain,
+}
+
+/// Query schema selection with canonical decimal-string revisions at the IPC boundary.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FactQuerySchemaModeInput {
+    /// Schema effective at the selected RecordedAsOf revision.
+    Historical { recorded_as_of: String },
+    /// Latest schema at the live database head.
+    Current,
+    /// Exact previously committed schema revision.
+    Explicit { revision: String },
+}
+
 /// Optional half-open validity interval input. Missing endpoints are open.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -402,6 +434,7 @@ pub enum FactResponse {
     Catalog(FactCatalogView),
     Published(FactPublicationView),
     Preview(ResolutionPreviewView),
+    Query(FactQueryView),
     AssertionCorrected(AssertionCorrectionView),
     EventCorrected(EventCorrectionView),
     EventGraphConflict(EventGraphConflictView),
@@ -434,6 +467,7 @@ pub struct FactOperationStatusView {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FactCatalogView {
     pub revision: u64,
+    pub revision_text: String,
     pub lifecycle_visible: bool,
     pub records: Vec<FactCatalogRecordView>,
     pub event_graph_guidance: Vec<String>,
@@ -572,6 +606,136 @@ pub enum ResolutionResultView {
         slices: Vec<ResolutionSliceView>,
     },
     CompleteEmpty,
+}
+
+/// Complete query result with every semantic context axis echoed to the renderer.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactQueryView {
+    pub snapshot_revision: String,
+    pub recorded_as_of: String,
+    pub history_space_id: String,
+    pub resolved_layer_ids: Vec<String>,
+    pub perspective_id: Option<String>,
+    pub epistemic_mode: EpistemicModeInput,
+    pub world_time: WorldTimeSelectorInput,
+    pub schema_mode: FactQuerySchemaModeInput,
+    pub schema_revision: String,
+    pub query_mode: FactQueryModeInput,
+    pub result: FactQueryResultView,
+}
+
+/// Query result forms mirror the selected API operation without flattening errors.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FactQueryResultView {
+    History {
+        records: Vec<FactQueryHistoryRecordView>,
+    },
+    Resolved {
+        result: ResolutionResultView,
+    },
+    Explain {
+        timeline_id: String,
+        nanoseconds: String,
+        outcome: ResolutionOutcomeView,
+        stages: Vec<FactQueryExplainStageView>,
+    },
+}
+
+/// Safe raw-history identity and its transaction-time coordinates.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactQueryHistoryRecordView {
+    pub family: String,
+    pub record_id: String,
+    pub recorded_revision: String,
+    pub history_space_id: String,
+    pub record: FactQueryHistoryDetailView,
+}
+
+/// Typed stored payload for a visible raw-history record.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FactQueryHistoryDetailView {
+    Assertion {
+        context: FactQueryRecordContextView,
+        subject_id: String,
+        predicate_id: String,
+        value_kind: String,
+        value: String,
+        polarity: String,
+        validity: FactQueryValidityView,
+    },
+    AssertionRetraction {
+        assertion_id: String,
+        reason: String,
+    },
+    Mask {
+        context: FactQueryRecordContextView,
+        selector: FactQueryMaskSelectorView,
+        validity: Option<FactQueryValidityView>,
+    },
+    MaskRetraction {
+        mask_id: String,
+        reason: String,
+    },
+    ReplacementBoundary {
+        context: FactQueryRecordContextView,
+        subject_id: String,
+        predicate_id: String,
+        validity: Option<FactQueryValidityView>,
+    },
+    ReplacementBoundaryRetraction {
+        replacement_boundary_id: String,
+        reason: String,
+    },
+}
+
+/// Stored context carried by an Assertion, Mask, or Boundary.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactQueryRecordContextView {
+    pub history_space_id: String,
+    pub layer_id: String,
+    pub perspective_id: Option<String>,
+    pub epistemic_mode: EpistemicModeInput,
+}
+
+/// Closed selector forms for raw Mask history.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FactQueryMaskSelectorView {
+    ExactAssertion {
+        assertion_id: String,
+    },
+    Proposition {
+        subject_id: String,
+        predicate_id: String,
+        value_kind: String,
+        value: String,
+        polarity: String,
+    },
+    Slot {
+        subject_id: String,
+        predicate_id: String,
+        perspective_id: Option<String>,
+        epistemic_mode: EpistemicModeInput,
+    },
+}
+
+/// World-time validity carried by an Assertion, Mask, or Boundary.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactQueryValidityView {
+    pub timeline_id: String,
+    pub start_nanoseconds: Option<String>,
+    pub end_nanoseconds: Option<String>,
+}
+
+/// One checked productive Explain stage.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactQueryExplainStageView {
+    pub kind: String,
+    pub input_assertions: Vec<String>,
+    pub output_assertions: Vec<String>,
+    pub applied_records: Vec<EndpointOptionView>,
 }
 
 /// One half-open temporal cell and its independent resolution outcome.
@@ -1106,6 +1270,65 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
             target,
             action,
         } => execute_lifecycle(&mut manager, expected_base_revision, target, action),
+        FactCommand::Query {
+            context,
+            subject_id,
+            predicate_id,
+            recorded_as_of,
+            schema_mode,
+            query_mode,
+            world_time,
+        } => {
+            let history_space_id = context.history_space_id.clone();
+            let perspective_id = context.perspective_id.clone();
+            let epistemic_mode = context.epistemic_mode;
+            let context = parse_context(context)?;
+            let recorded_as_of = query_revision(&recorded_as_of)?;
+            let schema_mode_input = schema_mode;
+            let schema_mode = query_schema_mode(schema_mode_input.clone(), recorded_as_of)?;
+            let world_time_input = world_time.clone();
+            let world_time = parse_world_time_selector(world_time)?;
+            let operation = match query_mode {
+                FactQueryModeInput::History => FactQueryOperation::History,
+                FactQueryModeInput::Resolved => FactQueryOperation::Resolved,
+                FactQueryModeInput::Explain => FactQueryOperation::Explain,
+            };
+            let query = manager
+                .query_slot(FactQueryRequest {
+                    recorded_as_of,
+                    schema_mode,
+                    operation,
+                    history_space_id: context.history_space_id(),
+                    layer_selection: LayerSelection::Explicit(
+                        NonEmptySet::new(vec![context.layer_id()])
+                            .map_err(|error| EngineError::Fact(error.to_string()))?,
+                    ),
+                    subject: Subject::new(parse_id::<EntityId>(&subject_id, "Entity")?),
+                    predicate_id: parse_id::<PredicateId>(&predicate_id, "Predicate")?,
+                    perspective_scope: context.perspective_scope(),
+                    epistemic_mode: context.epistemic_mode(),
+                    world_time,
+                })
+                .map_err(fact_error)?;
+            let result = query_result_view(query.result, &world_time_input)?;
+            Ok(FactResponse::Query(FactQueryView {
+                snapshot_revision: query.snapshot_revision.value().to_string(),
+                recorded_as_of: recorded_as_of.value().to_string(),
+                history_space_id,
+                resolved_layer_ids: query
+                    .resolved_layers
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                perspective_id,
+                epistemic_mode,
+                world_time: world_time_input,
+                schema_mode: schema_mode_input,
+                schema_revision: query.schema_revision.revision().value().to_string(),
+                query_mode,
+                result,
+            }))
+        }
         FactCommand::Preview {
             context,
             subject_id,
@@ -1514,6 +1737,7 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
     });
     Ok(FactCatalogView {
         revision: revision.value(),
+        revision_text: revision.value().to_string(),
         lifecycle_visible: lifecycle,
         records,
         event_graph_guidance: vec![
@@ -2236,6 +2460,18 @@ fn revision(value: u64) -> Result<Revision, EngineError> {
     Revision::new(value).map_err(|_| EngineError::Fact("invalid data revision".to_owned()))
 }
 
+fn query_revision(value: &str) -> Result<Revision, EngineError> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| EngineError::Fact("invalid data revision".to_owned()))?;
+    if parsed.to_string() != value {
+        return Err(EngineError::Fact(
+            "data revision is not canonical decimal text".to_owned(),
+        ));
+    }
+    revision(parsed)
+}
+
 fn operation_id() -> Result<worlddb_core::OperationId, EngineError> {
     worlddb_core::storage_internal::generate_schema_management_operation_id()
         .map_err(|_| EngineError::Fact("operation identity unavailable".to_owned()))
@@ -2250,7 +2486,14 @@ fn preview_view(
     revision: u64,
     output: QueryEngineOutput<ResolutionPreview>,
 ) -> ResolutionPreviewView {
-    let result = match output.query().value() {
+    ResolutionPreviewView {
+        revision,
+        result: resolution_result_view(output.query().value()),
+    }
+}
+
+fn resolution_result_view(preview: &ResolutionPreview) -> ResolutionResultView {
+    match preview {
         ResolutionPreview::Point {
             world_time,
             resolved_view,
@@ -2276,8 +2519,242 @@ fn preview_view(
                 .collect(),
         },
         ResolutionPreview::CompleteEmpty => ResolutionResultView::CompleteEmpty,
+    }
+}
+
+fn query_schema_mode(
+    input: FactQuerySchemaModeInput,
+    recorded_as_of: Revision,
+) -> Result<SchemaMode, EngineError> {
+    match input {
+        FactQuerySchemaModeInput::Historical {
+            recorded_as_of: schema_as_of,
+        } => {
+            let schema_as_of = query_revision(&schema_as_of)?;
+            if schema_as_of != recorded_as_of {
+                return Err(EngineError::Fact(
+                    "Historical SchemaMode must use the selected RecordedAsOf revision".to_owned(),
+                ));
+            }
+            Ok(SchemaMode::Historical)
+        }
+        FactQuerySchemaModeInput::Current => Ok(SchemaMode::Current),
+        FactQuerySchemaModeInput::Explicit { revision: value } => Ok(SchemaMode::Explicit(
+            SchemaRevision::from_published_revision(query_revision(&value)?),
+        )),
+    }
+}
+
+fn query_result_view(
+    result: FactQueryResult,
+    world_time: &WorldTimeSelectorInput,
+) -> Result<FactQueryResultView, EngineError> {
+    match result {
+        FactQueryResult::History(records) => Ok(FactQueryResultView::History {
+            records: records
+                .into_iter()
+                .map(query_history_record_view)
+                .collect::<Result<Vec<_>, _>>()?,
+        }),
+        FactQueryResult::Resolved(output) => Ok(FactQueryResultView::Resolved {
+            result: resolution_result_view(output.query().value()),
+        }),
+        FactQueryResult::Explain(output) => {
+            let WorldTimeSelectorInput::At {
+                timeline_id,
+                nanoseconds,
+            } = world_time
+            else {
+                return Err(EngineError::Fact(
+                    "Explain result lacks its explicit WorldTime point".to_owned(),
+                ));
+            };
+            let explain = output.query().value();
+            let stages = explain
+                .stages()
+                .iter()
+                .map(|stage| {
+                    Ok(FactQueryExplainStageView {
+                        kind: explain_stage_label(stage.kind()).to_owned(),
+                        input_assertions: ids(stage.input_assertions()),
+                        output_assertions: ids(stage.output_assertions()),
+                        applied_records: stage
+                            .applied_records()
+                            .iter()
+                            .copied()
+                            .map(query_endpoint_view)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    })
+                })
+                .collect::<Result<Vec<_>, EngineError>>()?;
+            Ok(FactQueryResultView::Explain {
+                timeline_id: timeline_id.clone(),
+                nanoseconds: nanoseconds.clone(),
+                outcome: outcome_view(explain.resolved_view()),
+                stages,
+            })
+        }
+    }
+}
+
+fn query_history_record_view(
+    row: FactQueryHistoryRow,
+) -> Result<FactQueryHistoryRecordView, EngineError> {
+    let (family, record_id) = query_record_identity(row.record_ref)?;
+    let record = match row.record {
+        FactHistoryRecord::Assertion(value) => FactQueryHistoryDetailView::Assertion {
+            context: query_record_context_view(value.context()),
+            subject_id: value.subject().entity_id().to_string(),
+            predicate_id: value.predicate_id().to_string(),
+            value_kind: query_value_kind(value.value()).to_owned(),
+            value: value_label(value.value()),
+            polarity: polarity_label(value.polarity()).to_owned(),
+            validity: query_validity_view(value.validity()),
+        },
+        FactHistoryRecord::AssertionRetraction(value) => {
+            FactQueryHistoryDetailView::AssertionRetraction {
+                assertion_id: value.assertion_id().to_string(),
+                reason: value.reason().to_owned(),
+            }
+        }
+        FactHistoryRecord::Mask(value) => FactQueryHistoryDetailView::Mask {
+            context: query_record_context_view(value.context()),
+            selector: query_mask_selector_view(value.selector()),
+            validity: value.validity().map(query_validity_view),
+        },
+        FactHistoryRecord::MaskRetraction(value) => FactQueryHistoryDetailView::MaskRetraction {
+            mask_id: value.mask_id().to_string(),
+            reason: value.reason().to_owned(),
+        },
+        FactHistoryRecord::ReplacementBoundary(value) => {
+            FactQueryHistoryDetailView::ReplacementBoundary {
+                context: query_record_context_view(value.context()),
+                subject_id: value.subject().entity_id().to_string(),
+                predicate_id: value.predicate_id().to_string(),
+                validity: value.validity().map(query_validity_view),
+            }
+        }
+        FactHistoryRecord::ReplacementBoundaryRetraction(value) => {
+            FactQueryHistoryDetailView::ReplacementBoundaryRetraction {
+                replacement_boundary_id: value.replacement_boundary_id().to_string(),
+                reason: value.reason().to_owned(),
+            }
+        }
     };
-    ResolutionPreviewView { revision, result }
+    Ok(FactQueryHistoryRecordView {
+        family,
+        record_id,
+        recorded_revision: row.recorded_revision.value().to_string(),
+        history_space_id: row.owner_history_space_id.to_string(),
+        record,
+    })
+}
+
+fn query_record_context_view(context: ContextKey) -> FactQueryRecordContextView {
+    let perspective_id = match context.perspective_scope() {
+        PerspectiveScope::World => None,
+        PerspectiveScope::Perspective(id) => Some(id.to_string()),
+    };
+    FactQueryRecordContextView {
+        history_space_id: context.history_space_id().to_string(),
+        layer_id: context.layer_id().to_string(),
+        perspective_id,
+        epistemic_mode: match context.epistemic_mode() {
+            EpistemicMode::WorldState => EpistemicModeInput::WorldState,
+            EpistemicMode::Knows => EpistemicModeInput::Knows,
+            EpistemicMode::Believes => EpistemicModeInput::Believes,
+            EpistemicMode::Claims => EpistemicModeInput::Claims,
+        },
+    }
+}
+
+fn query_mask_selector_view(selector: &MaskSelector) -> FactQueryMaskSelectorView {
+    match selector {
+        MaskSelector::ExactAssertion(assertion_id) => FactQueryMaskSelectorView::ExactAssertion {
+            assertion_id: assertion_id.to_string(),
+        },
+        MaskSelector::Proposition(proposition) => FactQueryMaskSelectorView::Proposition {
+            subject_id: proposition.subject().entity_id().to_string(),
+            predicate_id: proposition.predicate_id().to_string(),
+            value_kind: query_value_kind(proposition.value()).to_owned(),
+            value: value_label(proposition.value()),
+            polarity: polarity_label(proposition.polarity()).to_owned(),
+        },
+        MaskSelector::Slot(slot) => {
+            let perspective_id = match slot.perspective_scope() {
+                PerspectiveScope::World => None,
+                PerspectiveScope::Perspective(id) => Some(id.to_string()),
+            };
+            FactQueryMaskSelectorView::Slot {
+                subject_id: slot.subject().entity_id().to_string(),
+                predicate_id: slot.predicate_id().to_string(),
+                perspective_id,
+                epistemic_mode: match slot.epistemic_mode() {
+                    EpistemicMode::WorldState => EpistemicModeInput::WorldState,
+                    EpistemicMode::Knows => EpistemicModeInput::Knows,
+                    EpistemicMode::Believes => EpistemicModeInput::Believes,
+                    EpistemicMode::Claims => EpistemicModeInput::Claims,
+                },
+            }
+        }
+    }
+}
+
+fn query_validity_view(validity: AssertionValidity) -> FactQueryValidityView {
+    let interval = validity.interval();
+    FactQueryValidityView {
+        timeline_id: interval.timeline().id().to_string(),
+        start_nanoseconds: interval.start().map(|time| time.nanoseconds().to_string()),
+        end_nanoseconds: interval.end().map(|time| time.nanoseconds().to_string()),
+    }
+}
+
+fn query_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Bool(_) => "bool",
+        Value::Int(_) => "int",
+        Value::UInt(_) => "uint",
+        Value::Decimal(_) => "decimal",
+        Value::String(_) => "string",
+        Value::Symbol(_) => "symbol",
+        Value::Entity(_) => "entity",
+        Value::Time(_) => "time",
+        Value::Duration(_) => "duration",
+        Value::Bytes(_) => "bytes",
+    }
+}
+
+fn query_endpoint_view(record_ref: RecordRef) -> Result<EndpointOptionView, EngineError> {
+    let (family, record_id) = query_record_identity(record_ref)?;
+    Ok(EndpointOptionView { family, record_id })
+}
+
+fn query_record_identity(record_ref: RecordRef) -> Result<(String, String), EngineError> {
+    let (family, record_id) = match record_ref {
+        RecordRef::Assertion(id) => ("assertion", id.to_string()),
+        RecordRef::AssertionRetraction(id) => ("assertion_retraction", id.to_string()),
+        RecordRef::Mask(id) => ("mask", id.to_string()),
+        RecordRef::MaskRetraction(id) => ("mask_retraction", id.to_string()),
+        RecordRef::ReplacementBoundary(id) => ("replacement_boundary", id.to_string()),
+        RecordRef::ReplacementBoundaryRetraction(id) => {
+            ("replacement_boundary_retraction", id.to_string())
+        }
+        _ => {
+            return Err(EngineError::Fact(
+                "query returned an unsupported record family".to_owned(),
+            ));
+        }
+    };
+    Ok((family.to_owned(), record_id))
+}
+
+fn explain_stage_label(kind: ExplainStageKind) -> &'static str {
+    match kind {
+        ExplainStageKind::CandidateScan => "candidate_scan",
+        ExplainStageKind::MaskProjection => "mask_projection",
+        ExplainStageKind::ReplacementBoundary => "replacement_boundary",
+        ExplainStageKind::Resolution => "resolution",
+    }
 }
 
 fn outcome_view(view: &ResolvedView) -> ResolutionOutcomeView {
@@ -2382,7 +2859,11 @@ fn fact_error(error: impl fmt::Display) -> EngineError {
 
 #[cfg(test)]
 mod tests {
-    use super::{FactValueInput, MaskSelectorInput, bytes_hex, parse_hex, parse_value};
+    use super::{
+        FactCommand, FactQueryModeInput, FactQuerySchemaModeInput, FactValueInput,
+        MaskSelectorInput, bytes_hex, parse_hex, parse_value, query_revision, query_schema_mode,
+    };
+    use worlddb_core::{Revision, SchemaMode, SchemaRevision};
 
     #[test]
     fn scalar_input_is_closed_and_keeps_exact_text_values() {
@@ -2410,5 +2891,65 @@ mod tests {
         assert_eq!(bytes_hex(&[0x00, 0xaf]), "00af");
         assert!(parse_hex("f").is_err());
         assert!(parse_hex("gg").is_err());
+    }
+
+    #[test]
+    fn query_schema_mode_requires_historical_revision_to_match_recorded_as_of() {
+        let recorded_as_of = Revision::new(7).expect("test revision is valid");
+        assert!(matches!(
+            query_schema_mode(
+                FactQuerySchemaModeInput::Historical {
+                    recorded_as_of: "7".to_owned(),
+                },
+                recorded_as_of,
+            ),
+            Ok(SchemaMode::Historical)
+        ));
+        assert!(
+            query_schema_mode(
+                FactQuerySchemaModeInput::Historical {
+                    recorded_as_of: "6".to_owned(),
+                },
+                recorded_as_of,
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            query_schema_mode(FactQuerySchemaModeInput::Current, recorded_as_of),
+            Ok(SchemaMode::Current)
+        ));
+        let explicit_revision = Revision::new(4).expect("test revision is valid");
+        assert!(matches!(
+            query_schema_mode(
+                FactQuerySchemaModeInput::Explicit {
+                    revision: "4".to_owned(),
+                },
+                recorded_as_of,
+            ),
+            Ok(SchemaMode::Explicit(revision))
+                if revision == SchemaRevision::from_published_revision(explicit_revision)
+        ));
+        assert!(query_revision("07").is_err());
+        assert!(query_revision("18446744073709551615").is_err());
+    }
+
+    #[test]
+    fn query_command_uses_closed_modes_and_rejects_unknown_fields() {
+        let command = serde_json::from_str::<FactCommand>(
+            r#"{"command":"query","context":{"history_space_id":"00000000-0000-4000-8000-000000000001","layer_id":"00000000-0000-4000-8000-000000000002","perspective_id":null,"epistemic_mode":"world_state"},"subject_id":"00000000-0000-4000-8000-000000000003","predicate_id":"00000000-0000-4000-8000-000000000004","recorded_as_of":"7","schema_mode":{"mode":"historical","recorded_as_of":"7"},"query_mode":"explain","world_time":{"kind":"at","timeline_id":"00000000-0000-4000-8000-000000000005","nanoseconds":"0"}}"#,
+        )
+        .expect("closed query command parses");
+        assert!(matches!(
+            command,
+            FactCommand::Query {
+                query_mode: FactQueryModeInput::Explain,
+                schema_mode: FactQuerySchemaModeInput::Historical { recorded_as_of },
+                ..
+            } if recorded_as_of == "7"
+        ));
+        assert!(serde_json::from_str::<FactCommand>(
+            r#"{"command":"query","context":{"history_space_id":"00000000-0000-4000-8000-000000000001","layer_id":"00000000-0000-4000-8000-000000000002","perspective_id":null,"epistemic_mode":"world_state"},"subject_id":"00000000-0000-4000-8000-000000000003","predicate_id":"00000000-0000-4000-8000-000000000004","recorded_as_of":"7","schema_mode":{"mode":"current"},"query_mode":"resolved","world_time":{"kind":"all_times"},"unexpected":true}"#
+        )
+        .is_err());
     }
 }

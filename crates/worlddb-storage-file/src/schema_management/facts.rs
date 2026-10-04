@@ -20,13 +20,14 @@ use worlddb_core::{
     Mask, MaskId, MaskRetraction, MaskRetractionId, MaskSelector, OperationId, PerspectiveScope,
     PolicyEventRelationKind, PolicyTarget, PredicateId, ProductiveQueryEngine, ProvenanceId,
     ProvenanceRelationship, QueryBudget, QueryBudgetLimits, QueryContext, QueryContextInput,
-    QueryEngineOutput, Record, RecordRef, RecordedAsOf, RelationshipSelector, ReplacementBoundary,
-    ReplacementBoundaryId, ReplacementBoundaryRetraction, ReplacementBoundaryRetractionId,
-    ReplacementBoundarySource, ResolutionPreview, Revision, SchemaDefinition, SchemaMode,
-    SecurityContext, SecurityPolicyVersion, SnapshotRef, Subject, ValidatedLayerSelection, Value,
-    WorldTimeSelector, WriteReferenceSnapshot, encode_record, prepare_assertion_correction,
-    prepare_event_correction, validate_assertion_batch, validate_event_graph_transaction,
-    validate_value_for_predicate, validate_write_references,
+    QueryEngineOutput, Record, RecordRef, RecordedAsOf, ReferenceExplain, RelationshipSelector,
+    ReplacementBoundary, ReplacementBoundaryId, ReplacementBoundaryRetraction,
+    ReplacementBoundaryRetractionId, ReplacementBoundarySource, ResolutionPreview, Revision,
+    SchemaDefinition, SchemaMode, SchemaRevision, SecurityContext, SecurityPolicyVersion,
+    SnapshotRef, Subject, ValidatedLayerSelection, Value, WorldTimeSelector,
+    WriteReferenceSnapshot, encode_record, prepare_assertion_correction, prepare_event_correction,
+    validate_assertion_batch, validate_event_graph_transaction, validate_value_for_predicate,
+    validate_write_references,
 };
 
 use crate::{
@@ -302,6 +303,286 @@ pub struct FactResolutionPreviewRequest {
     pub epistemic_mode: EpistemicMode,
     /// Point or complete all-times selector.
     pub world_time: WorldTimeSelector,
+}
+
+/// One user-visible query mode for a selected Assertion slot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FactQueryOperation {
+    /// Enumerate authorized raw Assertion, Mask, and Boundary history.
+    History,
+    /// Resolve the selected slot at a point or over all times.
+    Resolved,
+    /// Explain the selected point resolution, including applied Masks and Boundaries.
+    Explain,
+}
+
+/// Complete semantic inputs for an explicit factual query.
+#[derive(Clone, Debug)]
+pub struct FactQueryRequest {
+    /// Recorded-data revision; the query snapshot itself is pinned at the live head.
+    pub recorded_as_of: Revision,
+    /// Schema interpretation used to validate query inputs and resolve values.
+    pub schema_mode: SchemaMode,
+    /// Requested operation.
+    pub operation: FactQueryOperation,
+    /// HistorySpace whose immutable ancestry is queried.
+    pub history_space_id: HistorySpaceId,
+    /// Selected query layers, validated against the selected schema.
+    pub layer_selection: LayerSelection,
+    /// Assertion subject and Predicate slot.
+    pub subject: Subject,
+    /// Predicate identity for the selected slot.
+    pub predicate_id: PredicateId,
+    /// Perspective and epistemic partition.
+    pub perspective_scope: PerspectiveScope,
+    /// Epistemic partition paired with `perspective_scope`.
+    pub epistemic_mode: EpistemicMode,
+    /// Point or complete all-times selector.
+    pub world_time: WorldTimeSelector,
+}
+
+/// Output variants from a user-visible factual query.
+#[derive(Debug)]
+pub enum FactQueryResult {
+    /// Authorized raw records from the selected slot's HistorySpace ancestry.
+    History(Vec<FactQueryHistoryRow>),
+    /// Productive resolution result.
+    Resolved(QueryEngineOutput<ResolutionPreview>),
+    /// Productive, visibility-checked Explain trace.
+    Explain(QueryEngineOutput<ReferenceExplain>),
+}
+
+/// One authorized owned raw-history record and its recorded coordinates.
+#[derive(Clone, Debug)]
+pub struct FactQueryHistoryRow {
+    /// Immutable record family and identity.
+    pub record_ref: RecordRef,
+    /// Revision that created this record.
+    pub recorded_revision: Revision,
+    /// HistorySpace that owns the record.
+    pub owner_history_space_id: HistorySpaceId,
+    /// Owned immutable record payload, limited to the query's selected slot.
+    pub record: FactHistoryRecord,
+}
+
+/// Query binding details needed by the renderer to label every visible result.
+#[derive(Debug)]
+pub struct FactQueryExecution {
+    /// Live database head pinned for this query.
+    pub snapshot_revision: Revision,
+    /// Selected schema revision.
+    pub schema_revision: SchemaRevision,
+    /// Concrete Layers resolved from the caller's selection.
+    pub resolved_layers: Vec<worlddb_core::LayerId>,
+    /// Query result in its selected semantic form.
+    pub result: FactQueryResult,
+}
+
+#[derive(Clone, Debug)]
+pub enum FactHistoryRecord {
+    /// One immutable Assertion with its complete stored value and context.
+    Assertion(Assertion),
+    /// One explicit transaction-time Assertion retraction.
+    AssertionRetraction(AssertionRetraction),
+    /// One immutable Mask and its selector.
+    Mask(Mask),
+    /// One explicit transaction-time Mask retraction.
+    MaskRetraction(MaskRetraction),
+    /// One immutable replacement Boundary.
+    ReplacementBoundary(ReplacementBoundary),
+    /// One explicit transaction-time Boundary retraction.
+    ReplacementBoundaryRetraction(ReplacementBoundaryRetraction),
+}
+
+impl FactHistoryRecord {
+    fn created_revision(&self) -> Revision {
+        match self {
+            Self::Assertion(value) => value.created_revision(),
+            Self::AssertionRetraction(value) => value.created_revision(),
+            Self::Mask(value) => value.created_revision(),
+            Self::MaskRetraction(value) => value.created_revision(),
+            Self::ReplacementBoundary(value) => value.created_revision(),
+            Self::ReplacementBoundaryRetraction(value) => value.created_revision(),
+        }
+    }
+
+    fn record_ref(&self) -> RecordRef {
+        match self {
+            Self::Assertion(value) => RecordRef::Assertion(value.id()),
+            Self::AssertionRetraction(value) => RecordRef::AssertionRetraction(value.id()),
+            Self::Mask(value) => RecordRef::Mask(value.id()),
+            Self::MaskRetraction(value) => RecordRef::MaskRetraction(value.id()),
+            Self::ReplacementBoundary(value) => RecordRef::ReplacementBoundary(value.id()),
+            Self::ReplacementBoundaryRetraction(value) => {
+                RecordRef::ReplacementBoundaryRetraction(value.id())
+            }
+        }
+    }
+
+    fn context(&self, facts: &FactSnapshot) -> Option<worlddb_core::ContextKey> {
+        match self {
+            Self::Assertion(value) => Some(value.context()),
+            Self::AssertionRetraction(value) => facts
+                .assertions()
+                .iter()
+                .find(|assertion| assertion.id() == value.assertion_id())
+                .map(Assertion::context),
+            Self::Mask(value) => Some(value.context()),
+            Self::MaskRetraction(value) => facts
+                .masks()
+                .iter()
+                .find(|mask| mask.id() == value.mask_id())
+                .map(Mask::context),
+            Self::ReplacementBoundary(value) => Some(value.context()),
+            Self::ReplacementBoundaryRetraction(value) => facts
+                .replacement_boundaries()
+                .iter()
+                .find(|boundary| boundary.id() == value.replacement_boundary_id())
+                .map(ReplacementBoundary::context),
+        }
+    }
+
+    fn matches_slot(
+        &self,
+        facts: &FactSnapshot,
+        request: &FactQueryRequest,
+        resolved_layers: &[worlddb_core::LayerId],
+        selected_assertions: &BTreeSet<AssertionId>,
+    ) -> bool {
+        let Some(context) = self.context(facts) else {
+            return false;
+        };
+        if context.perspective_scope() != request.perspective_scope
+            || context.epistemic_mode() != request.epistemic_mode
+            || !resolved_layers.contains(&context.layer_id())
+        {
+            return false;
+        }
+        match self {
+            Self::Assertion(value) => {
+                value.subject() == request.subject && value.predicate_id() == request.predicate_id
+            }
+            Self::AssertionRetraction(value) => selected_assertions.contains(&value.assertion_id()),
+            Self::Mask(value) => match value.selector() {
+                MaskSelector::ExactAssertion(assertion_id) => {
+                    selected_assertions.contains(assertion_id)
+                }
+                MaskSelector::Proposition(proposition) => {
+                    proposition.subject() == request.subject
+                        && proposition.predicate_id() == request.predicate_id
+                }
+                MaskSelector::Slot(slot) => {
+                    slot.subject() == request.subject && slot.predicate_id() == request.predicate_id
+                }
+            },
+            Self::MaskRetraction(value) => facts.masks().iter().any(|mask| {
+                mask.id() == value.mask_id()
+                    && FactHistoryRecord::Mask(mask.clone()).matches_slot(
+                        facts,
+                        request,
+                        resolved_layers,
+                        selected_assertions,
+                    )
+            }),
+            Self::ReplacementBoundary(value) => {
+                value.subject() == request.subject && value.predicate_id() == request.predicate_id
+            }
+            Self::ReplacementBoundaryRetraction(value) => facts
+                .replacement_boundaries()
+                .iter()
+                .find(|boundary| boundary.id() == value.replacement_boundary_id())
+                .is_some_and(|boundary| {
+                    FactHistoryRecord::ReplacementBoundary(boundary.clone()).matches_slot(
+                        facts,
+                        request,
+                        resolved_layers,
+                        selected_assertions,
+                    )
+                }),
+        }
+    }
+}
+
+fn fact_history_model(
+    facts: &FactSnapshot,
+    history_spaces: Vec<worlddb_core::HistorySpaceDefinition>,
+    latest_revision: Revision,
+    request: &FactQueryRequest,
+    resolved_layers: &[worlddb_core::LayerId],
+) -> Result<HistorySpaceReferenceModel<FactHistoryRecord>, FactManagementError> {
+    let selected_assertions = facts
+        .assertions()
+        .iter()
+        .filter(|assertion| {
+            let context = assertion.context();
+            context.perspective_scope() == request.perspective_scope
+                && context.epistemic_mode() == request.epistemic_mode
+                && resolved_layers.contains(&context.layer_id())
+                && assertion.subject() == request.subject
+                && assertion.predicate_id() == request.predicate_id
+        })
+        .map(Assertion::id)
+        .collect::<BTreeSet<_>>();
+    let mut candidates = Vec::new();
+    candidates.extend(
+        facts
+            .assertions()
+            .iter()
+            .cloned()
+            .map(FactHistoryRecord::Assertion),
+    );
+    candidates.extend(
+        facts
+            .assertion_retractions()
+            .iter()
+            .cloned()
+            .map(FactHistoryRecord::AssertionRetraction),
+    );
+    candidates.extend(facts.masks().iter().cloned().map(FactHistoryRecord::Mask));
+    candidates.extend(
+        facts
+            .mask_retractions()
+            .iter()
+            .cloned()
+            .map(FactHistoryRecord::MaskRetraction),
+    );
+    candidates.extend(
+        facts
+            .replacement_boundaries()
+            .iter()
+            .cloned()
+            .map(FactHistoryRecord::ReplacementBoundary),
+    );
+    candidates.extend(
+        facts
+            .replacement_boundary_retractions()
+            .iter()
+            .cloned()
+            .map(FactHistoryRecord::ReplacementBoundaryRetraction),
+    );
+
+    let mut commits = BTreeMap::<Revision, Vec<(HistorySpaceId, FactHistoryRecord)>>::new();
+    for record in candidates {
+        if !record.matches_slot(facts, request, resolved_layers, &selected_assertions) {
+            continue;
+        }
+        let Some(owner) = record
+            .context(facts)
+            .map(|context| context.history_space_id())
+        else {
+            continue;
+        };
+        commits
+            .entry(record.created_revision())
+            .or_default()
+            .push((owner, record));
+    }
+    HistorySpaceReferenceModel::from_published_snapshot(
+        history_spaces,
+        latest_revision,
+        commits.into_iter().collect(),
+    )
+    .map_err(|error| FactManagementError::Query(error.to_string()))
 }
 
 impl FactSnapshot {
@@ -2451,21 +2732,76 @@ impl<'a> FileFactManager<'a> {
         &self,
         request: FactResolutionPreviewRequest,
     ) -> Result<QueryEngineOutput<ResolutionPreview>, FactManagementError> {
-        self.authorize(Capability::QueryResolve, PolicyTarget::default())?;
         let revision = self.revision();
-        let metadata = self.write_validation_metadata()?;
-        if metadata.revision() != revision {
-            return Err(FactManagementError::Conflict);
+        let execution = self.query_slot(FactQueryRequest {
+            recorded_as_of: revision,
+            schema_mode: SchemaMode::Historical,
+            operation: FactQueryOperation::Resolved,
+            history_space_id: request.history_space_id,
+            layer_selection: request.layer_selection,
+            subject: request.subject,
+            predicate_id: request.predicate_id,
+            perspective_scope: request.perspective_scope,
+            epistemic_mode: request.epistemic_mode,
+            world_time: request.world_time,
+        })?;
+        match execution.result {
+            FactQueryResult::Resolved(output) => Ok(output),
+            FactQueryResult::History(_) | FactQueryResult::Explain(_) => {
+                Err(FactManagementError::Query(
+                    "resolution query returned an incompatible result".to_owned(),
+                ))
+            }
         }
-        let facts = self.snapshot_at(revision)?;
-        let records = self.records_at_revision(revision)?;
-        let recorded_as_of = RecordedAsOf::from_published_revision(revision);
+    }
+
+    /// Executes History, Resolved, or Explain through the productive query engine.
+    pub fn query_slot(
+        &self,
+        request: FactQueryRequest,
+    ) -> Result<FactQueryExecution, FactManagementError> {
+        let required_capability = match request.operation {
+            FactQueryOperation::History => Capability::RawHistoryRead,
+            FactQueryOperation::Resolved => Capability::QueryResolve,
+            FactQueryOperation::Explain => Capability::QueryExplain,
+        };
+        self.authorize(required_capability, PolicyTarget::default())?;
+        let revision = self.revision();
+        if request.recorded_as_of > revision {
+            return Err(FactManagementError::RevisionNotPublished);
+        }
+        if request.operation == FactQueryOperation::Explain
+            && !matches!(request.world_time, WorldTimeSelector::At(_))
+        {
+            return Err(FactManagementError::InvalidCandidate(
+                "Explain requires one explicit WorldTime point",
+            ));
+        }
+        let metadata_manager = FileProjectMetadataManager::open(
+            self.schema.layout.clone(),
+            self.schema.writer_lock,
+            self.schema.principal,
+        )
+        .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let metadata = metadata_manager
+            .snapshot_at(request.schema_mode, request.recorded_as_of)
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let metadata_as_of = metadata_manager
+            .snapshot_at(SchemaMode::Historical, request.recorded_as_of)
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let metadata_head = metadata_manager
+            .snapshot_at(SchemaMode::Current, revision)
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let facts = self.snapshot_at(request.recorded_as_of)?;
+        let records = self.records_at_revision(request.recorded_as_of)?;
+        let recorded_as_of = RecordedAsOf::from_published_revision(request.recorded_as_of);
         let schema_binding = HistoricalQueryBinding::bind(
             &self.schema.schema_history,
             recorded_as_of,
-            SchemaMode::Historical,
+            request.schema_mode,
         )
         .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let schema_revision = schema_binding.schema_revision();
         let predicate = metadata
             .schema()
             .definitions()
@@ -2493,7 +2829,7 @@ impl<'a> FileFactManager<'a> {
                 "the selected query time requires an Active registered Timeline",
             ));
         }
-        if metadata
+        if metadata_as_of
             .history_spaces()
             .definition(request.history_space_id)
             .is_none()
@@ -2502,8 +2838,10 @@ impl<'a> FileFactManager<'a> {
                 "the selected HistorySpace is unavailable",
             ));
         }
-        let layers = ValidatedLayerSelection::resolve(metadata.layers(), request.layer_selection)
-            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let layers =
+            ValidatedLayerSelection::resolve(metadata.layers(), request.layer_selection.clone())
+                .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let resolved_layers = layers.resolved().as_slice().to_vec();
         let budget_limits = QueryBudgetLimits::new(100_000, 500_000, 20_000)
             .map_err(|error| FactManagementError::Query(error.to_string()))?;
         let budget = QueryBudget::new(100_000, 500_000, 20_000, budget_limits)
@@ -2530,6 +2868,41 @@ impl<'a> FileFactManager<'a> {
             cancellation: CancellationToken::new(),
         })
         .map_err(|error| FactManagementError::Query(error.to_string()))?;
+
+        if request.operation == FactQueryOperation::History {
+            let history = fact_history_model(
+                &facts,
+                metadata_head.history_spaces().definitions().to_vec(),
+                revision,
+                &request,
+                &resolved_layers,
+            )?;
+            let output = ProductiveQueryEngine::raw_history(
+                &history,
+                &context,
+                self.schema.policy_history.policy(),
+                FullScanBudget::Available,
+                FactHistoryRecord::record_ref,
+            )
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+            let rows = output
+                .query()
+                .value()
+                .iter()
+                .map(|row| FactQueryHistoryRow {
+                    record_ref: row.record_ref(),
+                    recorded_revision: row.recorded_revision(),
+                    owner_history_space_id: row.owner_history_space_id(),
+                    record: row.value().clone(),
+                })
+                .collect();
+            return Ok(FactQueryExecution {
+                snapshot_revision: revision,
+                schema_revision,
+                resolved_layers,
+                result: FactQueryResult::History(rows),
+            });
+        }
 
         let mut assertion_commits =
             BTreeMap::<Revision, Vec<(HistorySpaceId, AssertionHistoryRecord)>>::new();
@@ -2570,7 +2943,7 @@ impl<'a> FileFactManager<'a> {
                 ));
         }
         let history = HistorySpaceReferenceModel::from_published_snapshot(
-            metadata.history_spaces().definitions().to_vec(),
+            metadata_head.history_spaces().definitions().to_vec(),
             revision,
             assertion_commits.into_iter().collect(),
         )
@@ -2700,14 +3073,40 @@ impl<'a> FileFactManager<'a> {
             AssertionPointIndexAccess::missing(),
             FullScanBudget::Available,
         );
-        ProductiveQueryEngine::resolution_preview(
-            store,
-            query,
-            worlddb_core::MultiValueSlot::new(request.subject, request.predicate_id),
-            predicate,
-            |left, right| temporal_value_equality(metadata.schema(), left, right),
-        )
-        .map_err(|error| FactManagementError::Query(error.to_string()))
+        let slot = worlddb_core::MultiValueSlot::new(request.subject, request.predicate_id);
+        let result = match request.operation {
+            FactQueryOperation::History => {
+                return Err(FactManagementError::Query(
+                    "history query entered the resolution pipeline".to_owned(),
+                ));
+            }
+            FactQueryOperation::Resolved => FactQueryResult::Resolved(
+                ProductiveQueryEngine::resolution_preview(
+                    store,
+                    query,
+                    slot,
+                    predicate,
+                    |left, right| temporal_value_equality(metadata.schema(), left, right),
+                )
+                .map_err(|error| FactManagementError::Query(error.to_string()))?,
+            ),
+            FactQueryOperation::Explain => FactQueryResult::Explain(
+                ProductiveQueryEngine::explain_point(
+                    store,
+                    query,
+                    slot,
+                    predicate,
+                    |left, right| temporal_value_equality(metadata.schema(), left, right),
+                )
+                .map_err(|error| FactManagementError::Query(error.to_string()))?,
+            ),
+        };
+        Ok(FactQueryExecution {
+            snapshot_revision: revision,
+            schema_revision,
+            resolved_layers,
+            result,
+        })
     }
 
     fn check_base(&self, expected_base: Revision) -> Result<(), FactManagementError> {
@@ -3771,10 +4170,11 @@ mod tests {
         EvidenceRelation, EvidenceTargetRef, GrantEffect, LayerDefinition, LayerId,
         LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId, Polarity, PolicyRuleId,
         PolicySubject, PredicateDefinition, PredicateDefinitionSpec, PredicateId,
-        ProvenanceEndpointRef, ProvenanceRelation, Record, RecordRef, ResolutionPolicy, Revision,
-        RoleCardinality, SchemaMode, SchemaRevision, SecurityPolicyVersion, SourceContentDigest,
-        SourceLocator, SourceMetadata, Subject, Symbol, TimeInterval, Timeline,
-        TimelineCalendarProfile, TimelineDefinition, TimelineId, Value, ValueKind, WorldTime,
+        ProvenanceEndpointRef, ProvenanceRelation, Record, RecordRef, ResolutionPolicy,
+        ResolutionPreview, Revision, RoleCardinality, SchemaMode, SchemaRevision,
+        SecurityPolicyVersion, SourceContentDigest, SourceLocator, SourceMetadata, Subject, Symbol,
+        TimeInterval, Timeline, TimelineCalendarProfile, TimelineDefinition, TimelineId, Value,
+        ValueKind, WorldTime, WorldTimeSelector,
     };
 
     use crate::{
@@ -3785,7 +4185,10 @@ mod tests {
     };
 
     use super::super::tests::{TempArea, create_project, id};
-    use super::{FactManagementError, FileFactManager as Manager, SourceDraft};
+    use super::{
+        FactHistoryRecord, FactManagementError, FactQueryOperation, FactQueryRequest,
+        FactQueryResult, FileFactManager as Manager, SourceDraft,
+    };
 
     struct Fixture {
         _area: TempArea,
@@ -3830,7 +4233,11 @@ mod tests {
             values.push(Capability::AssertionCreate);
         }
         if include_query_resolve {
-            values.push(Capability::QueryResolve);
+            values.extend([
+                Capability::QueryResolve,
+                Capability::QueryExplain,
+                Capability::RawHistoryRead,
+            ]);
         }
         if include_assertion_correction {
             values.extend([
@@ -5286,6 +5693,219 @@ mod tests {
             Err(FactManagementError::Unauthorized(Capability::QueryResolve))
         ) {
             return Err("resolution preview without QueryResolve was not rejected".to_owned());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn query_slot_binds_recorded_revision_and_explains_applied_mask_and_boundary()
+    -> Result<(), String> {
+        let fixture = build_fixture_with_correction_rights(true, true, true)?;
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let context = make_context(&fixture)?;
+        let subject = Subject::new(fixture.entity_id);
+        let assertion_id = id::<worlddb_core::AssertionId>(143)?;
+        let assertion = manager
+            .create_assertion(
+                manager.revision(),
+                id::<OperationId>(142)?,
+                assertion_id,
+                AssertionDraft::new(
+                    context,
+                    subject,
+                    fixture.predicate_id,
+                    Value::String("Alice".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+        let child_history_space_id = id::<worlddb_core::HistorySpaceId>(148)?;
+        let mut metadata = FileProjectMetadataManager::open(
+            fixture.layout.clone(),
+            &fixture.lock,
+            fixture.principal,
+        )
+        .map_err(|error| error.to_string())?;
+        metadata
+            .create_child(
+                assertion.revision(),
+                id::<OperationId>(149)?,
+                child_history_space_id,
+                fixture.history_space_id,
+                assertion.revision(),
+            )
+            .map_err(|error| error.to_string())?;
+        drop(metadata);
+        drop(manager);
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let child_context = ContextKey::new(
+            child_history_space_id,
+            fixture.layer_id,
+            worlddb_core::PerspectiveScope::World,
+            worlddb_core::EpistemicMode::WorldState,
+        )
+        .map_err(|error| error.to_string())?;
+        let mask_id = id::<worlddb_core::MaskId>(145)?;
+        let mask = manager
+            .create_mask(
+                manager.revision(),
+                id::<OperationId>(144)?,
+                mask_id,
+                child_context,
+                MaskSelector::Proposition(worlddb_core::PropositionKey::new(
+                    subject,
+                    fixture.predicate_id,
+                    Value::String("Alice".to_owned()),
+                    Polarity::Positive,
+                )),
+                None,
+            )
+            .map_err(|error| error.to_string())?;
+        let boundary_id = id::<worlddb_core::ReplacementBoundaryId>(147)?;
+        let boundary = manager
+            .create_replacement_boundary(
+                mask.revision(),
+                id::<OperationId>(146)?,
+                boundary_id,
+                super::ReplacementBoundaryDraft::new(
+                    child_context,
+                    subject,
+                    fixture.predicate_id,
+                    None,
+                ),
+            )
+            .map_err(|error| error.to_string())?;
+        let request = |history_space_id, recorded_as_of, schema_mode, operation, world_time| {
+            FactQueryRequest {
+                recorded_as_of,
+                schema_mode,
+                operation,
+                history_space_id,
+                layer_selection: worlddb_core::LayerSelection::BaseOnly,
+                subject,
+                predicate_id: fixture.predicate_id,
+                perspective_scope: worlddb_core::PerspectiveScope::World,
+                epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+                world_time,
+            }
+        };
+        let point = WorldTimeSelector::At(WorldTime::from_nanoseconds(
+            Timeline::new(fixture.timeline_id),
+            0,
+        ));
+
+        let historical = manager
+            .query_slot(request(
+                fixture.history_space_id,
+                assertion.revision(),
+                SchemaMode::Historical,
+                FactQueryOperation::Resolved,
+                point,
+            ))
+            .map_err(|error| format!("historical Resolved query: {error}"))?;
+        let FactQueryResult::Resolved(output) = &historical.result else {
+            return Err("historical query did not return a Resolved result".to_owned());
+        };
+        if historical.snapshot_revision != boundary.revision()
+            || !matches!(
+                output.query().value(),
+                ResolutionPreview::Point { resolved_view, .. }
+                    if resolved_view.contributors() == [assertion_id]
+            )
+        {
+            return Err("Resolved did not honor its historical RecordedAsOf binding".to_owned());
+        }
+
+        let history = manager
+            .query_slot(request(
+                child_history_space_id,
+                boundary.revision(),
+                SchemaMode::Historical,
+                FactQueryOperation::History,
+                WorldTimeSelector::AllTimes,
+            ))
+            .map_err(|error| format!("raw History query: {error}"))?;
+        if !matches!(&history.result, FactQueryResult::History(rows)
+            if rows.len() == 3
+                && rows.iter().any(|row| row.record_ref == RecordRef::Assertion(assertion_id))
+                && rows.iter().any(|row| matches!(&row.record,
+                    FactHistoryRecord::Assertion(value)
+                        if matches!(value.value(), Value::String(text) if text == "Alice")))
+                && rows.iter().any(|row| row.record_ref == RecordRef::Mask(mask_id))
+                && rows.iter().any(|row| row.record_ref == RecordRef::ReplacementBoundary(boundary_id)))
+        {
+            return Err(
+                "History did not enumerate the selected slot's three raw records".to_owned(),
+            );
+        }
+
+        let explain = manager
+            .query_slot(request(
+                child_history_space_id,
+                boundary.revision(),
+                SchemaMode::Current,
+                FactQueryOperation::Explain,
+                point,
+            ))
+            .map_err(|error| format!("Explain query: {error}"))?;
+        if !matches!(&explain.result, FactQueryResult::Explain(output)
+        if output.query().value().stages().iter().any(|stage| {
+            stage.kind() == worlddb_core::ExplainStageKind::MaskProjection
+                && stage.applied_records().contains(&RecordRef::Mask(mask_id))
+        }) && output.query().value().stages().iter().any(|stage| {
+            stage.kind() == worlddb_core::ExplainStageKind::ReplacementBoundary
+                && stage.applied_records().contains(&RecordRef::ReplacementBoundary(boundary_id))
+        })) {
+            return Err(format!(
+                "Explain did not include the applied Mask and Boundary records: {:?}",
+                match &explain.result {
+                    FactQueryResult::Explain(output) => output.query().value().stages(),
+                    _ => &[],
+                }
+            ));
+        }
+
+        let explicit_schema = SchemaRevision::from_published_revision(assertion.revision());
+        let explicit = manager
+            .query_slot(request(
+                fixture.history_space_id,
+                assertion.revision(),
+                SchemaMode::Explicit(explicit_schema),
+                FactQueryOperation::Resolved,
+                point,
+            ))
+            .map_err(|error| format!("Explicit-schema query: {error}"))?;
+        if explicit.schema_revision != explicit_schema {
+            return Err("Explicit SchemaMode did not bind the selected schema revision".to_owned());
+        }
+
+        let denied = build_fixture(true, false)?;
+        let denied_manager = Manager::open(denied.layout.clone(), &denied.lock, denied.principal)
+            .map_err(|error| error.to_string())?;
+        let denied_request = FactQueryRequest {
+            recorded_as_of: denied_manager.revision(),
+            schema_mode: SchemaMode::Historical,
+            operation: FactQueryOperation::Explain,
+            history_space_id: denied.history_space_id,
+            layer_selection: worlddb_core::LayerSelection::BaseOnly,
+            subject: Subject::new(denied.entity_id),
+            predicate_id: denied.predicate_id,
+            perspective_scope: worlddb_core::PerspectiveScope::World,
+            epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+            world_time: WorldTimeSelector::At(WorldTime::from_nanoseconds(
+                Timeline::new(denied.timeline_id),
+                0,
+            )),
+        };
+        if !matches!(
+            denied_manager.query_slot(denied_request),
+            Err(FactManagementError::Unauthorized(Capability::QueryExplain))
+        ) {
+            return Err("Explain without QueryExplain was not rejected".to_owned());
         }
         Ok(())
     }

@@ -260,6 +260,11 @@ const factsQueryPointWrap = document.querySelector("#facts-query-point-wrap");
 const factsQueryTimeline = document.querySelector("#facts-query-timeline");
 const factsQueryNanosecondsWrap = document.querySelector("#facts-query-nanoseconds-wrap");
 const factsQueryNanoseconds = document.querySelector("#facts-query-nanoseconds");
+const factsQueryOperation = document.querySelector("#facts-query-operation");
+const factsQueryRecordedAsOf = document.querySelector("#facts-query-recorded-as-of");
+const factsQuerySchemaMode = document.querySelector("#facts-query-schema-mode");
+const factsQuerySchemaRevisionWrap = document.querySelector("#facts-query-schema-revision-wrap");
+const factsQuerySchemaRevision = document.querySelector("#facts-query-schema-revision");
 const factsPreviewButton = document.querySelector("#facts-preview");
 const factsPreviewStatus = document.querySelector("#facts-preview-status");
 const factsPreviewResults = document.querySelector("#facts-preview-results");
@@ -729,6 +734,7 @@ async function refreshFactsCatalog(activeSessionId = sessionId) {
       }
       factCatalog = { schema, entities, branches, perspectives, records: records.records,
         lifecycleVisible: records.lifecycle_visible, revision: revisions[0],
+        queryRevision: records.revision_text,
         eventGraphGuidance: records.event_graph_guidance ?? [],
         sources: records.sources ?? [], evidence: records.evidence ?? [],
         provenance: records.provenance ?? [], endpointOptions: records.endpoint_options ?? [] };
@@ -772,6 +778,12 @@ function factsSchemaDefinitions(family, activeOnly = false) {
 
 function renderFactsChoices() {
   if (!factCatalog) return;
+  if (factsQueryRecordedAsOf.dataset.auto !== "false") {
+    factsQueryRecordedAsOf.value = factCatalog.queryRevision;
+  }
+  if (factsQuerySchemaRevision.dataset.auto !== "false") {
+    factsQuerySchemaRevision.value = factCatalog.queryRevision;
+  }
   const previous = {
     historySpace: factsHistorySpace.value,
     layer: factsLayer.value,
@@ -1153,14 +1165,48 @@ function factsWorldTimeInput() {
   return { kind: "at", timeline_id: factsQueryTimeline.value, nanoseconds: value };
 }
 
+function factsQueryRevisionInput(input) {
+  const value = input.value.trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error("invalid_request");
+  let revision;
+  let latest;
+  try {
+    revision = BigInt(value);
+    latest = BigInt(factCatalog.queryRevision);
+  } catch { throw new Error("invalid_request"); }
+  if (revision >= (1n << 64n) - 1n || revision > latest) throw new Error("invalid_request");
+  return value;
+}
+
 function factsQueryCommand() {
-  if (!factsSubject.value || !factsPredicate.value) throw new Error("invalid_request");
+  if (!factCatalog || !factsSubject.value || !factsPredicate.value) throw new Error("invalid_request");
+  const recordedAsOf = factsQueryRevisionInput(factsQueryRecordedAsOf);
+  let schemaMode;
+  if (factsQuerySchemaMode.value === "historical") {
+    schemaMode = { mode: "historical", recorded_as_of: recordedAsOf };
+  } else if (factsQuerySchemaMode.value === "current") {
+    schemaMode = { mode: "current" };
+  } else if (factsQuerySchemaMode.value === "explicit") {
+    schemaMode = { mode: "explicit", revision: factsQueryRevisionInput(factsQuerySchemaRevision) };
+  } else {
+    throw new Error("invalid_request");
+  }
+  const worldTime = factsWorldTimeInput();
+  if (factsQueryOperation.value === "explain" && worldTime.kind !== "at") {
+    throw new Error("invalid_request");
+  }
+  if (!["history", "resolved", "explain"].includes(factsQueryOperation.value)) {
+    throw new Error("invalid_request");
+  }
   return {
-    command: "preview",
+    command: "query",
     context: factsContextInput(),
     subject_id: factsSubject.value,
     predicate_id: factsPredicate.value,
-    world_time: factsWorldTimeInput(),
+    recorded_as_of: recordedAsOf,
+    schema_mode: schemaMode,
+    query_mode: factsQueryOperation.value,
+    world_time: worldTime,
   };
 }
 
@@ -1374,7 +1420,7 @@ async function runFactsPreview(activeSessionId = sessionId) {
   let response;
   try {
     response = await manageFacts(factsQueryCommand(), activeSessionId);
-    if (response.kind !== "preview") throw new Error("unsupported_protocol");
+    if (response.kind !== "query") throw new Error("unsupported_protocol");
     renderFactsPreview(response);
   } catch (error) {
     await invoke("facts_smoke_diagnostic", {
@@ -1468,6 +1514,7 @@ function updateFactControls() {
   let valueValid = false;
   let validityValid = false;
   let queryTimeValid = false;
+  let queryValid = false;
   let assertionCorrectionValid = false;
   let eventCorrectionValid = false;
   let eventCreateValid = false;
@@ -1476,6 +1523,7 @@ function updateFactControls() {
   try { factsValueInput(); valueValid = true; } catch {}
   try { factsValidityInput(); validityValid = true; } catch {}
   try { factsWorldTimeInput(); queryTimeValid = true; } catch {}
+  try { factsQueryCommand(); queryValid = true; } catch {}
   try { factsAssertionCorrectionCommand(); assertionCorrectionValid = true; } catch {}
   try { factsEventCorrectionCommand(); eventCorrectionValid = true; } catch {}
   try { factsEventCreateCommand(); eventCreateValid = true; } catch {}
@@ -1501,6 +1549,9 @@ function updateFactControls() {
   factsValidityRange.hidden = !factsValidityEnabled.checked;
   factsQueryPointWrap.hidden = factsQueryTimeMode.value !== "at";
   factsQueryNanosecondsWrap.hidden = factsQueryTimeMode.value !== "at";
+  factsQuerySchemaRevisionWrap.hidden = factsQuerySchemaMode.value !== "explicit";
+  const explainOption = factsQueryOperation.querySelector('option[value="explain"]');
+  if (explainOption) explainOption.disabled = factsQueryTimeMode.value !== "at";
   factsMaskExactWrap.hidden = factsMaskSelector.value !== "exact_assertion";
   factsLifecycleReason.hidden = factsLifecycleAction.value !== "retract";
   factsMaskSelectorNote.textContent = factsMaskSelector.value === "slot"
@@ -1530,7 +1581,7 @@ function updateFactControls() {
   factsEvidenceRetract.disabled = !canRead || !factsEvidenceRetractTarget.value || !factsEvidenceRetractReason.value.trim();
   factsProvenanceCreate.disabled = !canRead || !provenanceValid;
   factsProvenanceRetract.disabled = !canRead || !factsProvenanceRetractTarget.value || !factsProvenanceRetractReason.value.trim();
-  factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid;
+  factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid || !queryValid;
   factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
   factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
   factsEventCorrectionPreviewButton.disabled = !canRead || !eventCorrectionValid;
@@ -1547,22 +1598,118 @@ function updateFactControls() {
   factsWriteStatus.setAttribute("aria-busy", String(factBusy));
 }
 
-function renderFactsPreview(preview) {
-  factsPreviewStatus.textContent = `Abfrage abgeschlossen · Revision ${preview.revision}`;
+function renderFactsPreview(query) {
+  factsPreviewStatus.textContent = `Abfrage abgeschlossen · Revision ${query.snapshot_revision}`;
   factsPreviewResults.replaceChildren();
-  const result = preview.result;
+  const binding = document.createElement("article");
+  binding.className = "result-cell";
+  appendText(binding, "h3", "Gebundener Abfragekontext");
+  appendText(binding, "p", `Snapshot-Revision ${query.snapshot_revision} · RecordedAsOf ${query.recorded_as_of}`);
+  appendText(binding, "p", `HistorySpace ${query.history_space_id} · Layer ${query.resolved_layer_ids.join(", ") || "keiner"}`);
+  appendText(binding, "p", `Perspective ${query.perspective_id ?? "World"} · EpistemicMode ${query.epistemic_mode}`);
+  const selectedWorldTime = query.world_time.kind === "all_times"
+    ? "Alle Zeiten"
+    : `${query.world_time.timeline_id} · ${query.world_time.nanoseconds} ns`;
+  appendText(binding, "p", `WorldTime ${selectedWorldTime} · Abfrage ${query.query_mode}`);
+  const schemaMode = query.schema_mode.mode === "historical"
+    ? `Historical (RecordedAsOf ${query.schema_mode.recorded_as_of})`
+    : query.schema_mode.mode === "explicit"
+      ? `Explicit (${query.schema_mode.revision})`
+      : "Current";
+  appendText(binding, "p", `SchemaMode ${schemaMode} · gebundene Schema-Revision ${query.schema_revision}`);
+  factsPreviewResults.append(binding);
+
+  const result = query.result;
+  if (result.kind === "history") {
+    appendText(factsPreviewResults, "p", `Raw History · ${result.records.length} sichtbare Datensätze`);
+    if (result.records.length === 0) appendText(factsPreviewResults, "p", "Keine passenden Rohdatensätze in dieser Historie.", "muted");
+    for (const record of result.records) renderFactsHistoryRecord(record);
+    return;
+  }
+  if (result.kind === "resolved") {
+    renderResolutionResult(factsPreviewResults, result.result);
+    return;
+  }
+  if (result.kind === "explain") {
+    appendText(factsPreviewResults, "p", `Explain · ${result.timeline_id} · ${result.nanoseconds} ns`);
+    renderResolutionOutcome(factsPreviewResults, result.outcome);
+    const labels = {
+      candidate_scan: "Kandidatensuche",
+      mask_projection: "Mask-Anwendung",
+      replacement_boundary: "ReplacementBoundary-Anwendung",
+      resolution: "Auflösung",
+    };
+    for (const stage of result.stages) {
+      const card = document.createElement("article");
+      card.className = "result-cell";
+      appendText(card, "h3", labels[stage.kind] ?? stage.kind);
+      appendText(card, "p", `Eingabe-Assertions: ${stage.input_assertions.join(", ") || "keine"}`);
+      appendText(card, "p", `Ausgabe-Assertions: ${stage.output_assertions.join(", ") || "keine"}`);
+      appendText(card, "p", `Angewandte Datensätze: ${stage.applied_records.map((item) => `${item.family} ${item.record_id}`).join(", ") || "keine"}`);
+      factsPreviewResults.append(card);
+    }
+    return;
+  }
+  appendText(factsPreviewResults, "p", "Unbekannte Abfrageantwort.", "muted");
+}
+
+function renderFactsHistoryRecord(record) {
+  const card = document.createElement("article");
+  card.className = "result-cell";
+  appendText(card, "h3", `${record.family} ${record.record_id} · Revision ${record.recorded_revision}`);
+  appendText(card, "p", `Eigentümer-HistorySpace ${record.history_space_id}`);
+  const detail = record.record;
+  if (detail.kind === "assertion") {
+    appendText(card, "p", `Kontext: ${formatFactsRecordContext(detail.context)}`);
+    appendText(card, "p", `Assertion: Subjekt ${detail.subject_id} · Prädikat ${detail.predicate_id} · ${detail.polarity} · ${detail.value_kind} ${detail.value}`);
+    appendText(card, "p", `Weltzeitgültigkeit: ${formatFactsValidity(detail.validity)}`);
+  } else if (detail.kind === "assertion_retraction") {
+    appendText(card, "p", `Nimmt Assertion ${detail.assertion_id} zurück · Grund: ${detail.reason}`);
+  } else if (detail.kind === "mask") {
+    appendText(card, "p", `Kontext: ${formatFactsRecordContext(detail.context)}`);
+    appendText(card, "p", `Selector: ${formatFactsMaskSelector(detail.selector)}`);
+    appendText(card, "p", `Weltzeitgültigkeit: ${detail.validity ? formatFactsValidity(detail.validity) : "alle Zeiten"}`);
+  } else if (detail.kind === "mask_retraction") {
+    appendText(card, "p", `Nimmt Mask ${detail.mask_id} zurück · Grund: ${detail.reason}`);
+  } else if (detail.kind === "replacement_boundary") {
+    appendText(card, "p", `Kontext: ${formatFactsRecordContext(detail.context)}`);
+    appendText(card, "p", `Slot: Subjekt ${detail.subject_id} · Prädikat ${detail.predicate_id}`);
+    appendText(card, "p", `Weltzeitgültigkeit: ${detail.validity ? formatFactsValidity(detail.validity) : "alle Zeiten"}`);
+  } else if (detail.kind === "replacement_boundary_retraction") {
+    appendText(card, "p", `Nimmt ReplacementBoundary ${detail.replacement_boundary_id} zurück · Grund: ${detail.reason}`);
+  }
+  factsPreviewResults.append(card);
+}
+
+function formatFactsRecordContext(context) {
+  return `HistorySpace ${context.history_space_id} · Layer ${context.layer_id} · Perspective ${context.perspective_id ?? "World"} · ${context.epistemic_mode}`;
+}
+
+function formatFactsValidity(validity) {
+  return `${validity.timeline_id} · [${validity.start_nanoseconds ?? "−∞"}, ${validity.end_nanoseconds ?? "+∞"}) ns`;
+}
+
+function formatFactsMaskSelector(selector) {
+  if (selector.kind === "exact_assertion") return `konkrete Assertion ${selector.assertion_id}`;
+  if (selector.kind === "proposition") {
+    return `Proposition ${selector.subject_id} / ${selector.predicate_id} · ${selector.polarity} · ${selector.value_kind} ${selector.value}`;
+  }
+  return `Slot ${selector.subject_id} / ${selector.predicate_id} · Perspective ${selector.perspective_id ?? "World"} · ${selector.epistemic_mode}`;
+}
+
+function renderResolutionResult(parent, result) {
   if (result.kind === "complete_empty") {
-    appendText(factsPreviewResults, "p", "CompleteEmpty: Die vollständige Historie enthält keine Assertion- oder Boundary-Zeitdomäne.");
+    appendText(parent, "p", "CompleteEmpty: Die vollständige Historie enthält keine Assertion- oder Boundary-Zeitdomäne.");
     return;
   }
   if (result.kind === "point") {
-    appendText(factsPreviewResults, "p", `Zeitpunkt ${result.timeline_id} · ${result.nanoseconds} ns`);
-    renderResolutionOutcome(factsPreviewResults, result.outcome);
+    appendText(parent, "p", `Zeitpunkt ${result.timeline_id} · ${result.nanoseconds} ns`);
+    renderResolutionOutcome(parent, result.outcome);
     return;
   }
   if (result.kind === "all_times") {
     if (result.slices.length === 0) {
-      appendText(factsPreviewResults, "p", "Ungültige leere AllTimes-Antwort.", "muted");
+      appendText(parent, "p", "Ungültige leere AllTimes-Antwort.", "muted");
       return;
     }
     for (const slice of result.slices) {
@@ -1572,7 +1719,7 @@ function renderFactsPreview(preview) {
       const end = slice.end_nanoseconds ?? "+∞";
       appendText(cell, "h3", `${slice.timeline_id} · [${start}, ${end}) ns`);
       renderResolutionOutcome(cell, slice.outcome);
-      factsPreviewResults.append(cell);
+      parent.append(cell);
     }
   }
 }
@@ -3187,6 +3334,10 @@ async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cuto
 }
 
 async function runFactsSmoke(activeSessionId) {
+  factsQueryRecordedAsOf.dataset.auto = "true";
+  factsQuerySchemaRevision.dataset.auto = "true";
+  factsQueryOperation.value = "resolved";
+  factsQuerySchemaMode.value = "historical";
   schemaViewMode.value = "current";
   schemaCurrentMode = true;
   schemaFamily.value = "predicate";
@@ -3294,11 +3445,15 @@ async function runFactsSmoke(activeSessionId) {
   factsValidityTimeline.value = timeline.identity;
   factsValidityEnabled.checked = false;
   factsQueryTimeMode.value = "all_times";
+  factsQueryOperation.value = "resolved";
+  factsQuerySchemaMode.value = "historical";
   factsPolarity.value = "positive";
   updateFactsValueFields();
   const emptyHistoryPreview = await manageFacts(factsQueryCommand(), activeSessionId);
-  if (emptyHistoryPreview.kind !== "preview" || emptyHistoryPreview.result.kind !== "complete_empty") {
-    throw new Error("the empty facts slot did not return an explicit CompleteEmpty preview");
+  if (emptyHistoryPreview.kind !== "query" || emptyHistoryPreview.query_mode !== "resolved"
+    || emptyHistoryPreview.result.kind !== "resolved"
+    || emptyHistoryPreview.result.result.kind !== "complete_empty") {
+    throw new Error("the empty facts slot did not return an explicitly bound CompleteEmpty query");
   }
 
   factsValueText.value = "Exact-Mask-Target";
@@ -3394,17 +3549,99 @@ async function runFactsSmoke(activeSessionId) {
   updateFactControls();
   factsMaskSelector.value = "slot";
   updateFactControls();
-  await clickFactWrite(factsCreateMask, "Mask");
+  const slotMask = await clickFactWrite(factsCreateMask, "Mask");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Unknown")) {
     throw new Error("the complete Slot Mask did not make the preview Unknown");
   }
 
-  await clickFactWrite(factsCreateBoundary, "ReplacementBoundary");
+  const slotBoundary = await clickFactWrite(factsCreateBoundary, "ReplacementBoundary");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Known")) {
     throw new Error("the MultiValueReplace boundary did not expose its known empty-set resolution");
   }
+
+  const resolvedQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (resolvedQuery.kind !== "query" || resolvedQuery.result.kind !== "resolved"
+    || resolvedQuery.result.result.kind !== "all_times") {
+    throw new Error("Resolved View did not return a complete all-times query result");
+  }
+  const resolvedText = await clickFactPreview();
+  if (!resolvedText.includes("Ergebnis: Known")) throw new Error("Resolved View was not rendered in the desktop query panel");
+
+  factsQueryOperation.value = "history";
+  updateFactControls();
+  const rawHistoryQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (rawHistoryQuery.kind !== "query" || rawHistoryQuery.result.kind !== "history"
+    || !rawHistoryQuery.result.records.some((item) => item.record_id === slotAssertion.recordId
+      && item.record.kind === "assertion" && item.record.value === "Slot-Mask-Target")
+    || !rawHistoryQuery.result.records.some((item) => item.record_id === slotMask.recordId
+      && item.record.kind === "mask")
+    || !rawHistoryQuery.result.records.some((item) => item.record_id === slotBoundary.recordId
+      && item.record.kind === "replacement_boundary")) {
+    throw new Error("Raw History did not expose the selected Assertion, Mask, and Boundary payloads");
+  }
+  const historyText = await clickFactPreview();
+  if (!historyText.includes("Raw History") || !historyText.includes(slotMask.recordId)
+    || !historyText.includes("Slot-Mask-Target")) {
+    throw new Error("Raw History was not rendered with its assertion value and Mask record");
+  }
+
+  factsHistorySpace.value = root.history_space_id;
+  factsQueryOperation.value = "resolved";
+  factsQueryTimeMode.value = "at";
+  factsQueryTimeline.value = timeline.identity;
+  factsQueryNanoseconds.value = "0";
+  updateFactControls();
+  const currentHead = factCatalog.queryRevision;
+  const historicalQuery = await manageFacts({
+    ...factsQueryCommand(),
+    recorded_as_of: String(slotAssertion.revision),
+    schema_mode: { mode: "historical", recorded_as_of: String(slotAssertion.revision) },
+  }, activeSessionId);
+  if (historicalQuery.kind !== "query" || historicalQuery.snapshot_revision !== currentHead
+    || historicalQuery.recorded_as_of !== String(slotAssertion.revision)
+    || historicalQuery.result.kind !== "resolved"
+    || historicalQuery.result.result.kind !== "point"
+    || historicalQuery.result.result.outcome.kind !== "known") {
+    throw new Error("the Historical RecordedAsOf query did not preserve its separate live Snapshot binding");
+  }
+
+  factsHistorySpace.value = slotMaskBranch.history_space_id;
+  factsQueryOperation.value = "explain";
+  factsQuerySchemaMode.value = "current";
+  updateFactControls();
+  const explainQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (explainQuery.kind !== "query" || explainQuery.result.kind !== "explain"
+    || !explainQuery.result.stages.some((stage) => stage.applied_records.some((item) =>
+      item.family === "mask" && item.record_id === slotMask.recordId))
+    || !explainQuery.result.stages.some((stage) => stage.applied_records.some((item) =>
+      item.family === "replacement_boundary" && item.record_id === slotBoundary.recordId))) {
+    throw new Error("Explain did not show the applied Mask and ReplacementBoundary records");
+  }
+  const explainText = await clickFactPreview();
+  if (!explainText.includes("Explain") || !explainText.includes(slotMask.recordId)
+    || !explainText.includes(slotBoundary.recordId)) {
+    throw new Error("Explain was not rendered with its applied Mask and ReplacementBoundary IDs");
+  }
+
+  factsQueryOperation.value = "resolved";
+  factsQuerySchemaMode.value = "explicit";
+  factsQuerySchemaRevision.value = factCatalog.queryRevision;
+  updateFactControls();
+  const explicitSchemaQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (explicitSchemaQuery.kind !== "query"
+    || explicitSchemaQuery.schema_mode.mode !== "explicit"
+    || explicitSchemaQuery.schema_revision !== factCatalog.queryRevision) {
+    throw new Error("Explicit SchemaMode did not retain its selected schema revision in the query result");
+  }
+  factsQuerySchemaMode.value = "historical";
+  factsQueryTimeMode.value = "all_times";
+  factsQueryOperation.value = "resolved";
+  factsQueryRecordedAsOf.dataset.auto = "true";
+  factsQuerySchemaRevision.dataset.auto = "true";
+  updateFactControls();
+  await recordFactsSmokeStage("query-modes:complete");
 
   factsCorrectionTarget.value = assertion.recordId;
   factsCorrectionReason.value = "IPC smoke: explicit assertion correction";
@@ -4471,7 +4708,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   });
   for (const select of [factsHistorySpace, factsLayer, factsPerspective, factsSubject, factsPolarity,
     factsValueBool, factsValueEntity, factsTimeValueTimeline, factsTimeValueUnit, factsValidityTimeline,
-    factsMaskSelector, factsQueryTimeMode, factsQueryTimeline, factsCorrectionTarget,
+    factsMaskSelector, factsQueryOperation, factsQuerySchemaMode, factsQueryTimeMode, factsQueryTimeline, factsCorrectionTarget,
     factsLifecycleTarget, factsLifecycleAction, factsEventKind, factsEventMaskTarget,
     factsEventRelationFrom, factsEventRelationTo, factsEventRelationKind,
     factsEventSpanCloseTarget, factsEventSpanCloseTimeline]) {
@@ -4510,6 +4747,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   factsEventDraft, factsLifecycleReason, factsEventSpanCloseNanoseconds]) {
     input.addEventListener("input", clearFactActionPreviews);
   }
+  factsQueryRecordedAsOf.addEventListener("input", () => {
+    factsQueryRecordedAsOf.dataset.auto = "false";
+    updateFactControls();
+  });
+  factsQuerySchemaRevision.addEventListener("input", () => {
+    factsQuerySchemaRevision.dataset.auto = "false";
+    updateFactControls();
+  });
   for (const input of [factsSourceKind, factsSourceLocator, factsSourceDigest,
     factsSourceMetadataKey, factsSourceMetadataValue, factsEvidenceRetractReason,
     factsProvenanceRetractReason]) {

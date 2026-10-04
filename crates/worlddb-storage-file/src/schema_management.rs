@@ -21,9 +21,11 @@ mod entity;
 pub use entity::{EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager};
 mod facts;
 pub use facts::{
-    AssertionCorrectionReceipt, EventCorrectionReceipt, EventSnapshotRef, FactManagementError,
-    FactOperationStatus, FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot,
-    FileFactManager, ReplacementBoundaryDraft, SourceDraft, SourceSupersessionDraft,
+    AssertionCorrectionReceipt, EventCorrectionReceipt, EventSnapshotRef, FactHistoryRecord,
+    FactManagementError, FactOperationStatus, FactPublicationReceipt, FactQueryExecution,
+    FactQueryHistoryRow, FactQueryOperation, FactQueryRequest, FactQueryResult,
+    FactResolutionPreviewRequest, FactSnapshot, FileFactManager, ReplacementBoundaryDraft,
+    SourceDraft, SourceSupersessionDraft,
 };
 mod project_metadata;
 pub use project_metadata::{
