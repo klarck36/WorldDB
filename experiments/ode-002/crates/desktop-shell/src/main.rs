@@ -28,6 +28,7 @@ mod backup;
 mod export_import;
 mod host_session;
 mod migration;
+mod purge;
 mod transfer;
 use host_session::{
     HostCapability, HostIdentity, HostSessionManager, HostSessionTicket, SessionError,
@@ -192,6 +193,9 @@ fn run() -> Result<(), String> {
             export_data,
             create_import_plan,
             prepare_import,
+            preview_purge,
+            execute_purge,
+            discard_purge_plan,
             create_project,
             open_project,
             close_project,
@@ -568,6 +572,16 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code: "export_import_rejected",
+            detail: Some(detail),
+            operation_id: None,
+            database_id: None,
+        }
+    }
+
+    fn purge_rejected(detail: String) -> Self {
+        Self {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            code: "purge_rejected",
             detail: Some(detail),
             operation_id: None,
             database_id: None,
@@ -1427,6 +1441,129 @@ async fn prepare_import(
     Ok(export_import::ImportPrepareResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
+    })
+}
+
+#[tauri::command]
+async fn preview_purge(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: purge::PurgeRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<purge::PurgePlanResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    purge::validate_request(&request).map_err(IpcErrorV1::purge_rejected)?;
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("purge_unavailable"))?;
+    let clear_result = backend.clear_purge_draft();
+    let outcome = async {
+        clear_result.map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+        let source = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Quellprojekt für den Purgeplan auswählen",
+        )
+        .await?;
+        let destination_parent = pick_project_parent(
+            app.clone(),
+            window.clone(),
+            "Elternordner für die neue Purge-Datenbank auswählen",
+        )
+        .await?;
+        let report = pick_output_file(
+            app.clone(),
+            window.clone(),
+            "Neuen Purge-Planbericht speichern",
+            "WorldDB Purge Plan Report",
+            &["json"],
+            "WorldDB-Purge-Plan.json",
+        )
+        .await?;
+        let (view, draft) = tauri::async_runtime::spawn_blocking(move || {
+            purge::plan(&source, &destination_parent, &report, request)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::purge_rejected)?;
+        backend
+            .stage_purge_draft(draft)
+            .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+        Ok::<_, IpcErrorV1>(view)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("purge-state-changed", ());
+    Ok(purge::PurgePlanResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn execute_purge(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: purge::PurgeRunRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<purge::PurgeRunResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    purge::validate_run_request(&request).map_err(IpcErrorV1::purge_rejected)?;
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let draft = backend
+        .begin_purge_execution(&request.plan_fingerprint)
+        .map_err(|_| IpcErrorV1::new("purge_unavailable"))?;
+    let fingerprint = request.plan_fingerprint.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || purge::run(draft, &fingerprint))
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+        .and_then(|result| result.map_err(IpcErrorV1::purge_rejected));
+    backend
+        .clear_purge_draft()
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("purge-state-changed", ());
+    Ok(purge::PurgeRunResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+fn discard_purge_plan(
+    window: tauri::WebviewWindow,
+    session_id: String,
+    request: purge::PurgeDiscardRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<purge::PurgeDiscardResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .discard_purge_draft()
+        .map_err(IpcErrorV1::purge_rejected)?;
+    Ok(purge::PurgeDiscardResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        discarded: true,
     })
 }
 
@@ -3185,6 +3322,7 @@ struct BackendState {
     project: Option<worlddb_ode_engine::ProjectAccess>,
     recovery_root: Option<PathBuf>,
     migration_draft: Option<migration::MigrationDraft>,
+    purge_draft: Option<purge::PurgeDraft>,
     migration_dialog_active: bool,
     windows: HashMap<String, WindowProjectSnapshot>,
 }
@@ -3217,6 +3355,7 @@ impl Backend {
                 project: None,
                 recovery_root: None,
                 migration_draft: None,
+                purge_draft: None,
                 migration_dialog_active: false,
                 windows: HashMap::new(),
             }),
@@ -3484,6 +3623,61 @@ impl Backend {
         }
         state.migration_dialog_active = true;
         Ok(())
+    }
+
+    fn clear_purge_draft(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        state.purge_draft = None;
+        Ok(())
+    }
+
+    fn discard_purge_draft(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() || state.migration_dialog_active {
+            return Err("purge plan cannot be discarded during another operation".to_owned());
+        }
+        state.purge_draft = None;
+        Ok(())
+    }
+
+    fn stage_purge_draft(&self, draft: purge::PurgeDraft) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if !state.migration_dialog_active || state.project.is_some() || state.engine.is_some() {
+            return Err("purge plan staging is unavailable".to_owned());
+        }
+        state.purge_draft = Some(draft);
+        Ok(())
+    }
+
+    fn begin_purge_execution(&self, fingerprint: &str) -> Result<purge::PurgeDraft, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some()
+            || state.engine.is_some()
+            || state.migration_dialog_active
+            || state.migration_draft.is_some()
+        {
+            return Err("purge execution is unavailable".to_owned());
+        }
+        let draft = state
+            .purge_draft
+            .as_ref()
+            .filter(|draft| draft.matches_fingerprint(fingerprint))
+            .cloned()
+            .ok_or_else(|| "purge plan is missing or no longer selected".to_owned())?;
+        state.migration_dialog_active = true;
+        Ok(draft)
     }
 
     fn begin_migration_plan_selection(&self) -> Result<(), String> {

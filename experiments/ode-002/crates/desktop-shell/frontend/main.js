@@ -49,6 +49,16 @@ const importPlanButton = document.querySelector("#import-plan-create");
 const importPrepareButton = document.querySelector("#import-prepare");
 const exportImportStatus = document.querySelector("#export-import-status");
 const exportImportResult = document.querySelector("#export-import-result");
+const purgePanel = document.querySelector("#purge-panel");
+const purgeTargets = document.querySelector("#purge-targets");
+const purgeMode = document.querySelector("#purge-mode");
+const purgeExternalComplete = document.querySelector("#purge-external-complete");
+const purgeKnownCopies = document.querySelector("#purge-known-copies");
+const purgePreviewButton = document.querySelector("#purge-preview");
+const purgeExecuteButton = document.querySelector("#purge-execute");
+const purgeDiscardButton = document.querySelector("#purge-discard");
+const purgeStatus = document.querySelector("#purge-status");
+const purgeResult = document.querySelector("#purge-result");
 const migrationPanel = document.querySelector("#migration-panel");
 const migrationSelectPlanButton = document.querySelector("#migration-select-plan");
 const migrationPreviewButton = document.querySelector("#migration-preview");
@@ -416,6 +426,9 @@ let recoveryBusy = false;
 let currentRecoveryReport = null;
 let backupBusy = false;
 let exportImportBusy = false;
+let purgeBusy = false;
+let currentPurgePlan = null;
+let currentPurgeRequest = null;
 let migrationBusy = false;
 let currentMigrationState = null;
 let schemaBusy = false;
@@ -1025,19 +1038,20 @@ function updateProjectControls() {
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
   const migrationSelected = Boolean(currentMigrationState?.plan) || migrationBusy;
-  createButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
-  openButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
-  closeButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
+  createButton.disabled = projectBusy || backupBusy || exportImportBusy || purgeBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
+  openButton.disabled = projectBusy || backupBusy || exportImportBusy || purgeBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
+  closeButton.disabled = projectBusy || backupBusy || exportImportBusy || purgeBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
   jobsRefreshButton.disabled = jobsBusy || !projectOpen;
   jobsCloseProjectButton.disabled = closeButton.disabled;
   updateMigrationControls();
   updateRecoveryControls();
   updateBackupControls();
   updateExportImportControls();
+  updatePurgeControls();
 }
 
 function updateRecoveryControls() {
-  const blocked = recoveryBusy || backupBusy || exportImportBusy || migrationBusy || projectBusy || projectOpen;
+  const blocked = recoveryBusy || backupBusy || exportImportBusy || purgeBusy || migrationBusy || projectBusy || projectOpen;
   recoveryInspectButton.disabled = blocked;
   recoveryKeepReadOnlyButton.disabled = blocked || !currentRecoveryReport;
   recoveryRunButton.disabled = blocked || !currentRecoveryReport?.can_run_journaled_recovery;
@@ -1045,10 +1059,11 @@ function updateRecoveryControls() {
   recoverySalvageButton.disabled = blocked || !currentRecoveryReport?.can_salvage;
   recoveryOpenCleanButton.disabled = blocked || currentRecoveryReport?.disposition !== "clean";
   updateExportImportControls();
+  updatePurgeControls();
 }
 
 function updateBackupControls() {
-  const blocked = backupBusy || exportImportBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen;
+  const blocked = backupBusy || exportImportBusy || purgeBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen;
   backupProfile.disabled = blocked;
   backupCreateButton.disabled = blocked;
   backupVerifyButton.disabled = blocked;
@@ -1200,6 +1215,145 @@ function updateExportImportControls() {
   exportRunButton.disabled = blocked || !revisionsValid || !historySpacesValid || !classesValid;
   importPlanButton.disabled = blocked || !mappingsValid;
   importPrepareButton.disabled = blocked;
+  updatePurgeControls();
+}
+
+function purgeTargetLines() {
+  return purgeTargets.value.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+}
+
+function purgeKnownCopyLines() {
+  return purgeKnownCopies.value.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+}
+
+function purgeRequestFromInputs() {
+  return {
+    protocol_version: 1,
+    targets: purgeTargetLines(),
+    mode: purgeMode.value,
+    external_inventory_complete: purgeExternalComplete.value === "complete",
+    known_external_artifacts: purgeKnownCopyLines(),
+  };
+}
+
+function purgeRequestIsValid(request) {
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const families = "history-space|layer|perspective|timeline|entity|entity-type|predicate|event-kind|event-role|event-attribute";
+  const familyTargetPattern = new RegExp(`^(?:${families}):${uuid}$`, "u");
+  const recordTargetPattern = new RegExp(`^record:(0|[1-9][0-9]{0,9}):${uuid}$`, "u");
+  const copyPattern = /^(?:exact-backup|audit-complete-backup|logical-export|sharing-export):[0-9a-f]{64}$/u;
+  const targetsValid = request.targets.every((value) => {
+    if (familyTargetPattern.test(value)) return value.length <= 128;
+    const match = recordTargetPattern.exec(value);
+    return Boolean(match) && BigInt(match[1]) <= 4294967295n && value.length <= 128;
+  });
+  return request.targets.length > 0 && request.targets.length <= 4096
+    && targetsValid
+    && new Set(request.targets).size === request.targets.length
+    && ["reject-if-referenced", "cascade"].includes(request.mode)
+    && request.known_external_artifacts.length <= 4096
+    && request.known_external_artifacts.every((value) => copyPattern.test(value))
+    && new Set(request.known_external_artifacts).size === request.known_external_artifacts.length;
+}
+
+function purgeInputsMatchPlan() {
+  if (!currentPurgeRequest) return false;
+  return JSON.stringify(purgeRequestFromInputs()) === JSON.stringify(currentPurgeRequest);
+}
+
+function updatePurgeControls() {
+  if (!purgePanel) return;
+  const blocked = purgeBusy || backupBusy || exportImportBusy || migrationBusy || Boolean(currentMigrationState?.plan) || recoveryBusy || projectBusy || projectOpen || !sessionId;
+  const requestValid = purgeRequestIsValid(purgeRequestFromInputs());
+  const planMatchesInputs = Boolean(currentPurgePlan) && purgeInputsMatchPlan();
+  purgePreviewButton.disabled = blocked || !requestValid;
+  purgeExecuteButton.hidden = !currentPurgePlan;
+  purgeExecuteButton.disabled = blocked || !currentPurgePlan?.approval_possible || !planMatchesInputs;
+  purgeDiscardButton.hidden = !currentPurgePlan;
+  purgeDiscardButton.disabled = blocked || !currentPurgePlan;
+  if (currentPurgePlan && !planMatchesInputs && !purgeBusy) {
+    purgeStatus.textContent = "Die Eingaben weichen vom angezeigten Plan ab. Erstelle den Plan erneut, bevor du ihn ausführen kannst.";
+  }
+}
+
+function appendPurgeList(container, label, values, remaining = 0) {
+  const column = document.createElement("div");
+  column.className = "result-cell";
+  const heading = document.createElement("strong");
+  heading.textContent = label;
+  const list = document.createElement("ul");
+  if (values.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "Keine";
+    list.append(item);
+  } else {
+    for (const value of values) {
+      const item = document.createElement("li");
+      item.textContent = value;
+      list.append(item);
+    }
+  }
+  column.append(heading, list);
+  if (remaining > 0) {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = `${remaining} weitere Einträge stehen im vollständigen Planbericht.`;
+    column.append(note);
+  }
+  container.append(column);
+}
+
+function purgeErrorText(error) {
+  const code = errorCode(error);
+  if (code === "selection_cancelled") return "Auswahl abgebrochen; der Purgeplan wurde nicht ausgeführt.";
+  if (code === "purge_rejected" && typeof error?.detail === "string") return `Purge abgelehnt: ${error.detail}`;
+  return showError(error);
+}
+
+function renderPurgePlan(plan) {
+  if (plan?.action !== "previewed" || plan.writes_database !== false || plan.source_modified !== false
+    || plan.secure_erase_claimed !== false || plan.index_inventory_complete !== true
+    || typeof plan.approval_possible !== "boolean" || !/^[0-9a-f]{64}$/u.test(plan.plan_fingerprint)
+    || !/^[0-9a-f]{64}$/u.test(plan.report_digest)) {
+    throw new Error("Der Purgeplan ist unvollständig oder meldet unerwartete Schreibvorgänge.");
+  }
+  purgeResult.replaceChildren();
+  purgeResult.hidden = false;
+  migrationEntry(purgeResult, "Quelle und Stand", `${plan.source_database_id} · Revision ${plan.source_revision}`);
+  migrationEntry(purgeResult, "Umfang", `${plan.target_count} Ziele · ${plan.target_record_count} Zielrecords · ${plan.dependant_count} abhängige Records · ${plan.affected_record_count} betroffene Records`);
+  migrationEntry(purgeResult, "Referenzbehandlung", plan.mode === "cascade" ? "Abhängige Records werden einbezogen" : "Plan bricht bei referenzierten Zielen ab");
+  migrationEntry(purgeResult, "Ausführbarkeit", plan.approval_possible ? "Plan kann ausdrücklich bestätigt werden" : "Plan ist nicht ausführbar; siehe Inventar- und Referenzbefunde");
+  migrationEntry(purgeResult, "Externe Kopien", `${plan.external_inventory_complete ? "Vollständig geprüft" : "Unvollständig"} · ${plan.known_external_artifacts.length} bekannte Kopien`);
+  migrationEntry(purgeResult, "Indexbestand", `Vollständig geprüft · ${plan.index_generation_count} Generationen · Neu aufzubauen: ${plan.index_families_to_rebuild.join(", ") || "keine"}`);
+  migrationEntry(purgeResult, "Neue Zieldatenbank", plan.destination_name);
+  migrationEntry(purgeResult, "Vollständiger Bericht", `${plan.report_name} · BLAKE3 ${plan.report_digest}`);
+  migrationEntry(purgeResult, "Plan-Fingerprint", plan.plan_fingerprint);
+  migrationEntry(purgeResult, "Vorschau", "Die Quelldatenbank wurde nicht verändert. Sichere physische Löschung wird nicht zugesagt.");
+  appendPurgeList(purgeResult, "Ziel-IDs", plan.target_identities, Number(plan.target_identities_remaining));
+  appendPurgeList(purgeResult, "Zielrecords", plan.target_records.map((item) => `${item.identity} · ${item.content_digest}`), Number(plan.target_records_remaining));
+  appendPurgeList(purgeResult, "Abhängige Records", plan.dependants.map((item) => `${item.identity} · ${item.content_digest}`), Number(plan.dependants_remaining));
+  appendPurgeList(purgeResult, "Lokale Indexgenerationen", plan.index_generations.map((item) => `${item.family} · ${item.generation_id} · ${item.file_digest} · ${item.current ? "aktuell" : "historisch"}`), Number(plan.index_generations_remaining));
+  appendPurgeList(purgeResult, "Bekannte externe Artefakte", plan.known_external_artifacts.slice(0, 128).map((item) => `${item.kind}:${item.digest}`), Math.max(0, plan.known_external_artifacts.length - 128));
+}
+
+function renderPurgeRun(result) {
+  if (result?.action !== "completed" || !result.source_database_id || !result.destination_database_id
+    || result.source_database_id === result.destination_database_id || !result.target_verified
+    || !result.report_persisted || result.source_modified || result.secure_erase_claimed) {
+    throw new Error("Das Purge-Ergebnis bestätigt die getrennte geprüfte Zieldatenbank nicht.");
+  }
+  currentPurgePlan = null;
+  currentPurgeRequest = null;
+  purgeResult.replaceChildren();
+  purgeResult.hidden = false;
+  migrationEntry(purgeResult, "Aktion", "Purge in eine neue, getrennte Datenbank abgeschlossen");
+  migrationEntry(purgeResult, "Unveränderte Quelle", `${result.source_database_id} · Revision ${result.source_revision}`);
+  migrationEntry(purgeResult, "Neue Zieldatenbank", `${result.destination_database_id} · Revision ${result.destination_revision} · ${result.destination_name}`);
+  migrationEntry(purgeResult, "Ausführung", `${result.removed_record_count} entfernte Records · Modus ${result.mode}`);
+  migrationEntry(purgeResult, "Prüfung und Bericht", `Ziel verifiziert: Ja · Bericht dauerhaft gespeichert: Ja · BLAKE3 ${result.report_digest}`);
+  migrationEntry(purgeResult, "Auditbezug", `Operation ${result.operation_id} · Auditrecord ${result.audit_record_id}`);
+  migrationEntry(purgeResult, "Externe Kopien", result.external_inventory_complete ? "Inventar als vollständig bestätigt" : "Inventar ausdrücklich unvollständig");
+  migrationEntry(purgeResult, "Quelle und Löschgrenze", "Quelle unverändert · sichere physische Löschung wird nicht zugesagt.");
 }
 
 function initializeExportClassChoices() {
@@ -1356,6 +1510,86 @@ async function runImportPrepareAction() {
   }
 }
 
+async function runPurgePreview() {
+  if (!sessionId || projectOpen || purgeBusy || backupBusy || exportImportBusy || migrationBusy || currentMigrationState?.plan || recoveryBusy) return;
+  const request = purgeRequestFromInputs();
+  if (!purgeRequestIsValid(request)) {
+    purgeStatus.textContent = "Prüfe Ziel-IDs, Duplikate und bekannte Kopien. IDs brauchen ein unterstütztes Präfix und eine kleingeschriebene UUID.";
+    return;
+  }
+  purgeBusy = true;
+  currentPurgePlan = null;
+  currentPurgeRequest = null;
+  purgeResult.hidden = true;
+  purgeStatus.textContent = "Wähle nacheinander das Quellprojekt, den Elternordner für die neue Datenbank und den Speicherort für den vollständigen Planbericht …";
+  updateProjectControls();
+  try {
+    const response = await invoke("preview_purge", { sessionId, request });
+    if (response.protocol_version !== 1 || response.result?.action !== "previewed") throw new Error("unsupported_protocol");
+    renderPurgePlan(response.result);
+    currentPurgeRequest = request;
+    currentPurgePlan = response.result;
+    purgeStatus.textContent = response.result.approval_possible
+      ? "Plan und vollständiger Bericht geprüft. Die Ausführung erstellt erst nach Bestätigung eine neue Datenbank; die Quelle bleibt unverändert."
+      : "Plan geprüft, aber nicht ausführbar. Korrigiere Zielumfang oder Inventar und erstelle einen neuen Plan.";
+  } catch (error) {
+    purgeStatus.textContent = purgeErrorText(error);
+  } finally {
+    purgeBusy = false;
+    updateProjectControls();
+  }
+}
+
+async function runPurgeExecution() {
+  const plan = currentPurgePlan;
+  if (!sessionId || projectOpen || purgeBusy || backupBusy || exportImportBusy || migrationBusy || currentMigrationState?.plan || recoveryBusy
+    || !plan?.approval_possible || !purgeInputsMatchPlan()) return;
+  const confirmation = `Den geprüften Purgeplan ausdrücklich ausführen?\n\n${plan.target_count} Ziele, ${plan.target_record_count} Zielrecords und ${plan.dependant_count} abhängige Records · Modus ${plan.mode}.\n\nWorldDB erstellt ${plan.destination_name} als neue Datenbank mit eigener DatabaseId. Die Quelle ${plan.source_database_id} bleibt unverändert. Sichere physische Löschung wird nicht zugesagt.\n\nPlan-Fingerprint: ${plan.plan_fingerprint}`;
+  if (!window.confirm(confirmation)) return;
+  purgeBusy = true;
+  purgeStatus.textContent = "Der Host vergleicht den Quellstand und Plan-Fingerprint erneut, erstellt die getrennte Zieldatenbank und prüft sie unabhängig …";
+  updateProjectControls();
+  try {
+    const response = await invoke("execute_purge", {
+      sessionId,
+      request: { protocol_version: 1, plan_fingerprint: plan.plan_fingerprint },
+    });
+    if (response.protocol_version !== 1 || response.result?.action !== "completed") throw new Error("unsupported_protocol");
+    renderPurgeRun(response.result);
+    purgeStatus.textContent = "Purge abgeschlossen. Die neue DatabaseId und die unveränderte Quelle sind oben getrennt aufgeführt.";
+  } catch (error) {
+    currentPurgePlan = null;
+    currentPurgeRequest = null;
+    purgeStatus.textContent = `${purgeErrorText(error)} Erstelle vor einem weiteren Versuch einen neuen Plan.`;
+  } finally {
+    purgeBusy = false;
+    updateProjectControls();
+  }
+}
+
+async function discardPurgePlan() {
+  if (!sessionId || purgeBusy || migrationBusy || currentMigrationState?.plan || !currentPurgePlan) return;
+  purgeBusy = true;
+  updateProjectControls();
+  try {
+    const response = await invoke("discard_purge_plan", {
+      sessionId,
+      request: { protocol_version: 1 },
+    });
+    if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+    currentPurgePlan = null;
+    currentPurgeRequest = null;
+    purgeResult.replaceChildren();
+    purgeResult.hidden = true;
+    purgeStatus.textContent = "Purgeplan und lokale Vorschau wurden verworfen. Es wurde keine Datenbank verändert.";
+  } catch (error) {
+    purgeStatus.textContent = purgeErrorText(error);
+  } finally {
+    purgeBusy = false;
+    updateProjectControls();
+  }
+}
+
 function migrationCategoryText(category) {
   return ({
     MetadataOnly: "Metadatenänderung",
@@ -1466,8 +1700,8 @@ function renderMigrationState(state) {
 
 function updateMigrationControls() {
   const state = currentMigrationState;
-  const blocked = migrationBusy || backupBusy || exportImportBusy || projectBusy || projectOpen;
-  const otherBusy = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy
+  const blocked = migrationBusy || backupBusy || exportImportBusy || purgeBusy || projectBusy || projectOpen;
+  const otherBusy = projectBusy || backupBusy || exportImportBusy || purgeBusy || schemaBusy || entityBusy || perspectiveBusy
     || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
@@ -1565,6 +1799,7 @@ function renderProject(project) {
   migrationPanel.hidden = projectOpen;
   backupPanel.hidden = projectOpen;
   exportImportPanel.hidden = projectOpen;
+  purgePanel.hidden = projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -2018,8 +2253,35 @@ async function runRecoverySmoke(activeSessionId) {
     }
     if (!rejected) throw new Error("Ein Datei- oder Export-/Import-IPC-Befehl hat einen Rendererpfad angenommen.");
   }
+  let purgeRendererPathsRejected = true;
+  for (const [command, request] of [
+    ["preview_purge", {
+      protocol_version: 1,
+      targets: ["entity:00000000-0000-0000-0000-000000000000"],
+      mode: "cascade",
+      external_inventory_complete: false,
+      known_external_artifacts: [],
+      source_path: rendererPathCanary,
+      destination_path: rendererPathCanary,
+      report_path: rendererPathCanary,
+    }],
+    ["execute_purge", {
+      protocol_version: 1,
+      plan_fingerprint: "a".repeat(64),
+      destination_path: rendererPathCanary,
+    }],
+  ]) {
+    try {
+      await invoke(command, { sessionId: activeSessionId, request });
+      purgeRendererPathsRejected = false;
+    } catch {
+      // Unknown renderer paths must be rejected before any native picker or run can start.
+    }
+  }
+  if (!purgeRendererPathsRejected) throw new Error("Ein Purge-IPC-Befehl hat Rendererpfade angenommen.");
   await recordFactsSmokeStage("backup-renderer-paths:rejected");
   await recordFactsSmokeStage("export-import-renderer-paths:rejected");
+  await recordFactsSmokeStage("purge-renderer-paths:rejected");
 
   const response = await invoke("inspect_recovery", {
     sessionId: activeSessionId,
@@ -6552,6 +6814,12 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   importPlanButton.addEventListener("click", () => { void runImportPlanAction(); });
   importPrepareButton.addEventListener("click", () => { void runImportPrepareAction(); });
   updateExportImportControls();
+  for (const input of [purgeTargets, purgeKnownCopies]) input.addEventListener("input", updatePurgeControls);
+  for (const input of [purgeMode, purgeExternalComplete]) input.addEventListener("change", updatePurgeControls);
+  purgePreviewButton.addEventListener("click", () => { void runPurgePreview(); });
+  purgeExecuteButton.addEventListener("click", () => { void runPurgeExecution(); });
+  purgeDiscardButton.addEventListener("click", () => { void discardPurgePlan(); });
+  updatePurgeControls();
 
   closeButton.addEventListener("click", async () => {
     if (!sessionId) return;

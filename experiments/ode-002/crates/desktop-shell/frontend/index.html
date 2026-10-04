@@ -165,6 +165,42 @@
         <p id="export-import-status" class="muted" role="status" aria-live="polite"></p>
         <div id="export-import-result" hidden></div>
       </section>
+      <section id="purge-panel" class="card" aria-labelledby="purge-heading">
+        <h2 id="purge-heading">Datenbank-Purge planen</h2>
+        <p class="muted">Der Purgeplan ist zunächst nur eine Vorschau. Er zeigt Ziele, transitive Referenzen, Indexbestände und bekannte externe Kopien. Erst die ausdrückliche Ausführung erzeugt eine neue Datenbank in einem eigenen Zielordner. Die Quelldatenbank bleibt unverändert; sichere physische Löschung wird nicht zugesagt. Die externe Kopienliste ist vollständig oder ausdrücklich unvollständig.</p>
+        <fieldset>
+          <legend>Umfang und externe Kopien</legend>
+          <label for="purge-targets">Typisierte Ziel-IDs (eine pro Zeile)</label>
+          <textarea id="purge-targets" rows="4" spellcheck="false" placeholder="entity:00000000-0000-0000-0000-000000000000"></textarea>
+          <p class="muted">Format: familie:UUID oder record:Wire-Tag:UUID mit kleingeschriebener kanonischer UUID. Unterstützte Familien: history-space, layer, perspective, timeline, entity, entity-type, predicate, event-kind, event-role und event-attribute.</p>
+          <div class="grid">
+            <div>
+              <label for="purge-mode">Referenzbehandlung</label>
+              <select id="purge-mode">
+                <option value="reject-if-referenced">Abbrechen, wenn Referenzen bestehen</option>
+                <option value="cascade">Abhängige Records einbeziehen</option>
+              </select>
+            </div>
+            <div>
+              <label for="purge-external-complete">Inventar externer Kopien</label>
+              <select id="purge-external-complete">
+                <option value="incomplete">Unvollständig · externe Kopien unbekannt</option>
+                <option value="complete">Vollständig geprüft</option>
+              </select>
+            </div>
+          </div>
+          <label for="purge-known-copies">Bekannte Kopien (Art:BLAKE3-Prüfsumme, eine Angabe pro Zeile)</label>
+          <textarea id="purge-known-copies" rows="3" spellcheck="false" placeholder="logical-export:64-kleingeschriebene-hexzeichen"></textarea>
+          <p class="muted">Zulässige Arten: exact-backup, audit-complete-backup, logical-export und sharing-export. Die Prüfsumme besteht aus 64 kleingeschriebenen Hex-Zeichen.</p>
+        </fieldset>
+        <div class="actions">
+          <button id="purge-preview" type="button" disabled>Purgeplan erstellen und prüfen</button>
+          <button id="purge-execute" type="button" hidden disabled>Geprüften Plan ausdrücklich ausführen</button>
+          <button id="purge-discard" type="button" hidden disabled>Plan verwerfen</button>
+        </div>
+        <p id="purge-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="purge-result" hidden></div>
+      </section>
       <section id="recovery-panel" class="card" aria-labelledby="recovery-heading">
         <h2 id="recovery-heading">Projekt prüfen und wiederherstellen</h2>
         <p class="muted">Die Prüfung liest den verifizierten WAL-Präfix und die referenzierten Inventare. Sie repariert nichts. Bei Schäden bleiben Verify, read-only, journalisierte Recovery, Restore und Salvage getrennte Entscheidungen.</p>
