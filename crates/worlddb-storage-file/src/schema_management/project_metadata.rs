@@ -133,6 +133,19 @@ impl<'a> FileProjectMetadataManager<'a> {
             .clone())
     }
 
+    /// Builds the current metadata projection for a write validator that has
+    /// already checked the operation's scoped write/reference capabilities.
+    pub(super) fn snapshot_for_write_validation(
+        &self,
+    ) -> Result<ProjectMetadataSnapshot, LayerManagementError> {
+        let revision = self.revision();
+        let schema = self
+            .schema
+            .schema_at(SchemaMode::Current, revision)
+            .map_err(schema_error)?;
+        self.snapshot_for_revision(revision, schema)
+    }
+
     /// Validates an explicit active Perspective selection under current use/read policy.
     pub fn validate_perspective_use(
         &self,

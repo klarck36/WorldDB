@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use crate::assertions::AssertionDraft;
 use crate::context::ContextKey;
 use crate::ids::{PredicateId, PrincipalId, Revision};
-use crate::schema::{ConstraintSet, InclusiveRange, Lifecycle, ValueConstraint, ValueKind};
+use crate::schema::{
+    ConstraintSet, InclusiveRange, Lifecycle, PredicateDefinition, ValueConstraint, ValueKind,
+};
 use crate::schema_history::SchemaDefinition;
 use crate::security::{
     AuthorizationDecision, Capability, FieldSelector, PolicyTarget, SecurityPolicySnapshot,
@@ -208,19 +210,7 @@ pub fn validate_assertion_batch(
                 draft.predicate_id(),
             ))?;
 
-        let actual_kind = ValueKind::of(draft.value());
-        if predicate.value_kind() != actual_kind {
-            return Err(SchemaWriteValidationError::ValueKindMismatch {
-                expected: predicate.value_kind(),
-                actual: actual_kind,
-            });
-        }
-        validate_constraints(
-            predicate.predicate_id(),
-            predicate.constraints(),
-            draft.value(),
-            &mut resolve_time,
-        )?;
+        validate_value_for_predicate(predicate, draft.value(), &mut resolve_time)?;
 
         match predicate.lifecycle() {
             Lifecycle::Active => {}
@@ -264,6 +254,30 @@ pub fn validate_assertion_batch(
         warnings: warnings.into_iter().collect(),
         schema_revision,
     })
+}
+
+/// Validates one value against a Predicate's exact scalar kind and constraints.
+///
+/// This check is also used by schema-typed selectors such as proposition Masks,
+/// which need Predicate validation without pretending to create an Assertion.
+pub fn validate_value_for_predicate(
+    predicate: &PredicateDefinition,
+    value: &Value,
+    mut resolve_time: impl FnMut(&Time) -> Result<WorldTime, TemporalError>,
+) -> Result<(), SchemaWriteValidationError> {
+    let actual_kind = ValueKind::of(value);
+    if predicate.value_kind() != actual_kind {
+        return Err(SchemaWriteValidationError::ValueKindMismatch {
+            expected: predicate.value_kind(),
+            actual: actual_kind,
+        });
+    }
+    validate_constraints(
+        predicate.predicate_id(),
+        predicate.constraints(),
+        value,
+        &mut resolve_time,
+    )
 }
 
 fn validate_write_limits(

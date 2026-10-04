@@ -19,6 +19,11 @@ use crate::{
 
 mod entity;
 pub use entity::{EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager};
+mod facts;
+pub use facts::{
+    FactManagementError, FactPublicationReceipt, FactSnapshot, FileFactManager,
+    ReplacementBoundaryDraft,
+};
 mod project_metadata;
 pub use project_metadata::{
     FileProjectMetadataManager, LayerManagementError, MetadataPublicationReceipt,

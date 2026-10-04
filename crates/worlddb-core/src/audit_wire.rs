@@ -258,6 +258,7 @@ fn encode_action(value: AuditAction) -> u8 {
         AuditAction::EntityCreation => 11,
         AuditAction::EntityRetirement => 12,
         AuditAction::HistorySpaceTransfer => 13,
+        AuditAction::FactualRecordWrite => 14,
     }
 }
 
@@ -276,6 +277,7 @@ fn decode_action(bytes: &[u8]) -> Result<AuditAction, AuditCodecError> {
         [11] => Ok(AuditAction::EntityCreation),
         [12] => Ok(AuditAction::EntityRetirement),
         [13] => Ok(AuditAction::HistorySpaceTransfer),
+        [14] => Ok(AuditAction::FactualRecordWrite),
         _ => Err(invalid(AuditRecordKind::AuditRecord, 5)),
     }
 }
@@ -292,6 +294,7 @@ fn encode_object_class(value: AuditObjectClass) -> u8 {
         AuditObjectClass::AuditConfiguration => 8,
         AuditObjectClass::SchemaDefinition => 9,
         AuditObjectClass::EntityCatalog => 10,
+        AuditObjectClass::FactualRecord => 11,
     }
 }
 
@@ -307,6 +310,7 @@ fn decode_object_class(bytes: &[u8]) -> Result<AuditObjectClass, AuditCodecError
         [8] => Ok(AuditObjectClass::AuditConfiguration),
         [9] => Ok(AuditObjectClass::SchemaDefinition),
         [10] => Ok(AuditObjectClass::EntityCatalog),
+        [11] => Ok(AuditObjectClass::FactualRecord),
         _ => Err(invalid(AuditRecordKind::AuditRecord, 6)),
     }
 }
@@ -706,12 +710,13 @@ mod tests {
             (AuditAction::EntityCreation, 11),
             (AuditAction::EntityRetirement, 12),
             (AuditAction::HistorySpaceTransfer, 13),
+            (AuditAction::FactualRecordWrite, 14),
         ] {
             assert_eq!(encode_action(value), code);
             assert_eq!(decode_action(&[code]), Ok(value));
         }
         assert!(decode_action(&[0]).is_err());
-        assert!(decode_action(&[14]).is_err());
+        assert!(decode_action(&[15]).is_err());
 
         for (value, code) in [
             (AuditObjectClass::Database, 1),
@@ -724,12 +729,13 @@ mod tests {
             (AuditObjectClass::AuditConfiguration, 8),
             (AuditObjectClass::SchemaDefinition, 9),
             (AuditObjectClass::EntityCatalog, 10),
+            (AuditObjectClass::FactualRecord, 11),
         ] {
             assert_eq!(encode_object_class(value), code);
             assert_eq!(decode_object_class(&[code]), Ok(value));
         }
         assert!(decode_object_class(&[0]).is_err());
-        assert!(decode_object_class(&[11]).is_err());
+        assert!(decode_object_class(&[12]).is_err());
 
         for (value, code) in [
             (AuditOutcome::Succeeded, 1),
@@ -798,6 +804,8 @@ mod tests {
             ("action", 10, "SchemaManagement"),
             ("action", 11, "EntityCreation"),
             ("action", 12, "EntityRetirement"),
+            ("action", 13, "HistorySpaceTransfer"),
+            ("action", 14, "FactualRecordWrite"),
             ("object_class", 1, "Database"),
             ("object_class", 2, "SecurityPolicy"),
             ("object_class", 3, "Migration"),
@@ -808,6 +816,7 @@ mod tests {
             ("object_class", 8, "AuditConfiguration"),
             ("object_class", 9, "SchemaDefinition"),
             ("object_class", 10, "EntityCatalog"),
+            ("object_class", 11, "FactualRecord"),
             ("outcome", 1, "Succeeded"),
             ("outcome", 2, "Denied"),
             ("outcome", 3, "Failed"),

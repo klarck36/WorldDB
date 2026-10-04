@@ -103,12 +103,13 @@ pub use salvage::{
     SalvageSegmentResult, SalvageSegmentSource, SalvageUnit,
 };
 pub use schema_management::{
-    EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager,
+    EntityCatalogPublicationReceipt, EntityManagementError, FactManagementError,
+    FactPublicationReceipt, FactSnapshot, FileEntityManager, FileFactManager,
     FileHistorySpaceTransferManager, FileProjectMetadataManager, FileSchemaManager,
     FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,
     MetadataPublicationReceipt, PolicyManagementError, PolicyPublicationReceipt,
-    SchemaManagementError, SchemaPublicationReceipt, TransferEventRelationItem,
-    TransferPublicationReceipt, TransferSourceItem,
+    ReplacementBoundaryDraft, SchemaManagementError, SchemaPublicationReceipt,
+    TransferEventRelationItem, TransferPublicationReceipt, TransferSourceItem,
 };
 pub use security_segment::{
     SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, SecurityPolicySegment,

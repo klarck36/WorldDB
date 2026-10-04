@@ -164,6 +164,8 @@ pub enum AuditAction {
     EntityRetirement,
     /// Copy of selected HistorySpace-owned records into another HistorySpace.
     HistorySpaceTransfer,
+    /// Publication of an immutable assertion, mask, or replacement boundary.
+    FactualRecordWrite,
 }
 
 /// Closed object classes that can be named without copying sensitive payloads.
@@ -189,6 +191,8 @@ pub enum AuditObjectClass {
     SchemaDefinition,
     /// Project-wide Entity identity or retirement catalog.
     EntityCatalog,
+    /// Assertion data, masks, and replacement boundaries.
+    FactualRecord,
 }
 
 /// Safe public result class for an audited operation.

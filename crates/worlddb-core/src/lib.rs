@@ -884,6 +884,20 @@ pub mod storage_internal {
         crate::ids::generate_id()
     }
 
+    /// Creates the required-audit record identity for one factual-record commit.
+    #[doc(hidden)]
+    pub fn generate_factual_record_audit_record_id()
+    -> Result<crate::ids::AuditRecordId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
+    /// Creates the required-audit operation identity for one factual-record commit.
+    #[doc(hidden)]
+    pub fn generate_factual_record_audit_operation_id()
+    -> Result<crate::ids::AuditOperationId, crate::ids::IdGenerationError> {
+        crate::ids::generate_id()
+    }
+
     /// Creates the idempotency identity for a policy-administration commit.
     #[doc(hidden)]
     pub fn generate_security_policy_operation_id()
@@ -1231,7 +1245,7 @@ pub use schema_history::{
 };
 pub use schema_write_validation::{
     DeprecatedSchemaWriteWarning, SchemaWriteValidationError, ValidatedAssertionBatch,
-    validate_assertion_batch,
+    validate_assertion_batch, validate_value_for_predicate,
 };
 pub use single_value_resolution::{
     SingleValueOutcome, SingleValueResolutionError, SingleValueSlot, resolve_single_value_replace,
