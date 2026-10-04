@@ -29,6 +29,14 @@ const recoveryRestoreButton = document.querySelector("#recovery-restore");
 const recoveryArchiveName = document.querySelector("#recovery-archive-name");
 const recoverySalvageFields = document.querySelector("#recovery-salvage-fields");
 const recoverySalvageButton = document.querySelector("#recovery-salvage");
+const backupPanel = document.querySelector("#backup-panel");
+const backupProfile = document.querySelector("#backup-profile");
+const backupProfileDetails = document.querySelector("#backup-profile-details");
+const backupCreateButton = document.querySelector("#backup-create");
+const backupVerifyButton = document.querySelector("#backup-verify");
+const backupRestoreButton = document.querySelector("#backup-restore");
+const backupStatus = document.querySelector("#backup-status");
+const backupResult = document.querySelector("#backup-result");
 const migrationPanel = document.querySelector("#migration-panel");
 const migrationSelectPlanButton = document.querySelector("#migration-select-plan");
 const migrationPreviewButton = document.querySelector("#migration-preview");
@@ -356,6 +364,7 @@ let projectBusy = false;
 let jobsBusy = false;
 let recoveryBusy = false;
 let currentRecoveryReport = null;
+let backupBusy = false;
 let migrationBusy = false;
 let currentMigrationState = null;
 let schemaBusy = false;
@@ -427,6 +436,15 @@ function showError(error) {
     return "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.";
   }
   return userMessages[code] ?? userMessages[code.split(":").at(-1)] ?? "Die Aktion konnte nicht abgeschlossen werden.";
+}
+
+function backupErrorText(error) {
+  const code = errorCode(error);
+  if (code === "selection_cancelled") return "Ordnerauswahl abgebrochen; es wurde keine Sicherung oder Wiederherstellung gestartet.";
+  if (code === "backup_rejected" && typeof error?.detail === "string") {
+    return `Sicherung/Restore abgelehnt: ${error.detail}`;
+  }
+  return showError(error);
 }
 
 function operationStoragePrefix(databaseId = currentDatabaseId) {
@@ -956,23 +974,32 @@ function updateProjectControls() {
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
   const migrationSelected = Boolean(currentMigrationState?.plan) || migrationBusy;
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
-  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
-  closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
+  createButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
+  openButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
+  closeButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
   jobsRefreshButton.disabled = jobsBusy || !projectOpen;
   jobsCloseProjectButton.disabled = closeButton.disabled;
   updateMigrationControls();
   updateRecoveryControls();
+  updateBackupControls();
 }
 
 function updateRecoveryControls() {
-  const blocked = recoveryBusy || projectBusy || projectOpen;
+  const blocked = recoveryBusy || backupBusy || migrationBusy || projectBusy || projectOpen;
   recoveryInspectButton.disabled = blocked;
   recoveryKeepReadOnlyButton.disabled = blocked || !currentRecoveryReport;
   recoveryRunButton.disabled = blocked || !currentRecoveryReport?.can_run_journaled_recovery;
   recoveryRestoreButton.disabled = blocked || !currentRecoveryReport?.can_restore_verified_backup;
   recoverySalvageButton.disabled = blocked || !currentRecoveryReport?.can_salvage;
   recoveryOpenCleanButton.disabled = blocked || currentRecoveryReport?.disposition !== "clean";
+}
+
+function updateBackupControls() {
+  const blocked = backupBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen;
+  backupProfile.disabled = blocked;
+  backupCreateButton.disabled = blocked;
+  backupVerifyButton.disabled = blocked;
+  backupRestoreButton.disabled = blocked;
 }
 
 function migrationEntry(container, label, value) {
@@ -984,6 +1011,88 @@ function migrationEntry(container, label, value) {
   detail.textContent = value;
   entry.append(heading, detail);
   container.append(entry);
+}
+
+function backupProfileLabel(profile) {
+  return profile === "audit_complete" ? "AuditCompleteBackup" : "ExactDatabaseBackup";
+}
+
+function updateBackupProfileDetails() {
+  if (backupProfile.value === "audit_complete") {
+    backupProfileDetails.textContent = "Auditumfang: Included. Enthält den unterstützten RawRead-Audit-Prefix. Erfordert zusätzlich AuditRead und AuditExport; CLI und Storage prüfen die aktuelle Policy erneut.";
+  } else {
+    backupProfileDetails.textContent = "Auditumfang: Excluded. Enthält keine Audit-Historie. Erstellung und Restore erfordern die jeweiligen aktuellen ProjectRead-, BackupCreate- oder BackupRestore-Rechte.";
+  }
+}
+
+function renderBackupResult(result) {
+  backupResult.replaceChildren();
+  backupResult.hidden = !result;
+  if (!result) return;
+  const auditText = result.audit_scope === "Included"
+    ? "Included · unterstützter RawRead-Audit-Prefix"
+    : "Excluded · Audit-Historie nicht enthalten";
+  migrationEntry(backupResult, "Profil", result.profile);
+  migrationEntry(backupResult, "Auditumfang", auditText);
+  if (result.action === "restored") {
+    migrationEntry(backupResult, "Restoremodus", "Neuer Klon; Quellprojekt nicht geändert");
+    migrationEntry(backupResult, "Quelle", `${result.source_database_id} · Revision ${result.source_revision}`);
+    migrationEntry(backupResult, "Neuer Klon", `${result.restored_database_id} · Revision ${result.restored_revision}`);
+    migrationEntry(backupResult, "Audit-Wasserstand", result.audit_safe_sequence ?? (result.audit_scope === "Included" ? "Kein Audit-Wasserstand aufgezeichnet" : "Ausgeschlossen"));
+    migrationEntry(backupResult, "Unabhängige Verify-Prüfung", `${result.clone_verify_disposition ?? "unbekannt"} · Ziel verifiziert: ${result.target_verified ? "Ja" : "Nein"}`);
+  } else {
+    migrationEntry(backupResult, "Datenbank", result.database_id ?? "–");
+    migrationEntry(backupResult, "Revision und Inhalt", `Revision ${result.revision ?? "–"} · ${result.item_count} Elemente`);
+    migrationEntry(backupResult, "Audit-Wasserstand", result.audit_safe_sequence ?? (result.audit_scope === "Included" ? "Kein Audit-Wasserstand aufgezeichnet" : "Ausgeschlossen"));
+    migrationEntry(backupResult, "Backup-Verify", result.target_verified ? "Bestanden" : "Nicht bestätigt");
+    migrationEntry(backupResult, "Authentizitätsstatus", result.authenticity);
+  }
+  migrationEntry(backupResult, "Zielordner", result.folder_name);
+  migrationEntry(backupResult, "Quellprojekt verändert", result.source_modified ? "Ja" : "Nein");
+}
+
+async function runBackupAction(action) {
+  if (!sessionId || projectOpen || backupBusy || migrationBusy || recoveryBusy) return;
+  const profile = backupProfile.value;
+  const profileName = backupProfileLabel(profile);
+  if (action === "restore" && !window.confirm(
+    `Backup als ${profileName} wiederherstellen?\n\nWorldDB verlangt ein sauberes Autorisierungsprojekt mit derselben Datenbank-ID, prüft das Backup vor dem Restore und erstellt ausschließlich einen neuen Klon in einem neuen Zielordner. Das Quellprojekt bleibt unverändert.`,
+  )) return;
+
+  backupBusy = true;
+  backupResult.hidden = true;
+  backupStatus.textContent = action === "create"
+    ? `Wähle nacheinander das Quellprojekt und den Elternordner für ${profileName} …`
+    : action === "verify"
+      ? `Wähle ein vorhandenes ${profileName} zur Prüfung …`
+      : `Wähle das saubere Autorisierungsprojekt, das ${profileName} und den Elternordner für den neuen Klon …`;
+  updateProjectControls();
+  try {
+    const command = action === "create"
+      ? "create_backup"
+      : action === "verify"
+        ? "verify_backup"
+        : "restore_backup";
+    const response = await invoke(command, {
+      sessionId,
+      request: { protocol_version: 1, profile },
+    });
+    const expectedAction = action === "create" ? "created" : action === "verify" ? "verified" : "restored";
+    if (response.protocol_version !== 1 || response.result?.action !== expectedAction) {
+      throw new Error("unsupported_protocol");
+    }
+    renderBackupResult(response.result);
+    backupStatus.textContent = action === "create"
+      ? `${profileName} wurde erstellt und unabhängig geprüft.`
+      : action === "verify"
+        ? `${profileName} wurde geprüft; Profil, Auditumfang und Zielinventar stimmen.`
+        : `Restore als neuer Klon abgeschlossen und unabhängig geprüft. Die Quell-Datenbank blieb unverändert.`;
+  } catch (error) {
+    backupStatus.textContent = backupErrorText(error);
+  } finally {
+    backupBusy = false;
+    updateProjectControls();
+  }
 }
 
 function migrationCategoryText(category) {
@@ -1096,8 +1205,8 @@ function renderMigrationState(state) {
 
 function updateMigrationControls() {
   const state = currentMigrationState;
-  const blocked = migrationBusy || projectBusy || projectOpen;
-  const otherBusy = projectBusy || schemaBusy || entityBusy || perspectiveBusy
+  const blocked = migrationBusy || backupBusy || projectBusy || projectOpen;
+  const otherBusy = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy
     || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
@@ -1159,6 +1268,7 @@ function setBusy(busy) {
   projectBusy = busy;
   updateSchemaControls();
   updateMigrationControls();
+  updateBackupControls();
 }
 
 function renderProject(project) {
@@ -1190,6 +1300,7 @@ function renderProject(project) {
   jobsPanel.hidden = !projectOpen;
   recoveryPanel.hidden = projectOpen;
   migrationPanel.hidden = projectOpen;
+  backupPanel.hidden = projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -1623,6 +1734,25 @@ function runRecoveryRendererSmoke() {
 }
 
 async function runRecoverySmoke(activeSessionId) {
+  const rendererPathCanary = "C:/renderer/selected/backup-path";
+  for (const [command, fields] of [
+    ["create_backup", { source_path: rendererPathCanary, output_path: rendererPathCanary }],
+    ["verify_backup", { backup_path: rendererPathCanary }],
+    ["restore_backup", { backup_path: rendererPathCanary, authorization_path: rendererPathCanary, output_path: rendererPathCanary }],
+  ]) {
+    let rejected = false;
+    try {
+      await invoke(command, {
+        sessionId: activeSessionId,
+        request: { protocol_version: 1, profile: "exact", ...fields },
+      });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error("Ein Backup-IPC-Befehl hat einen Rendererpfad angenommen.");
+  }
+  await recordFactsSmokeStage("backup-renderer-paths:rejected");
+
   const response = await invoke("inspect_recovery", {
     sessionId: activeSessionId,
     request: { protocol_version: 1 },
@@ -6134,8 +6264,15 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   });
 
   recoveryRestoreButton.addEventListener("click", () => {
-    recoveryStatus.textContent = "Restore bleibt ein eigener Ablauf in ein neues Ziel und überschreibt diese Quelle nicht. Die vollständige Backup-/Restore-Bedienung folgt in M8-23a; dieser Schritt hat nichts an Dateien geändert.";
+    backupPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+    backupProfile.focus();
+    backupStatus.textContent = "Wähle dasselbe Profil und den Auditumfang wie beim Backup. Restore braucht ein sauberes Autorisierungsprojekt mit derselben Datenbank-ID und erstellt einen getrennten neuen Klon.";
   });
+
+  backupProfile.addEventListener("change", updateBackupProfileDetails);
+  backupCreateButton.addEventListener("click", () => { void runBackupAction("create"); });
+  backupVerifyButton.addEventListener("click", () => { void runBackupAction("verify"); });
+  backupRestoreButton.addEventListener("click", () => { void runBackupAction("restore"); });
 
   closeButton.addEventListener("click", async () => {
     if (!sessionId) return;
@@ -6490,5 +6627,6 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   });
 
   updateSchemaFormVisibility();
+  updateBackupProfileDetails();
   renderStagedEventItems();
 }

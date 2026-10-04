@@ -106,6 +106,27 @@
           <button id="migration-resume" type="button" hidden disabled>Lauf sicher fortsetzen</button>
         </div>
       </section>
+      <section id="backup-panel" class="card" aria-labelledby="backup-heading">
+        <h2 id="backup-heading">Sicherung und Restore</h2>
+        <p class="muted">Diese Abläufe laufen nur bei geschlossenem Projekt und verwenden native Ordnerdialoge. Eine Sicherung wird nach dem Erstellen unabhängig geprüft. Restore erstellt ausschließlich einen neuen Klon mit neuer Datenbank-ID; die Quell-Datenbank wird nicht überschrieben.</p>
+        <div class="actions">
+          <div style="flex: 1 1 360px">
+            <label for="backup-profile">Sicherungsprofil und Auditumfang</label>
+            <select id="backup-profile">
+              <option value="exact">ExactDatabaseBackup · Audit ausgeschlossen</option>
+              <option value="audit_complete">AuditCompleteBackup · unterstützter RawRead-Audit-Prefix enthalten</option>
+            </select>
+          </div>
+        </div>
+        <p id="backup-profile-details" class="muted" role="status"></p>
+        <div class="actions">
+          <button id="backup-create" type="button" disabled>Neue Sicherung erstellen und prüfen</button>
+          <button id="backup-verify" type="button" disabled>Vorhandenes Backup prüfen</button>
+          <button id="backup-restore" type="button" disabled>Als neuen Klon wiederherstellen</button>
+        </div>
+        <p id="backup-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="backup-result" hidden></div>
+      </section>
       <section id="recovery-panel" class="card" aria-labelledby="recovery-heading">
         <h2 id="recovery-heading">Projekt prüfen und wiederherstellen</h2>
         <p class="muted">Die Prüfung liest den verifizierten WAL-Präfix und die referenzierten Inventare. Sie repariert nichts. Bei Schäden bleiben Verify, read-only, journalisierte Recovery, Restore und Salvage getrennte Entscheidungen.</p>

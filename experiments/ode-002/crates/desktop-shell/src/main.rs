@@ -24,6 +24,7 @@ use worlddb_ode_engine::{
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
+mod backup;
 mod host_session;
 mod migration;
 mod transfer;
@@ -184,6 +185,9 @@ fn run() -> Result<(), String> {
             run_migration,
             resume_migration,
             cancel_migration,
+            create_backup,
+            verify_backup,
+            restore_backup,
             create_project,
             open_project,
             close_project,
@@ -394,6 +398,12 @@ struct MigrationRunResponseV1 {
 }
 
 #[derive(Serialize)]
+struct BackupOperationResponseV1 {
+    protocol_version: u16,
+    result: backup::BackupOperationView,
+}
+
+#[derive(Serialize)]
 struct CloseProjectResponseV1 {
     protocol_version: u16,
     project: ProjectStatusV1,
@@ -534,6 +544,16 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code: "migration_rejected",
+            detail: Some(detail),
+            operation_id: None,
+            database_id: None,
+        }
+    }
+
+    fn backup_rejected(detail: String) -> Self {
+        Self {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            code: "backup_rejected",
             detail: Some(detail),
             operation_id: None,
             database_id: None,
@@ -1055,6 +1075,159 @@ fn cancel_migration(
         .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
     let _ = app.emit("migration-state-changed", ());
     Ok(())
+}
+
+#[tauri::command]
+async fn create_backup(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: backup::BackupRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<BackupOperationResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let profile = backup::BackupProfile::parse(&request.profile)
+        .map_err(|_| IpcErrorV1::new("invalid_request"))?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("backup_unavailable"))?;
+    let outcome = async {
+        let source = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Quellprojekt für die Sicherung auswählen",
+        )
+        .await?;
+        let parent = pick_project_parent(
+            app.clone(),
+            window.clone(),
+            "Elternordner für die neue Sicherung auswählen",
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            backup::create_backup(&source, &parent, profile)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::backup_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("backup-state-changed", ());
+    Ok(BackupOperationResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn verify_backup(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: backup::BackupRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<BackupOperationResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let profile = backup::BackupProfile::parse(&request.profile)
+        .map_err(|_| IpcErrorV1::new("invalid_request"))?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("backup_unavailable"))?;
+    let outcome = async {
+        let backup_path = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Zu prüfendes WorldDB-Backup auswählen",
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            backup::verify_backup(&backup_path, profile)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::backup_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("backup-state-changed", ());
+    Ok(BackupOperationResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn restore_backup(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: backup::BackupRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<BackupOperationResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let profile = backup::BackupProfile::parse(&request.profile)
+        .map_err(|_| IpcErrorV1::new("invalid_request"))?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("backup_unavailable"))?;
+    let outcome = async {
+        let authorization = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Sauberes Autorisierungsprojekt für dieses Backup auswählen",
+        )
+        .await?;
+        let backup_path = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Wiederherzustellendes, zuvor geprüftes Backup auswählen",
+        )
+        .await?;
+        let parent = pick_project_parent(
+            app.clone(),
+            window.clone(),
+            "Elternordner für den neuen Restore-Klon auswählen",
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            backup::restore_clone(&backup_path, &authorization, &parent, profile)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::backup_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("backup-state-changed", ());
+    Ok(BackupOperationResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
 }
 
 #[tauri::command]
@@ -3040,13 +3213,29 @@ impl Backend {
             .state
             .lock()
             .map_err(|_| "host project state is poisoned".to_owned())?;
-        if state.project.is_some() || state.engine.is_some() {
+        if state.project.is_some() || state.engine.is_some() || state.migration_dialog_active {
             return Err("another project is open".to_owned());
         }
         state
             .recovery_root
             .clone()
             .ok_or_else(|| "no recovery source is selected".to_owned())
+    }
+
+    fn begin_backup_operation(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some()
+            || state.engine.is_some()
+            || state.migration_dialog_active
+            || state.migration_draft.is_some()
+        {
+            return Err("backup operation is unavailable".to_owned());
+        }
+        state.migration_dialog_active = true;
+        Ok(())
     }
 
     fn begin_migration_plan_selection(&self) -> Result<(), String> {
