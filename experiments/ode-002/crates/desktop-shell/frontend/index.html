@@ -577,6 +577,45 @@
             <div class="actions"><button id="facts-create-boundary" type="button" disabled>Boundary speichern</button></div>
           </fieldset>
         </div>
+        <fieldset>
+          <legend>Vorhandene Datensätze</legend>
+          <p class="muted">Die Liste zeigt nur Datensätze, die dein aktueller Zugriff freigibt. Lebenszyklusstatus werden nur angezeigt, wenn du sie lesen darfst.</p>
+          <div id="facts-record-catalog" aria-live="polite"></div>
+        </fieldset>
+        <div class="grid">
+          <fieldset id="facts-correction-fields">
+            <legend>Assertion korrigieren</legend>
+            <p class="muted">Die Korrektur legt eine neue Assertion an, zieht das Original ausdrücklich zurück und verknüpft beide mit Corrects. Alle drei Datensätze werden gemeinsam gespeichert.</p>
+            <label for="facts-correction-target">Original</label><select id="facts-correction-target"></select>
+            <label for="facts-correction-reason">Grund für die Rücknahme</label><input id="facts-correction-reason" maxlength="4096" autocomplete="off" />
+            <div class="actions"><button id="facts-correction-preview" type="button" disabled>Wirkung prüfen</button></div>
+            <div id="facts-correction-preview-result" aria-live="polite"></div>
+            <div class="actions"><button id="facts-correction-commit" type="button" disabled>Assertion-Korrektur atomar speichern</button></div>
+          </fieldset>
+          <fieldset id="facts-event-correction-fields">
+            <legend>Event korrigieren</legend>
+            <p class="muted">Diese Aktion speichert einen neuen Event und Corrects. Das ursprüngliche Ereignis bleibt aktiv; es gibt keine automatische Event-Rücknahme. Der Ersatz muss als vollständiger Datensatz angegeben werden.</p>
+            <label for="facts-event-correction-target">Original-Event</label><select id="facts-event-correction-target"></select>
+            <label for="facts-event-correction-draft">Vollständiger Ersatz-Event</label>
+            <textarea id="facts-event-correction-draft" rows="7" spellcheck="false" placeholder='{"history_space_id":"…","layer_id":"…","event_kind_id":"…","participants":[],"attributes":[],"event_time":{"kind":"instant","timeline_id":"…","nanoseconds":"0"}}'></textarea>
+            <p class="muted">Teilnehmer: role_id und entity_id. Attribute: attribute_id und typisierter value. event_time ist instant oder span. IDs und Werte bleiben explizit im gespeicherten Auftrag.</p>
+            <div class="actions"><button id="facts-event-correction-preview" type="button" disabled>Wirkung prüfen</button></div>
+            <div id="facts-event-correction-preview-result" aria-live="polite"></div>
+            <div class="actions"><button id="facts-event-correction-commit" type="button" disabled>Event-Korrektur speichern</button></div>
+          </fieldset>
+        </div>
+        <fieldset id="facts-lifecycle-fields">
+          <legend>Archivieren oder ausdrücklich zurücknehmen</legend>
+          <div class="grid">
+            <div><label for="facts-lifecycle-target">Datensatz</label><select id="facts-lifecycle-target"></select></div>
+            <div><label for="facts-lifecycle-action">Aktion</label><select id="facts-lifecycle-action"><option value="retract">Explizit zurücknehmen</option><option value="archive">Archivieren</option><option value="unarchive">Aus Archiv holen</option></select></div>
+            <div><label for="facts-lifecycle-reason">Begründung für Rücknahme</label><input id="facts-lifecycle-reason" maxlength="4096" autocomplete="off" /></div>
+          </div>
+          <p class="muted">Archivierung und Rücknahme sind getrennte, unveränderliche Lebenszyklusdatensätze. Eine Assertion- oder Event-Korrektur führt die oben genannten Effekte gemeinsam aus; andere Rücknahmen benötigen diese eigene Aktion.</p>
+          <div class="actions"><button id="facts-lifecycle-preview" type="button" disabled>Wirkung prüfen</button></div>
+          <div id="facts-lifecycle-preview-result" aria-live="polite"></div>
+          <div class="actions"><button id="facts-lifecycle-commit" type="button" disabled>Lebenszyklusaktion speichern</button></div>
+        </fieldset>
         <p id="facts-write-status" class="muted" role="status" aria-live="polite"></p>
         <fieldset>
           <legend>M8-14d-Auflösungsvorschau</legend>

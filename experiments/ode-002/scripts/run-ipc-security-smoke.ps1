@@ -190,7 +190,7 @@ function Wait-ForSecurityPolicyOperations([System.Diagnostics.Process]$Process, 
 }
 
 function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(120)
+    $deadline = [DateTime]::UtcNow.AddSeconds(240)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
             $operations = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -201,6 +201,10 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $assertions = @($operations | Where-Object { $_.operation -eq 'create_assertion' -and $_.succeeded }).Count
             $masks = @($operations | Where-Object { $_.operation -eq 'create_mask' -and $_.succeeded })
             $boundaries = @($operations | Where-Object { $_.operation -eq 'create_replacement_boundary' -and $_.succeeded }).Count
+            $corrections = @($operations | Where-Object { $_.operation -eq 'correct_assertion' -and $_.succeeded }).Count
+            $catalogs = @($operations | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count
+            $lifecycle = @($operations | Where-Object { $_.operation -eq 'lifecycle' -and $_.succeeded })
+            $lifecycleEffects = @($lifecycle | Select-Object -ExpandProperty result_kind -Unique)
             $allTimes = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'all_times' }).Count
             $points = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'point' }).Count
             $selectors = @($masks | Select-Object -ExpandProperty selector_kind -Unique)
@@ -209,6 +213,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $hasSlot = $selectors -contains 'slot'
             if (
                 $assertions -ge 3 -and $masks.Count -ge 3 -and $boundaries -ge 1 -and
+                $corrections -ge 1 -and $catalogs -ge 1 -and $lifecycle.Count -ge 3 -and
+                ($lifecycleEffects -contains 'retracted') -and ($lifecycleEffects -contains 'archived') -and
+                ($lifecycleEffects -contains 'unarchived') -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $hasExact -and $hasProposition -and $hasSlot
             ) {
@@ -234,7 +241,7 @@ try {
     $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_FACTS_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
-    $env:WORLDDB_ODE_AUTOCLOSE_MS = '180000'
+    $env:WORLDDB_ODE_AUTOCLOSE_MS = '300000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
     if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
         $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)

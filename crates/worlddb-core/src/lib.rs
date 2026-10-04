@@ -986,7 +986,9 @@ pub use archive::{
 pub use archive_projection::{
     ArchiveHistoryReferenceModel, ArchiveProjectionError, ArchiveTargetRecord,
 };
-pub use archive_transaction::{ArchiveTransactionError, validate_archive_transition_transaction};
+pub use archive_transaction::{
+    ArchiveTransactionError, ArchiveTransitionValidation, validate_archive_transition_transaction,
+};
 pub use assertion_correction::{
     AssertionCorrectionCommand, AssertionCorrectionCommitError,
     AssertionCorrectionCommitValidationError, AssertionCorrectionError,

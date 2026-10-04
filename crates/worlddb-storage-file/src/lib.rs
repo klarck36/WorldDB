@@ -103,7 +103,8 @@ pub use salvage::{
     SalvageSegmentResult, SalvageSegmentSource, SalvageUnit,
 };
 pub use schema_management::{
-    EntityCatalogPublicationReceipt, EntityManagementError, FactManagementError,
+    AssertionCorrectionReceipt, EntityCatalogPublicationReceipt, EntityManagementError,
+    EventCorrectionReceipt, EventSnapshotRef, FactManagementError, FactOperationStatus,
     FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot, FileEntityManager,
     FileFactManager, FileHistorySpaceTransferManager, FileProjectMetadataManager,
     FileSchemaManager, FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,

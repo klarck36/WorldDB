@@ -21,7 +21,8 @@ mod entity;
 pub use entity::{EntityCatalogPublicationReceipt, EntityManagementError, FileEntityManager};
 mod facts;
 pub use facts::{
-    FactManagementError, FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot,
+    AssertionCorrectionReceipt, EventCorrectionReceipt, EventSnapshotRef, FactManagementError,
+    FactOperationStatus, FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot,
     FileFactManager, ReplacementBoundaryDraft,
 };
 mod project_metadata;

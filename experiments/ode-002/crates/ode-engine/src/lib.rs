@@ -38,10 +38,13 @@ pub use history_space_transfer::{
 };
 mod facts;
 pub use facts::{
-    FactCommand, FactContextInput, FactPublicationView, FactResponse, FactValueInput,
-    MaskSelectorInput, PolarityInput, ResolutionConflictView, ResolutionOutcomeView,
-    ResolutionPreviewView, ResolutionResultView, ResolutionSliceView, ResolutionValueView,
-    ValidityInput, WorldTimeSelectorInput,
+    AssertionCorrectionView, AssertionDraftInput, EventAttributeInput, EventCorrectionView,
+    EventDraftInput, EventParticipantInput, EventTimeInput, FactCatalogRecordView, FactCatalogView,
+    FactCommand, FactContextInput, FactLifecycleActionInput, FactLifecycleView,
+    FactOperationStatusKind, FactOperationStatusView, FactPublicationView, FactResponse,
+    FactTargetInput, FactValueInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
+    ResolutionOutcomeView, ResolutionPreviewView, ResolutionResultView, ResolutionSliceView,
+    ResolutionValueView, ValidityInput, WorldTimeSelectorInput,
 };
 mod schema;
 pub use schema::{
@@ -125,7 +128,7 @@ pub enum Request {
         command: HistorySpaceTransferCommand,
     },
     Facts {
-        command: FactCommand,
+        command: Box<FactCommand>,
     },
     Panic,
     Shutdown,

@@ -685,7 +685,10 @@ fn manage_facts(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
-    let is_write = !matches!(&request.command, FactCommand::Preview { .. });
+    let is_write = !matches!(
+        &request.command,
+        FactCommand::Snapshot | FactCommand::Preview { .. } | FactCommand::CommitStatus { .. }
+    );
     let operation = facts_smoke_operation(&request.command);
     let selector_kind = facts_smoke_selector_kind(&request.command);
     match backend.facts(request.command) {
@@ -1012,9 +1015,14 @@ fn security_policy_smoke_operation(command: &SecurityPolicyCommand) -> &'static 
 
 fn facts_smoke_operation(command: &FactCommand) -> &'static str {
     match command {
+        FactCommand::Snapshot => "snapshot",
         FactCommand::CreateAssertion { .. } => "create_assertion",
         FactCommand::CreateMask { .. } => "create_mask",
         FactCommand::CreateReplacementBoundary { .. } => "create_replacement_boundary",
+        FactCommand::CorrectAssertion { .. } => "correct_assertion",
+        FactCommand::CorrectEvent { .. } => "correct_event",
+        FactCommand::CommitStatus { .. } => "commit_status",
+        FactCommand::Lifecycle { .. } => "lifecycle",
         FactCommand::Preview { .. } => "preview",
     }
 }
@@ -1054,6 +1062,15 @@ fn record_facts_smoke(
         .map_or(
             (None, None, None, None, None, None, None),
             |response| match response {
+                FactResponse::Catalog(catalog) => (
+                    Some("catalog"),
+                    Some(catalog.revision),
+                    None,
+                    None,
+                    None,
+                    Some(catalog.records.len()),
+                    None,
+                ),
                 FactResponse::Published(publication) => (
                     Some("published"),
                     Some(publication.revision),
@@ -1087,6 +1104,50 @@ fn record_facts_smoke(
                         outcome_kind,
                     )
                 }
+                FactResponse::AssertionCorrected(correction) => (
+                    Some("assertion_corrected"),
+                    Some(correction.revision),
+                    Some("assertion_correction"),
+                    Some(correction.replacement_assertion_id.as_str()),
+                    None,
+                    Some(3),
+                    None,
+                ),
+                FactResponse::EventCorrected(correction) => (
+                    Some("event_corrected"),
+                    Some(correction.revision),
+                    Some("event_correction"),
+                    Some(correction.replacement_event_id.as_str()),
+                    None,
+                    Some(2),
+                    None,
+                ),
+                FactResponse::OperationStatus(status) => (
+                    Some("operation_status"),
+                    status.revision,
+                    None,
+                    None,
+                    Some(match status.status {
+                        worlddb_ode_engine::FactOperationStatusKind::NotCommitted => {
+                            "not_committed"
+                        }
+                        worlddb_ode_engine::FactOperationStatusKind::Committed => "committed",
+                        worlddb_ode_engine::FactOperationStatusKind::Indeterminate => {
+                            "indeterminate"
+                        }
+                    }),
+                    None,
+                    None,
+                ),
+                FactResponse::LifecycleChanged(change) => (
+                    Some("lifecycle_changed"),
+                    Some(change.revision),
+                    Some(change.target_family.as_str()),
+                    Some(change.record_id.as_str()),
+                    Some(change.effect.as_str()),
+                    None,
+                    None,
+                ),
             },
         );
     let record = serde_json::json!({
@@ -2583,7 +2644,9 @@ impl Sidecar {
     }
 
     fn facts(&mut self, command: FactCommand) -> Result<FactResponse, String> {
-        match self.request(Request::Facts { command })? {
+        match self.request(Request::Facts {
+            command: Box::new(command),
+        })? {
             Response::Facts { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected factual-record operation".to_owned()),
             _ => Err("sidecar returned an unexpected factual-record response".to_owned()),

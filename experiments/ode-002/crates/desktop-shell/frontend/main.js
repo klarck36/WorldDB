@@ -200,6 +200,23 @@ const factsMaskSelectorNote = document.querySelector("#facts-mask-selector-note"
 const factsCreateMask = document.querySelector("#facts-create-mask");
 const factsBoundaryNote = document.querySelector("#facts-boundary-note");
 const factsCreateBoundary = document.querySelector("#facts-create-boundary");
+const factsRecordCatalog = document.querySelector("#facts-record-catalog");
+const factsCorrectionTarget = document.querySelector("#facts-correction-target");
+const factsCorrectionReason = document.querySelector("#facts-correction-reason");
+const factsCorrectionPreviewButton = document.querySelector("#facts-correction-preview");
+const factsCorrectionPreviewResult = document.querySelector("#facts-correction-preview-result");
+const factsCorrectionCommitButton = document.querySelector("#facts-correction-commit");
+const factsEventCorrectionTarget = document.querySelector("#facts-event-correction-target");
+const factsEventCorrectionDraft = document.querySelector("#facts-event-correction-draft");
+const factsEventCorrectionPreviewButton = document.querySelector("#facts-event-correction-preview");
+const factsEventCorrectionPreviewResult = document.querySelector("#facts-event-correction-preview-result");
+const factsEventCorrectionCommitButton = document.querySelector("#facts-event-correction-commit");
+const factsLifecycleTarget = document.querySelector("#facts-lifecycle-target");
+const factsLifecycleAction = document.querySelector("#facts-lifecycle-action");
+const factsLifecycleReason = document.querySelector("#facts-lifecycle-reason");
+const factsLifecyclePreviewButton = document.querySelector("#facts-lifecycle-preview");
+const factsLifecyclePreviewResult = document.querySelector("#facts-lifecycle-preview-result");
+const factsLifecycleCommitButton = document.querySelector("#facts-lifecycle-commit");
 const factsWriteStatus = document.querySelector("#facts-write-status");
 const factsQueryTimeMode = document.querySelector("#facts-query-time-mode");
 const factsQueryPointWrap = document.querySelector("#facts-query-point-wrap");
@@ -254,6 +271,8 @@ let branchLayerCurrentMode = true;
 let transferCatalog = null;
 let transferPreviewTicket = null;
 let factCatalog = null;
+let pendingFactActionPreviews = { assertion: false, event: false, lifecycle: false };
+let pendingFactCorrectionCommands = { assertion: null, event: null };
 let stagedEventRoles = [];
 let stagedEventAttributes = [];
 let stagedLifecycleChanges = [];
@@ -623,21 +642,25 @@ async function manageFacts(command, activeSessionId = sessionId) {
 async function refreshFactsCatalog(activeSessionId = sessionId) {
   if (!projectOpen || !activeSessionId) return;
   factsContextNote.textContent = "Aktuelle Branches, Layer, Entitäten und Schemadefinitionen werden geladen …";
-  const [schema, entities, branches, perspectives] = await Promise.all([
+  const [schema, entities, branches, perspectives, records] = await Promise.all([
     manageSchema({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
     manageEntities({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
     manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
     invokePerspectiveSnapshot(activeSessionId, { mode: "current" }),
+    manageFacts({ command: "snapshot" }, activeSessionId),
   ]);
-  if ([schema, entities, branches, perspectives].some((snapshot) => snapshot.kind !== "snapshot")) {
+  if ([schema, entities, branches, perspectives].some((snapshot) => snapshot.kind !== "snapshot")
+    || records.kind !== "catalog") {
     throw new Error("unsupported_protocol");
   }
-  const revisions = [schema.revision, entities.revision, branches.revision, perspectives.revision];
+  const revisions = [schema.revision, entities.revision, branches.revision, perspectives.revision, records.revision];
   if (revisions.some((revision) => revision !== revisions[0])) {
     throw new Error("invalid_request");
   }
-  factCatalog = { schema, entities, branches, perspectives, revision: revisions[0] };
+  factCatalog = { schema, entities, branches, perspectives, records: records.records,
+    lifecycleVisible: records.lifecycle_visible, revision: revisions[0] };
   renderFactsChoices();
+  renderFactRecordCatalog();
   updateFactControls();
 }
 
@@ -721,6 +744,80 @@ function renderFactsChoices() {
     label: definition.symbol,
   })), previous.timeUnit, "Keine aktive Zeiteinheit vorhanden");
   updateFactsValueFields();
+  updateFactControls();
+}
+
+function renderFactRecordCatalog() {
+  factsRecordCatalog.replaceChildren();
+  const records = factCatalog?.records ?? [];
+  if (!records.length) {
+    appendText(factsRecordCatalog, "p", "Noch keine für dich sichtbaren Assertion-, Mask-, Boundary- oder Event-Datensätze.", "muted");
+  } else {
+    const list = document.createElement("ul");
+    for (const record of records) {
+      const status = [];
+      if (record.retracted === true) status.push("zurückgenommen");
+      else if (record.retracted === false) status.push("aktiv");
+      if (record.archived === true) status.push("archiviert");
+      else if (record.archived === false) status.push("nicht archiviert");
+      const suffix = status.length ? ` · ${status.join(" · ")}` : "";
+      appendText(list, "li", `${record.family} · ${record.record_id} · Revision ${record.created_revision}${suffix}`);
+    }
+    factsRecordCatalog.append(list);
+  }
+
+  const assertionRecords = records.filter((record) => record.family === "assertion" && record.retracted !== true);
+  replaceFactOptions(factsCorrectionTarget, assertionRecords.map((record) => ({
+    value: record.record_id,
+    label: `${record.record_id} · Revision ${record.created_revision}`,
+  })), factsCorrectionTarget.value, "Keine sichtbare aktive Assertion vorhanden");
+  const eventRecords = records.filter((record) => record.family === "event" && record.retracted !== true);
+  replaceFactOptions(factsEventCorrectionTarget, eventRecords.map((record) => ({
+    value: record.record_id,
+    label: `${record.record_id} · Revision ${record.created_revision}`,
+  })), factsEventCorrectionTarget.value, "Kein sichtbarer aktiver Event vorhanden");
+  const lifecycleRecords = records.filter((record) => record.retracted !== true);
+  replaceFactOptions(factsLifecycleTarget, lifecycleRecords.map((record) => ({
+    value: `${record.family}:${record.record_id}`,
+    label: `${record.family} · ${record.record_id}${record.archived === true ? " · archiviert" : ""}`,
+  })), factsLifecycleTarget.value, "Keine Datensätze für Lebenszyklusaktionen vorhanden");
+  updateEventCorrectionTemplate();
+  clearFactActionPreviews();
+}
+
+function selectedFactRecord(select, composite = false) {
+  const [family, id] = composite
+    ? (select.value.includes(":") ? select.value.split(/:(.*)/s).slice(0, 2) : ["", ""])
+    : [select === factsCorrectionTarget ? "assertion" : "event", select.value];
+  return (factCatalog?.records ?? []).find((record) => record.family === family && record.record_id === id) ?? null;
+}
+
+function updateEventCorrectionTemplate() {
+  const record = selectedFactRecord(factsEventCorrectionTarget);
+  if (!record) return;
+  if (factsEventCorrectionDraft.dataset.templateTarget === record.record_id
+    && factsEventCorrectionDraft.value.trim()) return;
+  const activeTimeline = factsSchemaDefinitions("timeline", true)[0]?.identity ?? "";
+  factsEventCorrectionDraft.value = JSON.stringify({
+    history_space_id: record.history_space_id ?? "",
+    layer_id: record.layer_id ?? "",
+    event_kind_id: record.event_kind_id ?? "",
+    participants: [],
+    attributes: [],
+    event_time: { kind: "instant", timeline_id: activeTimeline, nanoseconds: "0" },
+  }, null, 2);
+  factsEventCorrectionDraft.dataset.templateTarget = record.record_id;
+}
+
+function clearFactActionPreviews() {
+  pendingFactActionPreviews = { assertion: false, event: false, lifecycle: false };
+  pendingFactCorrectionCommands = { assertion: null, event: null };
+  for (const button of [factsCorrectionCommitButton, factsEventCorrectionCommitButton, factsLifecycleCommitButton]) {
+    button.disabled = true;
+  }
+  factsCorrectionPreviewResult.replaceChildren();
+  factsEventCorrectionPreviewResult.replaceChildren();
+  factsLifecyclePreviewResult.replaceChildren();
   updateFactControls();
 }
 
@@ -848,6 +945,147 @@ function factsQueryCommand() {
   };
 }
 
+function factsAssertionCorrectionCommand() {
+  const target = selectedFactRecord(factsCorrectionTarget);
+  if (!target?.history_space_id || !target.layer_id || !target.epistemic_mode
+    || !target.subject_id || !target.predicate_id || !factsCorrectionReason.value.trim()
+    || factsSubject.value !== target.subject_id || factsPredicate.value !== target.predicate_id) {
+    throw new Error("invalid_request");
+  }
+  return {
+    command: "correct_assertion",
+    operation_id: crypto.randomUUID(),
+    expected_base_revision: factCatalog.revision,
+    target_assertion_id: target.record_id,
+    expected_target_created_revision: target.created_revision,
+    replacement_assertion_id: crypto.randomUUID(),
+    retraction_id: crypto.randomUUID(),
+    corrects_provenance_id: crypto.randomUUID(),
+    replacement: {
+      context: {
+        history_space_id: target.history_space_id,
+        layer_id: target.layer_id,
+        perspective_id: target.perspective_id,
+        epistemic_mode: target.epistemic_mode,
+      },
+      subject_id: target.subject_id,
+      predicate_id: target.predicate_id,
+      value: factsValueInput(),
+      polarity: factsPolarity.value,
+      validity: factsValidityInput(),
+    },
+    retraction_reason: factsCorrectionReason.value.trim(),
+  };
+}
+
+function factsEventCorrectionCommand() {
+  const target = selectedFactRecord(factsEventCorrectionTarget);
+  if (!target?.event_kind_id) throw new Error("invalid_request");
+  let replacement;
+  try { replacement = JSON.parse(factsEventCorrectionDraft.value); } catch { throw new Error("invalid_request"); }
+  if (!replacement || replacement.history_space_id !== target.history_space_id
+    || replacement.layer_id !== target.layer_id || replacement.event_kind_id !== target.event_kind_id
+    || !Array.isArray(replacement.participants) || !Array.isArray(replacement.attributes)
+    || !replacement.event_time) throw new Error("invalid_request");
+  return {
+    command: "correct_event",
+    operation_id: crypto.randomUUID(),
+    expected_base_revision: factCatalog.revision,
+    target_event_id: target.record_id,
+    expected_target_created_revision: target.created_revision,
+    replacement_event_id: crypto.randomUUID(),
+    corrects_provenance_id: crypto.randomUUID(),
+    replacement,
+  };
+}
+
+function factsLifecycleCommand() {
+  if (!factCatalog?.lifecycleVisible) throw new Error("invalid_request");
+  const record = selectedFactRecord(factsLifecycleTarget, true);
+  if (!record) throw new Error("invalid_request");
+  const key = {
+    assertion: "assertion_id",
+    mask: "mask_id",
+    replacement_boundary: "replacement_boundary_id",
+    event: "event_id",
+  }[record.family];
+  const target = { family: record.family, [key]: record.record_id };
+  const action = factsLifecycleAction.value;
+  if (action === "retract") {
+    if (!factsLifecycleReason.value.trim()) throw new Error("invalid_request");
+    return {
+      command: "lifecycle",
+      expected_base_revision: factCatalog.revision,
+      target,
+      action: { action, reason: factsLifecycleReason.value.trim() },
+    };
+  }
+  return {
+    command: "lifecycle",
+    expected_base_revision: factCatalog.revision,
+    target,
+    action: { action },
+  };
+}
+
+function previewAssertionCorrection() {
+  try {
+    const command = factsAssertionCorrectionCommand();
+    pendingFactCorrectionCommands.assertion = command;
+    const target = selectedFactRecord(factsCorrectionTarget);
+    factsCorrectionPreviewResult.replaceChildren();
+    appendText(factsCorrectionPreviewResult, "p", `Original: ${target.record_id} (angelegt in Revision ${target.created_revision}).`);
+    appendText(factsCorrectionPreviewResult, "p", "Eine vollständige neue Assertion, die ausdrückliche Rücknahme des Originals und Corrects(neu, original) werden gemeinsam in genau einem Commit gespeichert.");
+    const proposed = document.createElement("pre");
+    proposed.textContent = JSON.stringify(command.replacement, null, 2);
+    factsCorrectionPreviewResult.append(proposed);
+    appendText(factsCorrectionPreviewResult, "p", `Rücknahmegrund: ${command.retraction_reason}. Die Vorschau ist unverbindlich; der Speicherpfad prüft den aktuellen Stand und alle Rechte erneut.` , "muted");
+    pendingFactActionPreviews.assertion = true;
+  } catch (error) {
+    factsCorrectionPreviewResult.textContent = showError(error);
+    pendingFactActionPreviews.assertion = false;
+    pendingFactCorrectionCommands.assertion = null;
+  }
+  updateFactControls();
+}
+
+function previewEventCorrection() {
+  try {
+    const command = factsEventCorrectionCommand();
+    pendingFactCorrectionCommands.event = command;
+    factsEventCorrectionPreviewResult.replaceChildren();
+    appendText(factsEventCorrectionPreviewResult, "p", `Original: ${command.target_event_id} (angelegt in Revision ${command.expected_target_created_revision}).`);
+    appendText(factsEventCorrectionPreviewResult, "p", "Genau ein neuer Event und Corrects(neu, original) werden atomar gespeichert. Das Original bleibt aktiv; es wird keine EventRetraction erzeugt.");
+    const proposed = document.createElement("pre");
+    proposed.textContent = JSON.stringify(command.replacement, null, 2);
+    factsEventCorrectionPreviewResult.append(proposed);
+    appendText(factsEventCorrectionPreviewResult, "p", "Die Vorschau ist unverbindlich; Schema, Event-Zustand und Rechte werden beim Speichern erneut geprüft.", "muted");
+    pendingFactActionPreviews.event = true;
+  } catch (error) {
+    factsEventCorrectionPreviewResult.textContent = showError(error);
+    pendingFactActionPreviews.event = false;
+    pendingFactCorrectionCommands.event = null;
+  }
+  updateFactControls();
+}
+
+function previewFactLifecycle() {
+  try {
+    const command = factsLifecycleCommand();
+    const record = selectedFactRecord(factsLifecycleTarget, true);
+    const action = command.action.action;
+    factsLifecyclePreviewResult.textContent = action === "retract"
+      ? `${record.family} ${record.record_id} wird mit einem neuen, begründeten Rücknahmedatensatz zurückgenommen.`
+      : `${record.family} ${record.record_id} erhält einen neuen Archivübergang: ${action === "archive" ? "archiviert" : "aus dem Archiv geholt"}.`;
+    appendText(factsLifecyclePreviewResult, "p", "Es wird kein bestehender Datensatz geändert. Die Änderung wird erst nach deiner Bestätigung ausgeführt und beim Commit erneut geprüft.", "muted");
+    pendingFactActionPreviews.lifecycle = true;
+  } catch (error) {
+    factsLifecyclePreviewResult.textContent = showError(error);
+    pendingFactActionPreviews.lifecycle = false;
+  }
+  updateFactControls();
+}
+
 function factsMaskSelectorInput() {
   if (factsMaskSelector.value === "exact_assertion") {
     const assertionId = factsMaskAssertionId.value.trim();
@@ -906,20 +1144,55 @@ async function runFactsPreview(activeSessionId = sessionId) {
   }
 }
 
-async function publishFact(command, successLabel) {
+async function publishFact(command, successLabel, expectedKind = "published") {
   if (!sessionId || !projectOpen || factBusy) return;
   setFactsBusy(true);
   factsWriteStatus.textContent = "Der Datensatz wird geprüft und gespeichert …";
   let publication;
   try {
     publication = await manageFacts(command);
-    if (publication.kind !== "published") throw new Error("unsupported_protocol");
+    if (publication.kind !== expectedKind) throw new Error("unsupported_protocol");
   } catch (error) {
-    factsWriteStatus.textContent = showError(error);
+    if (command.operation_id && ["correct_assertion", "correct_event"].includes(command.command)) {
+      try {
+        const status = await manageFacts({ command: "commit_status", operation_id: command.operation_id });
+        if (status.kind !== "operation_status") throw new Error("unsupported_protocol");
+        if (status.status === "committed") {
+          publication = await manageFacts(command);
+          if (publication.kind !== expectedKind) throw new Error("unsupported_protocol");
+        } else {
+          const statusLabel = status.status === "indeterminate"
+            ? "Der Commit ist noch unklar. Dieselbe Operation bleibt für die erneute Prüfung vorgemerkt."
+            : "Die Operation ist nicht committed. Du kannst dieselbe geprüfte Aktion erneut absenden.";
+          factsWriteStatus.textContent = `${showError(error)} ${statusLabel} Operation ${command.operation_id}.`;
+          setFactsBusy(false);
+          return;
+        }
+      } catch (statusError) {
+        factsWriteStatus.textContent = `${showError(error)} Statusprüfung fehlgeschlagen; Operation ${command.operation_id} bleibt unverändert vorgemerkt. ${showError(statusError)}`;
+        setFactsBusy(false);
+        return;
+      }
+    } else {
+      factsWriteStatus.textContent = showError(error);
+      setFactsBusy(false);
+      return;
+    }
+  }
+  if (!publication) {
+    factsWriteStatus.textContent = showError(new Error("unknown_commit_outcome"));
     setFactsBusy(false);
     return;
   }
-  factsWriteStatus.textContent = `${successLabel} gespeichert · Revision ${publication.revision} · Beleg ${publication.record_id}`;
+  if (publication.kind === "assertion_corrected") {
+    factsWriteStatus.textContent = `Assertion-Korrektur gemeinsam gespeichert · Revision ${publication.revision} · Original ${publication.target_assertion_id} zurückgenommen · Neue Assertion ${publication.replacement_assertion_id} · Corrects ${publication.corrects_provenance_id}`;
+  } else if (publication.kind === "event_corrected") {
+    factsWriteStatus.textContent = `Event-Korrektur gespeichert · Revision ${publication.revision} · Neues Event ${publication.replacement_event_id} · Corrects ${publication.corrects_provenance_id} · Original bleibt aktiv`;
+  } else if (publication.kind === "lifecycle_changed") {
+    factsWriteStatus.textContent = `${publication.target_family} ${publication.target_id}: ${publication.effect} · Revision ${publication.revision} · Lebenszyklusbeleg ${publication.record_id}`;
+  } else {
+    factsWriteStatus.textContent = `${successLabel} gespeichert · Revision ${publication.revision} · Beleg ${publication.record_id}`;
+  }
   await refreshProject(sessionId).catch((error) => {
     factsContextNote.textContent = showError(error);
   });
@@ -929,6 +1202,7 @@ async function publishFact(command, successLabel) {
   factsPreviewStatus.textContent = "Der Schreibbeleg steht fest. Die Auflösungsvorschau wird separat neu berechnet …";
   await runFactsPreview(sessionId);
   setFactsBusy(false);
+  clearFactActionPreviews();
 }
 
 function updateFactControls() {
@@ -942,9 +1216,15 @@ function updateFactControls() {
   let valueValid = false;
   let validityValid = false;
   let queryTimeValid = false;
+  let assertionCorrectionValid = false;
+  let eventCorrectionValid = false;
+  let lifecycleValid = false;
   try { factsValueInput(); valueValid = true; } catch {}
   try { factsValidityInput(); validityValid = true; } catch {}
   try { factsWorldTimeInput(); queryTimeValid = true; } catch {}
+  try { factsAssertionCorrectionCommand(); assertionCorrectionValid = true; } catch {}
+  try { factsEventCorrectionCommand(); eventCorrectionValid = true; } catch {}
+  try { factsLifecycleCommand(); lifecycleValid = true; } catch {}
   const maskSelectorValid = factsMaskSelector.value === "exact_assertion"
     ? /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(factsMaskAssertionId.value.trim())
     : factsMaskSelector.value === "proposition" ? valueValid : factsMaskSelector.value === "slot";
@@ -953,6 +1233,7 @@ function updateFactControls() {
   factsQueryPointWrap.hidden = factsQueryTimeMode.value !== "at";
   factsQueryNanosecondsWrap.hidden = factsQueryTimeMode.value !== "at";
   factsMaskExactWrap.hidden = factsMaskSelector.value !== "exact_assertion";
+  factsLifecycleReason.hidden = factsLifecycleAction.value !== "retract";
   factsMaskSelectorNote.textContent = factsMaskSelector.value === "slot"
     ? "Der Slot-Selector verwendet Subjekt, Prädikat und Perspektiv-/Epistemikpartition aus dem Kontext."
     : factsMaskSelector.value === "proposition"
@@ -968,6 +1249,19 @@ function updateFactControls() {
     || predicate?.details?.resolution_policy !== "multi_value_replace"
     || (factsValidityEnabled.checked && !validityValid);
   factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid;
+  factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
+  factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
+  factsEventCorrectionPreviewButton.disabled = !canRead || !eventCorrectionValid;
+  factsEventCorrectionCommitButton.disabled = !canRead || !eventCorrectionValid || !pendingFactActionPreviews.event;
+  const lifecycleRecord = selectedFactRecord(factsLifecycleTarget, true);
+  const lifecycleAction = factsLifecycleAction.value;
+  const lifecycleStateAllowsAction = Boolean(lifecycleRecord && factCatalog?.lifecycleVisible
+    && ((lifecycleAction === "retract" && lifecycleRecord.retracted === false)
+      || (lifecycleAction === "archive" && lifecycleRecord.archived === false)
+      || (lifecycleAction === "unarchive" && lifecycleRecord.archived === true)));
+  factsLifecyclePreviewButton.disabled = !canRead || !lifecycleValid || !lifecycleStateAllowsAction;
+  factsLifecycleCommitButton.disabled = !canRead || !lifecycleValid || !lifecycleStateAllowsAction
+    || !pendingFactActionPreviews.lifecycle;
   factsWriteStatus.setAttribute("aria-busy", String(factBusy));
 }
 
@@ -2506,10 +2800,15 @@ async function waitForFactWrite(label) {
   throw new Error(`Timed out waiting for the ${label} write receipt`);
 }
 
-async function waitForFactPreview() {
+async function waitForFactPreview(expectedRevision = null) {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    if (factsPreviewStatus.textContent.startsWith("Abfrage abgeschlossen · Revision ")) return;
+    const completed = factsPreviewStatus.textContent.match(/^Abfrage abgeschlossen · Revision ([0-9]+)$/);
+    if (completed) {
+      if (expectedRevision === null || Number(completed[1]) >= expectedRevision) return;
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+      continue;
+    }
     if (factsPreviewStatus.textContent
       && !factsPreviewStatus.textContent.startsWith("Der Schreibbeleg steht fest.")
       && !factsPreviewStatus.textContent.startsWith("Vollständige Auflösung wird berechnet …")) {
@@ -2524,7 +2823,9 @@ async function clickFactWrite(button, label) {
   if (button.disabled) throw new Error(`${label} form remained disabled with a complete valid fixture`);
   factsPreviewStatus.textContent = "";
   button.click();
-  return waitForFactWrite(label);
+  const receipt = await waitForFactWrite(label);
+  await waitForFactPreview(receipt.revision);
+  return receipt;
 }
 
 async function clickFactPreview() {
@@ -2548,6 +2849,31 @@ async function clickFactPreview() {
   factsPreviewButton.click();
   await waitForFactPreview();
   return factsPreviewResults.textContent;
+}
+
+async function waitForFactAction(prefix) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const status = factsWriteStatus.textContent;
+    if (status.startsWith(prefix)) return status;
+    if (status && !status.startsWith("Der Datensatz wird geprüft und gespeichert …")) {
+      throw new Error(`factual lifecycle action was rejected: ${status}`);
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for factual lifecycle action: ${prefix}`);
+}
+
+async function commitPreviewedFactAction(previewButton, commitButton, statusPrefix) {
+  if (previewButton.disabled) throw new Error("factual action preview remained disabled");
+  previewButton.click();
+  if (commitButton.disabled) throw new Error("factual action confirmation did not follow the preview");
+  commitButton.click();
+  const status = await waitForFactAction(statusPrefix);
+  const revision = status.match(/Revision ([0-9]+)/);
+  if (!revision) throw new Error("factual action receipt omitted its shared revision");
+  await waitForFactPreview(Number(revision[1]));
+  return status;
 }
 
 async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cutoffRevision) {
@@ -2683,11 +3009,42 @@ async function runFactsSmoke(activeSessionId) {
   factsMaskSelector.value = "exact_assertion";
   factsMaskAssertionId.value = assertion.recordId;
   updateFactControls();
-  await clickFactWrite(factsCreateMask, "Mask");
+  const exactMask = await clickFactWrite(factsCreateMask, "Mask");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Unknown")) {
     throw new Error("the exact-Assertion Mask did not make the preview Unknown");
   }
+
+  factsLifecycleTarget.value = `mask:${exactMask.recordId}`;
+  factsLifecycleAction.value = "retract";
+  factsLifecycleReason.value = "IPC smoke: separate explicit Mask retraction";
+  updateFactControls();
+  await commitPreviewedFactAction(
+    factsLifecyclePreviewButton,
+    factsLifecycleCommitButton,
+    `mask ${exactMask.recordId}: retracted · Revision `,
+  );
+  await waitForFactPreview();
+  if (!factsPreviewResults.textContent.includes("Ergebnis: Known")) {
+    throw new Error("explicit Mask retraction did not restore the unmasked Assertion");
+  }
+
+  factsLifecycleTarget.value = `assertion:${assertion.recordId}`;
+  factsLifecycleAction.value = "archive";
+  updateFactControls();
+  await commitPreviewedFactAction(
+    factsLifecyclePreviewButton,
+    factsLifecycleCommitButton,
+    `assertion ${assertion.recordId}: archived · Revision `,
+  );
+  factsLifecycleTarget.value = `assertion:${assertion.recordId}`;
+  factsLifecycleAction.value = "unarchive";
+  updateFactControls();
+  await commitPreviewedFactAction(
+    factsLifecyclePreviewButton,
+    factsLifecycleCommitButton,
+    `assertion ${assertion.recordId}: unarchived · Revision `,
+  );
 
   factsHistorySpace.value = root.history_space_id;
   updateFactControls();
@@ -2730,6 +3087,24 @@ async function runFactsSmoke(activeSessionId) {
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Known")) {
     throw new Error("the MultiValueReplace boundary did not expose its known empty-set resolution");
+  }
+
+  factsCorrectionTarget.value = assertion.recordId;
+  factsCorrectionReason.value = "IPC smoke: explicit assertion correction";
+  updateFactControls();
+  const correctionStatus = await commitPreviewedFactAction(
+    factsCorrectionPreviewButton,
+    factsCorrectionCommitButton,
+    `Assertion-Korrektur gemeinsam gespeichert · Revision `,
+  );
+  if (!correctionStatus.includes(`Original ${assertion.recordId} zurückgenommen`)
+    || !correctionStatus.includes("Corrects")) {
+    throw new Error("Assertion correction UI did not report its explicit Retraction and Corrects edge");
+  }
+  const corrected = factCatalog.records.find((item) => item.family === "assertion"
+    && item.record_id === assertion.recordId);
+  if (corrected?.retracted !== true) {
+    throw new Error("Assertion correction did not expose the original's explicit lifecycle state");
   }
 
   const committedStatus = factsWriteStatus.textContent;
@@ -3580,18 +3955,41 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   transferCommitButton.addEventListener("click", commitTransfer);
   factsEpistemicMode.addEventListener("change", () => {
     if (factsEpistemicMode.value === "world_state") factsPerspective.value = "";
-    updateFactControls();
+    clearFactActionPreviews();
   });
   for (const select of [factsHistorySpace, factsLayer, factsPerspective, factsSubject, factsPolarity,
     factsValueBool, factsValueEntity, factsTimeValueTimeline, factsTimeValueUnit, factsValidityTimeline,
-    factsMaskSelector, factsQueryTimeMode, factsQueryTimeline]) {
-    select.addEventListener("change", updateFactControls);
+    factsMaskSelector, factsQueryTimeMode, factsQueryTimeline, factsCorrectionTarget,
+    factsLifecycleTarget, factsLifecycleAction]) {
+    select.addEventListener("change", clearFactActionPreviews);
   }
-  factsPredicate.addEventListener("change", updateFactsValueFields);
-  factsValidityEnabled.addEventListener("change", updateFactControls);
+  factsPredicate.addEventListener("change", () => { clearFactActionPreviews(); updateFactsValueFields(); });
+  factsValidityEnabled.addEventListener("change", clearFactActionPreviews);
+  factsEventCorrectionTarget.addEventListener("change", () => {
+    factsEventCorrectionDraft.dataset.templateTarget = "";
+    updateEventCorrectionTemplate();
+    clearFactActionPreviews();
+  });
+  factsCorrectionTarget.addEventListener("change", () => {
+    const target = selectedFactRecord(factsCorrectionTarget);
+    if (!target?.history_space_id || !target.layer_id || !target.epistemic_mode
+      || !target.subject_id || !target.predicate_id) {
+      updateFactControls();
+      return;
+    }
+    factsHistorySpace.value = target.history_space_id;
+    factsLayer.value = target.layer_id;
+    factsPerspective.value = target.perspective_id ?? "";
+    factsEpistemicMode.value = target.epistemic_mode;
+    factsSubject.value = target.subject_id;
+    factsPredicate.value = target.predicate_id;
+    updateFactsValueFields();
+    updateFactControls();
+  });
   for (const input of [factsValueText, factsTimeValueTicks, factsValidityStart, factsValidityEnd,
-    factsMaskAssertionId, factsQueryNanoseconds]) {
-    input.addEventListener("input", updateFactControls);
+    factsMaskAssertionId, factsQueryNanoseconds, factsCorrectionReason, factsEventCorrectionDraft,
+    factsLifecycleReason]) {
+    input.addEventListener("input", clearFactActionPreviews);
   }
   factsCreateAssertion.addEventListener("click", () => submitFact(() => ({
     command: "create_assertion",
@@ -3619,6 +4017,29 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     validity: factsValidityEnabled.checked ? factsValidityInput() : null,
   }), "ReplacementBoundary"));
   factsPreviewButton.addEventListener("click", () => runFactsPreview());
+  factsCorrectionPreviewButton.addEventListener("click", previewAssertionCorrection);
+  factsCorrectionCommitButton.addEventListener("click", () => {
+    try {
+      const command = pendingFactCorrectionCommands.assertion;
+      if (!command) throw new Error("invalid_request");
+      publishFact(command, "Assertion-Korrektur", "assertion_corrected");
+    }
+    catch (error) { factsWriteStatus.textContent = showError(error); clearFactActionPreviews(); }
+  });
+  factsEventCorrectionPreviewButton.addEventListener("click", previewEventCorrection);
+  factsEventCorrectionCommitButton.addEventListener("click", () => {
+    try {
+      const command = pendingFactCorrectionCommands.event;
+      if (!command) throw new Error("invalid_request");
+      publishFact(command, "Event-Korrektur", "event_corrected");
+    }
+    catch (error) { factsWriteStatus.textContent = showError(error); clearFactActionPreviews(); }
+  });
+  factsLifecyclePreviewButton.addEventListener("click", previewFactLifecycle);
+  factsLifecycleCommitButton.addEventListener("click", () => {
+    try { publishFact(factsLifecycleCommand(), "Lebenszyklusaktion", "lifecycle_changed"); }
+    catch (error) { factsWriteStatus.textContent = showError(error); clearFactActionPreviews(); }
+  });
   branchLayerViewMode.addEventListener("change", () => {
     branchLayerViewRevisionWrap.hidden = branchLayerViewMode.value === "current";
     branchLayerViewRevisionLabel.textContent = branchLayerViewMode.value === "historical"

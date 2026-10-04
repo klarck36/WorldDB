@@ -5,15 +5,21 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use worlddb_core::{
-    AssertionDraft, AssertionId, AssertionValidity, Bytes, ContextKey, Decimal, DomainId, EntityId,
-    EpistemicMode, HistorySpaceId, Int, LayerId, LayerSelection, MaskId, MaskSelector,
-    MaskSlotSelector, MultiValueConflict, MultiValueEntry, MultiValueOutcome, NonEmptySet,
-    PerspectiveId, PerspectiveScope, Polarity, PredicateId, PropositionKey, QueryEngineOutput,
-    ReplacementBoundaryId, ResolutionPreview, ResolvedOutcome, ResolvedView, Revision, Subject,
-    Symbol, Time, TimeInterval, Timeline, TimelineId, UInt, Value, WorldTime, WorldTimeSelector,
+    ArchiveAction, ArchiveHistoryReferenceModel, ArchiveState, ArchiveTargetRecord,
+    ArchiveTargetRef, ArchiveTransitionId, AssertionDraft, AssertionId, AssertionRetractionId,
+    AssertionValidity, Bytes, ContextKey, Decimal, DomainId, EntityId, EpistemicMode,
+    EventAttributeId, EventAttributeValue, EventDraft, EventId, EventKindId, EventParticipant,
+    EventRetractionId, EventRoleId, EventTime, HistorySpaceId, Int, LayerId, LayerSelection,
+    MaskId, MaskRetractionId, MaskSelector, MaskSlotSelector, MultiValueConflict, MultiValueEntry,
+    MultiValueOutcome, NonEmptySet, PerspectiveId, PerspectiveScope, Polarity, PredicateId,
+    PropositionKey, ProvenanceId, QueryEngineOutput, RecordRef, RecordedAsOf,
+    ReplacementBoundaryId, ReplacementBoundaryRetractionId, ResolutionPreview, ResolvedOutcome,
+    ResolvedView, Revision, SchemaDefinition, SchemaMode, Subject, Symbol, Time, TimeInterval,
+    Timeline, TimelineId, UInt, Value, WorldTime, WorldTimeSelector,
 };
 use worlddb_storage_file::{
-    FactResolutionPreviewRequest, FileFactManager, ReplacementBoundaryDraft,
+    AssertionCorrectionReceipt, EventCorrectionReceipt, FactResolutionPreviewRequest, FactSnapshot,
+    FileFactManager, FileSchemaManager, ReplacementBoundaryDraft,
 };
 
 use crate::{EngineError, EngineHost, EpistemicModeInput};
@@ -22,6 +28,8 @@ use crate::{EngineError, EngineHost, EpistemicModeInput};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum FactCommand {
+    /// Lists visible factual record identities and lifecycle state.
+    Snapshot,
     /// Publishes one immutable Assertion.
     CreateAssertion {
         expected_base_revision: u64,
@@ -47,6 +55,36 @@ pub enum FactCommand {
         predicate_id: String,
         validity: Option<ValidityInput>,
     },
+    /// Replaces one assertion in place semantically using an explicit three-record effect.
+    CorrectAssertion {
+        operation_id: String,
+        expected_base_revision: u64,
+        target_assertion_id: String,
+        expected_target_created_revision: u64,
+        replacement_assertion_id: String,
+        retraction_id: String,
+        corrects_provenance_id: String,
+        replacement: AssertionDraftInput,
+        retraction_reason: String,
+    },
+    /// Adds a replacement Event and Corrects edge; it never creates EventRetraction.
+    CorrectEvent {
+        operation_id: String,
+        expected_base_revision: u64,
+        target_event_id: String,
+        expected_target_created_revision: u64,
+        replacement_event_id: String,
+        corrects_provenance_id: String,
+        replacement: EventDraftInput,
+    },
+    /// Returns the durable status for one logical write identity.
+    CommitStatus { operation_id: String },
+    /// Performs exactly one explicit retraction or archive-state transition.
+    Lifecycle {
+        expected_base_revision: u64,
+        target: FactTargetInput,
+        action: FactLifecycleActionInput,
+    },
     /// Evaluates one slot through the productive resolution-preview path.
     Preview {
         context: FactContextInput,
@@ -54,6 +92,75 @@ pub enum FactCommand {
         predicate_id: String,
         world_time: WorldTimeSelectorInput,
     },
+}
+
+/// Complete explicit replacement Assertion payload.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssertionDraftInput {
+    pub context: FactContextInput,
+    pub subject_id: String,
+    pub predicate_id: String,
+    pub value: FactValueInput,
+    pub polarity: PolarityInput,
+    pub validity: ValidityInput,
+}
+
+/// Complete explicit replacement Event payload.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventDraftInput {
+    pub history_space_id: String,
+    pub layer_id: String,
+    pub event_kind_id: String,
+    pub participants: Vec<EventParticipantInput>,
+    pub attributes: Vec<EventAttributeInput>,
+    pub event_time: EventTimeInput,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventParticipantInput {
+    pub role_id: String,
+    pub entity_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventAttributeInput {
+    pub attribute_id: String,
+    pub value: FactValueInput,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EventTimeInput {
+    Instant {
+        timeline_id: String,
+        nanoseconds: String,
+    },
+    Span {
+        timeline_id: String,
+        start_nanoseconds: String,
+        end_nanoseconds: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "family", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FactTargetInput {
+    Assertion { assertion_id: String },
+    Mask { mask_id: String },
+    ReplacementBoundary { replacement_boundary_id: String },
+    Event { event_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FactLifecycleActionInput {
+    Retract { reason: String },
+    Archive,
+    Unarchive,
 }
 
 /// Explicit write/query context shared by factual-record forms.
@@ -142,8 +249,83 @@ pub struct ValidityInput {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FactResponse {
+    Catalog(FactCatalogView),
     Published(FactPublicationView),
     Preview(ResolutionPreviewView),
+    AssertionCorrected(AssertionCorrectionView),
+    EventCorrected(EventCorrectionView),
+    OperationStatus(FactOperationStatusView),
+    LifecycleChanged(FactLifecycleView),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactOperationStatusKind {
+    NotCommitted,
+    Committed,
+    Indeterminate,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactOperationStatusView {
+    pub operation_id: String,
+    pub status: FactOperationStatusKind,
+    pub revision: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactCatalogView {
+    pub revision: u64,
+    pub lifecycle_visible: bool,
+    pub records: Vec<FactCatalogRecordView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactCatalogRecordView {
+    pub family: String,
+    pub record_id: String,
+    pub created_revision: u64,
+    pub retracted: Option<bool>,
+    pub archived: Option<bool>,
+    pub history_space_id: Option<String>,
+    pub layer_id: Option<String>,
+    pub perspective_id: Option<String>,
+    pub epistemic_mode: Option<String>,
+    pub subject_id: Option<String>,
+    pub predicate_id: Option<String>,
+    pub event_kind_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AssertionCorrectionView {
+    pub operation_id: String,
+    pub revision: u64,
+    pub target_assertion_id: String,
+    pub replacement_assertion_id: String,
+    pub retraction_id: String,
+    pub corrects_provenance_id: String,
+    pub atomic_effect: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EventCorrectionView {
+    pub operation_id: String,
+    pub revision: u64,
+    pub target_event_id: String,
+    pub replacement_event_id: String,
+    pub corrects_provenance_id: String,
+    pub original_remains_active: bool,
+    pub atomic_effect: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactLifecycleView {
+    pub operation_id: String,
+    pub revision: u64,
+    pub target_family: String,
+    pub target_id: String,
+    pub effect: String,
+    pub record_id: String,
 }
 
 /// Safe receipt for one durable factual record.
@@ -238,6 +420,11 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
             .map_err(fact_error)?;
 
     match command {
+        FactCommand::Snapshot => {
+            let revision = manager.revision();
+            let snapshot = manager.snapshot_at(revision).map_err(fact_error)?;
+            Ok(FactResponse::Catalog(fact_catalog_view(snapshot)?))
+        }
         FactCommand::CreateAssertion {
             expected_base_revision,
             context,
@@ -332,6 +519,99 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 record_id: record_id.to_string(),
             }))
         }
+        FactCommand::CorrectAssertion {
+            operation_id,
+            expected_base_revision,
+            target_assertion_id,
+            expected_target_created_revision,
+            replacement_assertion_id,
+            retraction_id,
+            corrects_provenance_id,
+            replacement,
+            retraction_reason,
+        } => {
+            let replacement = AssertionDraft::new(
+                parse_context(replacement.context)?,
+                Subject::new(parse_id::<EntityId>(&replacement.subject_id, "Entity")?),
+                parse_id::<PredicateId>(&replacement.predicate_id, "Predicate")?,
+                parse_value(replacement.value)?,
+                replacement.polarity.into(),
+                parse_validity(replacement.validity)?,
+            );
+            let operation_id = parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
+            let receipt = manager
+                .correct_assertion(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    parse_id::<AssertionId>(&target_assertion_id, "Assertion")?,
+                    revision(expected_target_created_revision)?,
+                    parse_id::<AssertionId>(&replacement_assertion_id, "replacement Assertion")?,
+                    parse_id::<AssertionRetractionId>(&retraction_id, "AssertionRetraction")?,
+                    parse_id::<ProvenanceId>(&corrects_provenance_id, "Corrects provenance")?,
+                    replacement,
+                    retraction_reason,
+                    false,
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::AssertionCorrected(assertion_correction_view(
+                receipt,
+            )))
+        }
+        FactCommand::CorrectEvent {
+            operation_id,
+            expected_base_revision,
+            target_event_id,
+            expected_target_created_revision,
+            replacement_event_id,
+            corrects_provenance_id,
+            replacement,
+        } => {
+            let base_revision = revision(expected_base_revision)?;
+            let schema_manager =
+                FileSchemaManager::open(engine._layout.clone(), &engine._writer_lock, principal)
+                    .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let schema = schema_manager
+                .schema_at(SchemaMode::Current, base_revision)
+                .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let replacement = parse_event_draft(replacement, &schema)?;
+            let receipt = manager
+                .correct_event(
+                    base_revision,
+                    parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?,
+                    parse_id::<EventId>(&target_event_id, "Event")?,
+                    revision(expected_target_created_revision)?,
+                    parse_id::<EventId>(&replacement_event_id, "replacement Event")?,
+                    parse_id::<ProvenanceId>(&corrects_provenance_id, "Corrects provenance")?,
+                    replacement,
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::EventCorrected(event_correction_view(receipt)))
+        }
+        FactCommand::CommitStatus { operation_id } => {
+            let operation_id = parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
+            let status = manager.operation_status(operation_id).map_err(fact_error)?;
+            let (status, revision) = match status {
+                worlddb_storage_file::FactOperationStatus::NotCommitted => {
+                    (FactOperationStatusKind::NotCommitted, None)
+                }
+                worlddb_storage_file::FactOperationStatus::Committed(revision) => {
+                    (FactOperationStatusKind::Committed, Some(revision.value()))
+                }
+                worlddb_storage_file::FactOperationStatus::Indeterminate => {
+                    (FactOperationStatusKind::Indeterminate, None)
+                }
+            };
+            Ok(FactResponse::OperationStatus(FactOperationStatusView {
+                operation_id: operation_id.to_string(),
+                status,
+                revision,
+            }))
+        }
+        FactCommand::Lifecycle {
+            expected_base_revision,
+            target,
+            action,
+        } => execute_lifecycle(&mut manager, expected_base_revision, target, action),
         FactCommand::Preview {
             context,
             subject_id,
@@ -359,6 +639,382 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 })
                 .map_err(fact_error)?;
             Ok(FactResponse::Preview(preview_view(revision, output)))
+        }
+    }
+}
+
+fn assertion_correction_view(receipt: AssertionCorrectionReceipt) -> AssertionCorrectionView {
+    AssertionCorrectionView {
+        operation_id: receipt.operation_id().to_string(),
+        revision: receipt.revision().value(),
+        target_assertion_id: receipt.target().to_string(),
+        replacement_assertion_id: receipt.replacement().to_string(),
+        retraction_id: receipt.retraction().to_string(),
+        corrects_provenance_id: receipt.corrects().to_string(),
+        atomic_effect: "replacement_assertion+target_retraction+corrects_provenance".to_owned(),
+    }
+}
+
+fn event_correction_view(receipt: EventCorrectionReceipt) -> EventCorrectionView {
+    EventCorrectionView {
+        operation_id: receipt.operation_id().to_string(),
+        revision: receipt.revision().value(),
+        target_event_id: receipt.target().to_string(),
+        replacement_event_id: receipt.replacement().to_string(),
+        corrects_provenance_id: receipt.corrects().to_string(),
+        original_remains_active: true,
+        atomic_effect: "replacement_event+corrects_provenance".to_owned(),
+    }
+}
+
+fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineError> {
+    let revision = snapshot.revision();
+    let mut targets = Vec::new();
+    targets.extend(snapshot.assertions().iter().map(|value| {
+        ArchiveTargetRecord::new(
+            ArchiveTargetRef::Assertion(value.id()),
+            value.created_revision(),
+        )
+    }));
+    targets.extend(snapshot.masks().iter().map(|value| {
+        ArchiveTargetRecord::new(ArchiveTargetRef::Mask(value.id()), value.created_revision())
+    }));
+    targets.extend(snapshot.replacement_boundaries().iter().map(|value| {
+        ArchiveTargetRecord::new(
+            ArchiveTargetRef::ReplacementBoundary(value.id()),
+            value.created_revision(),
+        )
+    }));
+    targets.extend(snapshot.events().iter().map(|value| {
+        ArchiveTargetRecord::new(
+            ArchiveTargetRef::Event(value.event_id()),
+            value.created_revision(),
+        )
+    }));
+    let archive = if snapshot.lifecycle_visible() {
+        Some(
+            ArchiveHistoryReferenceModel::new(targets, snapshot.archive_transitions().to_vec())
+                .map_err(|error| EngineError::Fact(error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let archived = |target| -> Result<Option<bool>, EngineError> {
+        archive
+            .as_ref()
+            .map(|history| {
+                history
+                    .state_at(target, RecordedAsOf::from_published_revision(revision))
+                    .map(|state| state == ArchiveState::Archived)
+                    .map_err(|error| EngineError::Fact(error.to_string()))
+            })
+            .transpose()
+    };
+    let lifecycle = snapshot.lifecycle_visible();
+    let mut records = Vec::new();
+    for value in snapshot.assertions() {
+        let context = value.context();
+        let perspective_id = match context.perspective_scope() {
+            PerspectiveScope::World => None,
+            PerspectiveScope::Perspective(id) => Some(id.to_string()),
+        };
+        let epistemic_mode = match context.epistemic_mode() {
+            EpistemicMode::WorldState => "world_state",
+            EpistemicMode::Knows => "knows",
+            EpistemicMode::Believes => "believes",
+            EpistemicMode::Claims => "claims",
+        };
+        records.push(FactCatalogRecordView {
+            family: "assertion".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .assertion_retractions()
+                    .iter()
+                    .any(|item| item.assertion_id() == value.id())
+            }),
+            archived: archived(ArchiveTargetRef::Assertion(value.id()))?,
+            history_space_id: Some(context.history_space_id().to_string()),
+            layer_id: Some(context.layer_id().to_string()),
+            perspective_id,
+            epistemic_mode: Some(epistemic_mode.to_owned()),
+            subject_id: Some(value.subject().entity_id().to_string()),
+            predicate_id: Some(value.predicate_id().to_string()),
+            event_kind_id: None,
+        });
+    }
+    for value in snapshot.masks() {
+        records.push(FactCatalogRecordView {
+            family: "mask".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .mask_retractions()
+                    .iter()
+                    .any(|item| item.mask_id() == value.id())
+            }),
+            archived: archived(ArchiveTargetRef::Mask(value.id()))?,
+            history_space_id: None,
+            layer_id: None,
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: None,
+        });
+    }
+    for value in snapshot.replacement_boundaries() {
+        records.push(FactCatalogRecordView {
+            family: "replacement_boundary".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .replacement_boundary_retractions()
+                    .iter()
+                    .any(|item| item.replacement_boundary_id() == value.id())
+            }),
+            archived: archived(ArchiveTargetRef::ReplacementBoundary(value.id()))?,
+            history_space_id: None,
+            layer_id: None,
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: None,
+        });
+    }
+    for value in snapshot.events() {
+        records.push(FactCatalogRecordView {
+            family: "event".to_owned(),
+            record_id: value.event_id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .event_retractions()
+                    .iter()
+                    .any(|item| item.event_id() == value.event_id())
+            }),
+            archived: archived(ArchiveTargetRef::Event(value.event_id()))?,
+            history_space_id: Some(value.history_space_id().to_string()),
+            layer_id: Some(value.layer_id().to_string()),
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: value.event_kind_id().map(|id| id.to_string()),
+        });
+    }
+    records.sort_by(|left, right| {
+        left.family
+            .cmp(&right.family)
+            .then(left.created_revision.cmp(&right.created_revision))
+            .then(left.record_id.cmp(&right.record_id))
+    });
+    Ok(FactCatalogView {
+        revision: revision.value(),
+        lifecycle_visible: lifecycle,
+        records,
+    })
+}
+
+fn execute_lifecycle(
+    manager: &mut FileFactManager<'_>,
+    expected_base_revision: u64,
+    target: FactTargetInput,
+    action: FactLifecycleActionInput,
+) -> Result<FactResponse, EngineError> {
+    let base = revision(expected_base_revision)?;
+    let operation_id = operation_id()?;
+    let (target_family, target_id, effect, receipt) = match action {
+        FactLifecycleActionInput::Retract { reason } => match target {
+            FactTargetInput::Assertion { assertion_id } => {
+                let id = parse_id::<AssertionId>(&assertion_id, "Assertion")?;
+                let record_id = identity::<AssertionRetractionId>("AssertionRetraction")?;
+                let receipt = manager
+                    .retract_assertion(base, operation_id, record_id, id, reason)
+                    .map_err(fact_error)?;
+                ("assertion", id.to_string(), "retracted", receipt)
+            }
+            FactTargetInput::Mask { mask_id } => {
+                let id = parse_id::<MaskId>(&mask_id, "Mask")?;
+                let record_id = identity::<MaskRetractionId>("MaskRetraction")?;
+                let receipt = manager
+                    .retract_mask(base, operation_id, record_id, id, reason)
+                    .map_err(fact_error)?;
+                ("mask", id.to_string(), "retracted", receipt)
+            }
+            FactTargetInput::ReplacementBoundary {
+                replacement_boundary_id,
+            } => {
+                let id = parse_id::<ReplacementBoundaryId>(
+                    &replacement_boundary_id,
+                    "ReplacementBoundary",
+                )?;
+                let record_id =
+                    identity::<ReplacementBoundaryRetractionId>("ReplacementBoundaryRetraction")?;
+                let receipt = manager
+                    .retract_replacement_boundary(base, operation_id, record_id, id, reason)
+                    .map_err(fact_error)?;
+                ("replacement_boundary", id.to_string(), "retracted", receipt)
+            }
+            FactTargetInput::Event { event_id } => {
+                let id = parse_id::<EventId>(&event_id, "Event")?;
+                let record_id = identity::<EventRetractionId>("EventRetraction")?;
+                let receipt = manager
+                    .retract_event(base, operation_id, record_id, id, reason)
+                    .map_err(fact_error)?;
+                ("event", id.to_string(), "retracted", receipt)
+            }
+        },
+        archive_action => {
+            let action = match archive_action {
+                FactLifecycleActionInput::Archive => ArchiveAction::Archive,
+                FactLifecycleActionInput::Unarchive => ArchiveAction::Unarchive,
+                FactLifecycleActionInput::Retract { .. } => unreachable!(),
+            };
+            let (target, family, id) = parse_archive_target(target)?;
+            let receipt = manager
+                .transition_archive(
+                    base,
+                    operation_id,
+                    identity::<ArchiveTransitionId>("ArchiveTransition")?,
+                    target,
+                    action,
+                )
+                .map_err(fact_error)?;
+            let effect = match action {
+                ArchiveAction::Archive => "archived",
+                ArchiveAction::Unarchive => "unarchived",
+            };
+            (family, id, effect, receipt)
+        }
+    };
+    Ok(FactResponse::LifecycleChanged(FactLifecycleView {
+        operation_id: receipt.operation_id().to_string(),
+        revision: receipt.revision().value(),
+        target_family: target_family.to_owned(),
+        target_id,
+        effect: effect.to_owned(),
+        record_id: lifecycle_record_id(receipt.record_ref()),
+    }))
+}
+
+fn lifecycle_record_id(reference: RecordRef) -> String {
+    match reference {
+        RecordRef::AssertionRetraction(id) => id.to_string(),
+        RecordRef::MaskRetraction(id) => id.to_string(),
+        RecordRef::ReplacementBoundaryRetraction(id) => id.to_string(),
+        RecordRef::EventRetraction(id) => id.to_string(),
+        RecordRef::ArchiveTransition(id) => id.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn parse_archive_target(
+    input: FactTargetInput,
+) -> Result<(ArchiveTargetRef, &'static str, String), EngineError> {
+    match input {
+        FactTargetInput::Assertion { assertion_id } => {
+            let id = parse_id::<AssertionId>(&assertion_id, "Assertion")?;
+            Ok((ArchiveTargetRef::Assertion(id), "assertion", id.to_string()))
+        }
+        FactTargetInput::Mask { mask_id } => {
+            let id = parse_id::<MaskId>(&mask_id, "Mask")?;
+            Ok((ArchiveTargetRef::Mask(id), "mask", id.to_string()))
+        }
+        FactTargetInput::ReplacementBoundary {
+            replacement_boundary_id,
+        } => {
+            let id =
+                parse_id::<ReplacementBoundaryId>(&replacement_boundary_id, "ReplacementBoundary")?;
+            Ok((
+                ArchiveTargetRef::ReplacementBoundary(id),
+                "replacement_boundary",
+                id.to_string(),
+            ))
+        }
+        FactTargetInput::Event { event_id } => {
+            let id = parse_id::<EventId>(&event_id, "Event")?;
+            Ok((ArchiveTargetRef::Event(id), "event", id.to_string()))
+        }
+    }
+}
+
+fn parse_event_draft(
+    input: EventDraftInput,
+    schema: &worlddb_core::SchemaSnapshot,
+) -> Result<EventDraft, EngineError> {
+    let history_space = parse_id::<HistorySpaceId>(&input.history_space_id, "HistorySpace")?;
+    let layer = parse_id::<LayerId>(&input.layer_id, "Layer")?;
+    let event_kind_id = parse_id::<EventKindId>(&input.event_kind_id, "EventKind")?;
+    let event_kind = schema
+        .definitions()
+        .iter()
+        .find_map(|definition| match definition {
+            SchemaDefinition::EventKind(value) if value.event_kind_id() == event_kind_id => {
+                Some(value)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| EngineError::Fact("selected EventKind is unavailable".to_owned()))?;
+    let participants = input
+        .participants
+        .into_iter()
+        .map(|value| {
+            Ok(EventParticipant::new(
+                parse_id::<EventRoleId>(&value.role_id, "EventRole")?,
+                parse_id::<EntityId>(&value.entity_id, "Entity")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, EngineError>>()?;
+    let attributes = input
+        .attributes
+        .into_iter()
+        .map(|value| {
+            Ok(EventAttributeValue::new(
+                parse_id::<EventAttributeId>(&value.attribute_id, "EventAttribute")?,
+                parse_value(value.value)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, EngineError>>()?;
+    EventDraft::new(
+        history_space,
+        layer,
+        event_kind,
+        participants,
+        attributes,
+        parse_event_time(input.event_time)?,
+    )
+    .map_err(|error| EngineError::Fact(error.to_string()))
+}
+
+fn parse_event_time(input: EventTimeInput) -> Result<EventTime, EngineError> {
+    match input {
+        EventTimeInput::Instant {
+            timeline_id,
+            nanoseconds,
+        } => {
+            let timeline = Timeline::new(parse_id::<TimelineId>(&timeline_id, "Timeline")?);
+            Ok(EventTime::Instant(parse_world_time(
+                timeline,
+                &nanoseconds,
+            )?))
+        }
+        EventTimeInput::Span {
+            timeline_id,
+            start_nanoseconds,
+            end_nanoseconds,
+        } => {
+            let timeline = Timeline::new(parse_id::<TimelineId>(&timeline_id, "Timeline")?);
+            let start = parse_world_time(timeline, &start_nanoseconds)?;
+            let end = end_nanoseconds
+                .as_deref()
+                .map(|value| parse_world_time(timeline, value))
+                .transpose()?;
+            EventTime::span(start, end).map_err(|error| EngineError::Fact(error.to_string()))
         }
     }
 }
