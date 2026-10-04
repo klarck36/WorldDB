@@ -25,6 +25,12 @@ const schemaFamily = document.querySelector("#schema-family");
 const schemaSymbol = document.querySelector("#schema-symbol");
 const schemaEntityTypeFields = document.querySelector("#entity-type-fields");
 const schemaDescription = document.querySelector("#schema-description");
+const schemaTimelineFields = document.querySelector("#timeline-fields");
+const timelineCalendarProfile = document.querySelector("#timeline-calendar-profile");
+const timelineEpochWrap = document.querySelector("#timeline-epoch-wrap");
+const timelineEpochUnixNanoseconds = document.querySelector("#timeline-epoch-unix-nanoseconds");
+const schemaTimeUnitFields = document.querySelector("#time-unit-fields");
+const timeUnitNanosecondsPerTick = document.querySelector("#time-unit-nanoseconds-per-tick");
 const schemaPredicateFields = document.querySelector("#predicate-fields");
 const schemaEventKindFields = document.querySelector("#event-kind-fields");
 const schemaSubjectType = document.querySelector("#schema-subject-type");
@@ -1551,6 +1557,54 @@ async function runSchemaSmoke(activeSessionId) {
   await publishDefinition();
   const definition = selectedSchema?.definitions.find((item) => item.symbol === "ipc_smoke_entity");
   if (!definition) throw new Error("schema create did not publish its definition");
+
+  schemaFamily.value = "timeline";
+  schemaSymbol.value = "ipc_smoke_timeline";
+  timelineCalendarProfile.value = "proleptic_gregorian_utc";
+  timelineEpochUnixNanoseconds.value = "-170141183460469231731687303715884105728";
+  updateSchemaFormVisibility();
+  const timelineDraft = buildDefinitionDraft();
+  if (timelineDraft.calendar_profile.epoch_unix_nanoseconds !== "-170141183460469231731687303715884105728") {
+    throw new Error("timeline form did not preserve the exact signed epoch");
+  }
+  timelineEpochUnixNanoseconds.value = "170141183460469231731687303715884105728";
+  let invalidEpochRejected = false;
+  try {
+    buildDefinitionDraft();
+  } catch {
+    invalidEpochRejected = true;
+  }
+  if (!invalidEpochRejected) throw new Error("timeline form accepted an epoch outside i128 range");
+  timelineEpochUnixNanoseconds.value = "-170141183460469231731687303715884105728";
+  await publishDefinition();
+  const timeline = selectedSchema?.definitions.find((item) => item.symbol === "ipc_smoke_timeline");
+  if (timeline?.family !== "timeline" || timeline.details.epoch_unix_nanoseconds !== "-170141183460469231731687303715884105728") {
+    throw new Error("timeline calendar profile and epoch were not published exactly");
+  }
+
+  schemaFamily.value = "time_unit";
+  schemaSymbol.value = "ipc_smoke_max_scale";
+  timeUnitNanosecondsPerTick.value = "18446744073709551615";
+  updateSchemaFormVisibility();
+  const timeUnitDraft = buildDefinitionDraft();
+  if (timeUnitDraft.nanoseconds_per_tick !== "18446744073709551615") {
+    throw new Error("time-unit form did not preserve the exact u64 scale");
+  }
+  timeUnitNanosecondsPerTick.value = "0";
+  let zeroScaleRejected = false;
+  try {
+    buildDefinitionDraft();
+  } catch {
+    zeroScaleRejected = true;
+  }
+  if (!zeroScaleRejected) throw new Error("time-unit form accepted a zero scale");
+  timeUnitNanosecondsPerTick.value = "18446744073709551615";
+  await publishDefinition();
+  const timeUnit = selectedSchema?.definitions.find((item) => item.symbol === "ipc_smoke_max_scale");
+  if (timeUnit?.family !== "time_unit" || timeUnit.details.nanoseconds_per_tick !== "18446744073709551615") {
+    throw new Error("time-unit scale was not published exactly");
+  }
+
   const createdRevision = selectedSchema.revision;
 
   const historical = await invokeSchemaFor(activeSessionId, {
@@ -1564,8 +1618,15 @@ async function runSchemaSmoke(activeSessionId) {
   if (historical.definitions.some((item) => item.identity === definition.identity)) {
     throw new Error("historical schema view included a later definition");
   }
+  if (historical.definitions.some((item) => item.identity === timeline.identity || item.identity === timeUnit.identity)) {
+    throw new Error("historical schema view included a later timeline or time unit");
+  }
   if (!explicit.definitions.some((item) => item.identity === definition.identity)) {
     throw new Error("explicit schema view omitted the published definition");
+  }
+  if (!explicit.definitions.some((item) => item.identity === timeline.identity)
+    || !explicit.definitions.some((item) => item.identity === timeUnit.identity)) {
+    throw new Error("explicit schema view omitted a timeline or time unit");
   }
 
   stageDefinitionLifecycle(definition, "deprecated");
@@ -1579,6 +1640,21 @@ async function runSchemaSmoke(activeSessionId) {
   const retiredDefinition = selectedSchema?.definitions.find((item) => item.identity === definition.identity);
   if (retiredDefinition?.lifecycle !== "retired") {
     throw new Error("schema retirement did not publish the requested lifecycle state");
+  }
+
+  for (const timeDefinition of [timeline, timeUnit]) {
+    stageDefinitionLifecycle(timeDefinition, "deprecated");
+    await publishLifecycleBatch();
+    const deprecated = selectedSchema?.definitions.find((item) => item.identity === timeDefinition.identity);
+    if (deprecated?.lifecycle !== "deprecated" || !renderedDefinitionText(deprecated).includes(lifecycleLabel("deprecated"))) {
+      throw new Error(`${timeDefinition.family} deprecation was not visible after publication`);
+    }
+    stageDefinitionLifecycle(deprecated, "retired");
+    await publishLifecycleBatch();
+    const retired = selectedSchema?.definitions.find((item) => item.identity === timeDefinition.identity);
+    if (retired?.lifecycle !== "retired" || !renderedDefinitionText(retired).includes(lifecycleLabel("retired"))) {
+      throw new Error(`${timeDefinition.family} retirement was not visible after publication`);
+    }
   }
 
   await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_available");
@@ -2013,7 +2089,7 @@ function lifecycleLabel(value) {
 }
 
 function familyLabel(value) {
-  return ({ entity_type: "EntityType", predicate: "Prädikat", event_kind: "Ereignistyp", layer: "Layer", layer_snapshot: "Layer-Stand" })[value] ?? value;
+  return ({ entity_type: "EntityType", predicate: "Prädikat", event_kind: "Ereignistyp", timeline: "Timeline", time_unit: "Zeiteinheit", layer: "Layer", layer_snapshot: "Layer-Stand" })[value] ?? value;
 }
 
 function entityConstraintText(value) {
@@ -2036,7 +2112,7 @@ function renderSchema(snapshot) {
     appendText(card, "p", definition.lifecycle_help, "muted");
     if (definition.description) appendText(card, "p", definition.description);
     for (const detail of describeDefinition(definition)) appendText(card, "p", detail, "muted");
-    const lifecycleManagedFamily = ["entity_type", "predicate", "event_kind"].includes(definition.family);
+    const lifecycleManagedFamily = ["entity_type", "predicate", "event_kind", "timeline", "time_unit"].includes(definition.family);
     const nextLifecycle = lifecycleManagedFamily
       ? definition.lifecycle === "active" ? "deprecated" : definition.lifecycle === "deprecated" ? "retired" : null
       : null;
@@ -2058,6 +2134,19 @@ function renderSchema(snapshot) {
 function describeDefinition(definition) {
   const details = definition.details ?? {};
   if (definition.family === "entity_type") return [];
+  if (definition.family === "timeline") {
+    const profile = details.calendar_profile === "proleptic_gregorian_utc"
+      ? "Proleptischer gregorianischer Kalender (UTC)"
+      : "Kein ziviler Kalender";
+    const parts = [`Kalenderprofil: ${profile}`];
+    if (details.epoch_unix_nanoseconds != null) {
+      parts.push(`Epoch der Timeline-Null: ${details.epoch_unix_nanoseconds} ns seit Unix-Epoch`);
+    }
+    return parts;
+  }
+  if (definition.family === "time_unit") {
+    return [`Skala: ${details.nanoseconds_per_tick} Nanosekunden pro Tick`];
+  }
   if (definition.family === "predicate") {
     const parts = [
       `Subjekt: ${entityConstraintText(details.subject_constraint)}`,
@@ -2093,6 +2182,12 @@ function describeDefinition(definition) {
     return parts;
   }
   return [];
+}
+
+function renderedDefinitionText(definition) {
+  const heading = `${familyLabel(definition.family)} · ${definition.symbol}`;
+  return [...schemaDefinitions.querySelectorAll("article.definition")]
+    .find((card) => card.querySelector("h3")?.textContent === heading)?.textContent ?? "";
 }
 
 function valueKindLabel(value) {
@@ -2144,6 +2239,9 @@ function entityConstraintFrom(select) {
 function updateSchemaFormVisibility() {
   const family = schemaFamily.value;
   schemaEntityTypeFields.hidden = family !== "entity_type";
+  schemaTimelineFields.hidden = family !== "timeline";
+  schemaTimeUnitFields.hidden = family !== "time_unit";
+  timelineEpochWrap.hidden = timelineCalendarProfile.value !== "proleptic_gregorian_utc";
   schemaPredicateFields.hidden = family !== "predicate";
   schemaEventKindFields.hidden = family !== "event_kind";
   schemaObjectTypeWrap.hidden = schemaValueKind.value !== "entity";
@@ -2291,6 +2389,22 @@ function validateSymbol(value) {
   return symbol;
 }
 
+function validateI128Decimal(value) {
+  const text = value.trim();
+  if (!/^-?(0|[1-9]\d*)$/.test(text)) throw new Error("invalid_request");
+  const parsed = BigInt(text);
+  if (parsed < -(1n << 127n) || parsed > (1n << 127n) - 1n) throw new Error("invalid_request");
+  return text;
+}
+
+function validatePositiveU64Decimal(value) {
+  const text = value.trim();
+  if (!/^[1-9]\d*$/.test(text)) throw new Error("invalid_request");
+  const parsed = BigInt(text);
+  if (parsed > (1n << 64n) - 1n) throw new Error("invalid_request");
+  return text;
+}
+
 function decimalMetadataDraft(inputs = decimalMetadataInputs) {
   const metadata = {};
   for (const [key, input] of Object.entries(inputs)) {
@@ -2303,6 +2417,23 @@ function buildDefinitionDraft() {
   const symbol = validateSymbol(schemaSymbol.value);
   if (schemaFamily.value === "entity_type") {
     return { family: "entity_type", symbol, description: schemaDescription.value.trim() || null };
+  }
+  if (schemaFamily.value === "timeline") {
+    const calendarProfile = timelineCalendarProfile.value;
+    const profile = calendarProfile === "none"
+      ? { profile: "none" }
+      : {
+        profile: "proleptic_gregorian_utc",
+        epoch_unix_nanoseconds: validateI128Decimal(timelineEpochUnixNanoseconds.value),
+      };
+    return { family: "timeline", symbol, calendar_profile: profile };
+  }
+  if (schemaFamily.value === "time_unit") {
+    return {
+      family: "time_unit",
+      symbol,
+      nanoseconds_per_tick: validatePositiveU64Decimal(timeUnitNanosecondsPerTick.value),
+    };
   }
   if (schemaFamily.value === "predicate") {
     const valueKind = schemaValueKind.value;
@@ -2337,6 +2468,9 @@ function buildDefinitionDraft() {
 function clearDefinitionForm() {
   schemaSymbol.value = "";
   schemaDescription.value = "";
+  timelineCalendarProfile.value = "none";
+  timelineEpochUnixNanoseconds.value = "";
+  timeUnitNanosecondsPerTick.value = "";
   for (const input of Object.values(decimalMetadataInputs)) input.value = "";
   stagedEventRoles = [];
   stagedEventAttributes = [];
@@ -2725,6 +2859,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   layerEditRank.addEventListener("input", updateBranchLayerControls);
   layerUpdateButton.addEventListener("click", reviseSelectedLayer);
   schemaFamily.addEventListener("change", updateSchemaFormVisibility);
+  timelineCalendarProfile.addEventListener("change", updateSchemaFormVisibility);
   schemaValueKind.addEventListener("change", updateSchemaFormVisibility);
   schemaCardinality.addEventListener("change", updateSchemaFormVisibility);
   eventAttributeKind.addEventListener("change", updateSchemaFormVisibility);

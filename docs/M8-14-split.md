@@ -33,4 +33,8 @@ Die ADR-032-Erweiterung wurde in Commit d50016d (docs: add ADR-032 time registry
 
 M8-14a ist am 4. Oktober 2026 auf Windows abgeschlossen. Die beiden revisionierten Register-Records, Schemahistorie, persistente Wiederöffnung, exakte Nanosekunden-Normalisierung und die Schreibreferenzprüfung bestehen ihre gezielten Tests. Weil das Logical-Export-Klassenmanifest geschlossen ist und nun 38 Recordvarianten umfasst, wurde das Vor-Alpha-Envelope auf v2 gehoben; die v2-Fixture aktualisiert nur die abgeleiteten Logical-Export-Dateien und erhält den eingefrorenen physischen Storage-/Backup-Snapshot. Der vollständige Windows-Nachweis steht in `docs/M8-14a-verification.md`.
 
-`cargo xtask verify` besteht mit 39 PASS, einem erwarteten M0-14-`ci-matrix`-SKIP und 0 FAIL. Plancheck, Sourcecheck und `git diff --check HEAD` bestehen ebenfalls. M8-14b ist READY; Linux/macOS bleiben bis M9-07 zurückgestellt.
+`cargo xtask verify` bestand beim Abschluss der Zerlegung mit 39 PASS, einem erwarteten M0-14-`ci-matrix`-SKIP und 0 FAIL. Plancheck, Sourcecheck und `git diff --check HEAD` bestanden ebenfalls. M8-14b war danach READY; Linux/macOS bleiben bis M9-07 zurückgestellt.
+
+## M8-14b-Abnahme
+
+M8-14b ist am 4. Oktober 2026 auf Windows abgeschlossen. Autorisierte Schema-API und Desktopformulare veröffentlichen Timelines mit optionalem gregorianischem UTC-Epochprofil sowie TimeUnits mit positiver exakter Nanosekundenskala. Dezimalwerte bleiben über UI und IPC verlustfrei; Deprecated-/Retired-Zustände, Regelhinweise und historische/explizite Ansichten bestehen die In-Process- und Sidecar-Smokes. Der vollständige Nachweis steht in `docs/M8-14b-verification.md`; M8-14c ist READY. Linux/macOS folgen M9-07.

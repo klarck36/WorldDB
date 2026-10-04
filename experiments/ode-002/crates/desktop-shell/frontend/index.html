@@ -84,7 +84,7 @@
       </section>
       <section id="schema-panel" class="card" aria-labelledby="schema-heading" hidden>
         <h2 id="schema-heading">Schema-Verwaltung</h2>
-        <p class="muted">EntityTypes, Prädikate und Ereignistypen bilden die Regeln für Einträge. Jede Änderung erhält eine gemeinsame Revision; ältere Stände bleiben abrufbar.</p>
+        <p class="muted">EntityTypes, Prädikate, Ereignistypen, Timelines und Zeiteinheiten bilden die Regeln für Einträge. Jede Änderung erhält eine gemeinsame Revision; ältere Stände bleiben abrufbar.</p>
         <div class="grid">
           <div>
             <label for="schema-view-mode">Ansicht</label>
@@ -117,6 +117,8 @@
               <option value="entity_type">EntityType</option>
               <option value="predicate">Prädikat</option>
               <option value="event_kind">Ereignistyp</option>
+              <option value="timeline">Timeline</option>
+              <option value="time_unit">Zeiteinheit</option>
             </select>
           </div>
           <div>
@@ -126,6 +128,23 @@
           <div id="entity-type-fields">
             <label for="schema-description">Beschreibung</label>
             <input id="schema-description" autocomplete="off" />
+          </div>
+          <div id="timeline-fields" hidden>
+            <label for="timeline-calendar-profile">Kalenderprofil</label>
+            <select id="timeline-calendar-profile">
+              <option value="none">Kein ziviler Kalender</option>
+              <option value="proleptic_gregorian_utc">Proleptischer gregorianischer Kalender (UTC)</option>
+            </select>
+            <div id="timeline-epoch-wrap" hidden>
+              <label for="timeline-epoch-unix-nanoseconds">Epoch der Timeline-Null (Nanosekunden seit Unix-Epoch)</label>
+              <input id="timeline-epoch-unix-nanoseconds" inputmode="numeric" autocomplete="off" placeholder="z. B. 0 oder -1" />
+              <p class="muted">Vorzeichenbehaftete Ganzzahl im i128-Bereich; der Wert wird exakt als Dezimaltext übertragen.</p>
+            </div>
+          </div>
+          <div id="time-unit-fields" hidden>
+            <label for="time-unit-nanoseconds-per-tick">Nanosekunden pro Tick</label>
+            <input id="time-unit-nanoseconds-per-tick" inputmode="numeric" autocomplete="off" placeholder="Positive u64-Ganzzahl, z. B. 1000000000" />
+            <p class="muted">Muss größer als null sein. Der Wert wird exakt als Dezimaltext übertragen.</p>
           </div>
           <div id="predicate-fields" hidden>
             <div class="grid">

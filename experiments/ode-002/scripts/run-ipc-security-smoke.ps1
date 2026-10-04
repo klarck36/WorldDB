@@ -66,9 +66,14 @@ function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]
         if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $creates = @($primary | Where-Object { $_.operation -eq 'create' -and $_.succeeded }).Count
             $batchCount = @($primary | Where-Object { $_.operation -eq 'set_lifecycle_batch' }).Count
             $currentReadCount = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
-            if ($batchCount -ge 2 -and $currentReadCount -ge 1) { return }
+            $timelineStates = @($primary | ForEach-Object { $_.definitions } | Where-Object { $_.family -eq 'timeline' -and $_.symbol -eq 'ipc_smoke_timeline' } | Select-Object -ExpandProperty lifecycle -Unique)
+            $timeUnitStates = @($primary | ForEach-Object { $_.definitions } | Where-Object { $_.family -eq 'time_unit' -and $_.symbol -eq 'ipc_smoke_max_scale' } | Select-Object -ExpandProperty lifecycle -Unique)
+            $timelineComplete = @('active', 'deprecated', 'retired' | Where-Object { $timelineStates -contains $_ }).Count -eq 3
+            $timeUnitComplete = @('active', 'deprecated', 'retired' | Where-Object { $timeUnitStates -contains $_ }).Count -eq 3
+            if ($creates -ge 3 -and $batchCount -ge 6 -and $timelineComplete -and $timeUnitComplete -and $currentReadCount -ge 1) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }
@@ -191,7 +196,7 @@ try {
     $env:WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
-    $env:WORLDDB_ODE_AUTOCLOSE_MS = '30000'
+    $env:WORLDDB_ODE_AUTOCLOSE_MS = '90000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
     if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
         $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)
@@ -253,6 +258,20 @@ try {
     if (@($primarySchema | Where-Object { $_.operation -eq 'set_lifecycle_batch' }).Count -lt 2) {
         $schemaOperations = $primarySchema | ConvertTo-Json -Compress -Depth 5
         throw "The primary window did not complete both schema lifecycle transitions. Recorded: $schemaOperations"
+    }
+    $schemaDefinitions = @($primarySchema | ForEach-Object { $_.definitions })
+    foreach ($definitionCheck in @(
+        @{ Family = 'timeline'; Symbol = 'ipc_smoke_timeline' },
+        @{ Family = 'time_unit'; Symbol = 'ipc_smoke_max_scale' }
+    )) {
+        $publishedStates = @($schemaDefinitions | Where-Object {
+            $_.family -eq $definitionCheck.Family -and $_.symbol -eq $definitionCheck.Symbol
+        } | Select-Object -ExpandProperty lifecycle -Unique)
+        foreach ($lifecycle in @('active', 'deprecated', 'retired')) {
+            if ($publishedStates -notcontains $lifecycle) {
+                throw "The $($definitionCheck.Family) '$($definitionCheck.Symbol)' did not publish lifecycle '$lifecycle'."
+            }
+        }
     }
     if (@($secondarySchema | Where-Object { $_.operation -eq 'snapshot_current' }).Count -eq 0) {
         throw 'The secondary window did not read the shared current schema.'
@@ -369,7 +388,7 @@ try {
         }
     }
 
-    if (-not $process.WaitForExit(30000)) {
+    if (-not $process.WaitForExit(90000)) {
         $process.Kill()
         throw 'The IPC smoke process did not shut down.'
     }
@@ -382,6 +401,10 @@ try {
         secondary_window_authenticated_health = 'PASS'
         authenticated_project_bootstrap = 'PASS'
         transactional_schema_create_and_lifecycle = 'PASS'
+        exact_timeline_calendar_epoch_publication = 'PASS'
+        exact_positive_time_unit_scale_publication = 'PASS'
+        timeline_and_time_unit_lifecycle_states_visible = 'PASS'
+        out_of_range_epoch_and_zero_scale_rejected = 'PASS'
         current_historical_and_explicit_schema_reads = 'PASS'
         secondary_window_schema_read = 'PASS'
         transactional_entity_create_and_retirement = 'PASS'

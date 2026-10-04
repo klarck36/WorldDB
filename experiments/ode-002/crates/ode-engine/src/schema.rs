@@ -10,7 +10,8 @@ use worlddb_core::{
     EventTimeConstraint, EventTimeForm, InclusiveRange, Int, Lifecycle, NonEmptySet,
     PredicateDefinition, PredicateDefinitionSpec, PredicateId, Record, ResolutionPolicy, Revision,
     RoleCardinality, SchemaDefinition, SchemaMode, SchemaRevision, SchemaSnapshot, Symbol, Time,
-    TimeRange, TimelineId, UInt, ValueConstraint, ValueKind,
+    TimeRange, TimeUnitDefinition, TimelineCalendarProfile, TimelineDefinition, TimelineId, UInt,
+    ValueConstraint, ValueKind,
 };
 use worlddb_storage_file::FileSchemaManager;
 
@@ -22,7 +23,7 @@ use crate::{EngineError, EngineHost};
 pub enum SchemaCommand {
     /// Reads the selected immutable schema view.
     Snapshot { mode: SchemaModeInput },
-    /// Creates one EntityType, Predicate, or EventKind definition.
+    /// Creates one schema definition.
     Create {
         expected_base_revision: u64,
         definition: SchemaDefinitionDraft,
@@ -60,6 +61,8 @@ pub enum SchemaFamily {
     EntityType,
     Predicate,
     EventKind,
+    Timeline,
+    TimeUnit,
 }
 
 /// Monotonic schema lifecycle states.
@@ -120,6 +123,26 @@ pub enum SchemaDefinitionDraft {
         #[serde(default)]
         attributes: Vec<EventAttributeDraft>,
         event_time: EventTimeDraft,
+    },
+    Timeline {
+        symbol: String,
+        calendar_profile: TimelineCalendarProfileDraft,
+    },
+    TimeUnit {
+        symbol: String,
+        /// Decimal string, kept exact across JavaScript and the signed IPC envelope.
+        nanoseconds_per_tick: String,
+    },
+}
+
+/// Closed calendar mapping input for a Timeline definition.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "profile", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimelineCalendarProfileDraft {
+    None,
+    ProlepticGregorianUtc {
+        /// Signed decimal nanoseconds from the Unix epoch, parsed as i128.
+        epoch_unix_nanoseconds: String,
     },
 }
 
@@ -618,6 +641,38 @@ fn build_schema_record(
             .map_err(|error| EngineError::Schema(error.to_string()))?;
             Record::EventKindDefinition(definition)
         }
+        SchemaDefinitionDraft::Timeline {
+            symbol,
+            calendar_profile,
+        } => {
+            let calendar = match calendar_profile {
+                TimelineCalendarProfileDraft::None => TimelineCalendarProfile::None,
+                TimelineCalendarProfileDraft::ProlepticGregorianUtc {
+                    epoch_unix_nanoseconds,
+                } => TimelineCalendarProfile::ProlepticGregorianUtc {
+                    epoch_unix_nanoseconds: parse_i128(&epoch_unix_nanoseconds)?,
+                },
+            };
+            Record::TimelineDefinition(TimelineDefinition::new(
+                generate_id::<TimelineId>()?,
+                parse_symbol(&symbol)?,
+                calendar,
+                Lifecycle::Active,
+                revision,
+            ))
+        }
+        SchemaDefinitionDraft::TimeUnit {
+            symbol,
+            nanoseconds_per_tick,
+        } => {
+            let scale = nanoseconds_per_tick.parse::<u64>().map_err(|_| {
+                EngineError::Schema("invalid unsigned 64-bit nanosecond scale".to_owned())
+            })?;
+            let definition =
+                TimeUnitDefinition::new(parse_symbol(&symbol)?, scale, Lifecycle::Active, revision)
+                    .map_err(|error| EngineError::Schema(error.to_string()))?;
+            Record::TimeUnitDefinition(definition)
+        }
     };
     Ok(record)
 }
@@ -687,6 +742,41 @@ fn revise_schema_lifecycle(
                 .revise_lifecycle(lifecycle.into(), revision)
                 .map_err(|error| EngineError::Schema(error.to_string()))?;
             Ok(Record::EventKindDefinition(revised))
+        }
+        SchemaFamily::Timeline => {
+            let id = TimelineId::from_str(identity)
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
+            let definition = snapshot
+                .definitions()
+                .iter()
+                .find_map(|item| match item {
+                    SchemaDefinition::Timeline(value) if value.timeline_id() == id => Some(value),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    EngineError::Schema("Timeline was not found in this schema view".to_owned())
+                })?;
+            let revised = definition
+                .revise_lifecycle(lifecycle.into(), revision)
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
+            Ok(Record::TimelineDefinition(revised))
+        }
+        SchemaFamily::TimeUnit => {
+            let symbol = parse_symbol(identity)?;
+            let definition = snapshot
+                .definitions()
+                .iter()
+                .find_map(|item| match item {
+                    SchemaDefinition::TimeUnit(value) if value.symbol() == &symbol => Some(value),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    EngineError::Schema("TimeUnit was not found in this schema view".to_owned())
+                })?;
+            let revised = definition
+                .revise_lifecycle(lifecycle.into(), revision)
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
+            Ok(Record::TimeUnitDefinition(revised))
         }
     }
 }
@@ -899,6 +989,42 @@ fn schema_definition_view(
                     "event_time": event_time_text(value.event_time_constraint()),
                 }),
                 Record::EventKindDefinition(value.clone()),
+            ),
+            SchemaDefinition::Timeline(value) => {
+                let details = match value.calendar() {
+                    TimelineCalendarProfile::None => serde_json::json!({
+                        "calendar_profile": "none",
+                        "epoch_unix_nanoseconds": null,
+                    }),
+                    TimelineCalendarProfile::ProlepticGregorianUtc {
+                        epoch_unix_nanoseconds,
+                    } => serde_json::json!({
+                        "calendar_profile": "proleptic_gregorian_utc",
+                        "epoch_unix_nanoseconds": epoch_unix_nanoseconds.to_string(),
+                    }),
+                };
+                (
+                    "timeline",
+                    value.timeline_id().to_string(),
+                    value.symbol().as_str().to_owned(),
+                    lifecycle_word(value.lifecycle()),
+                    value.created_revision(),
+                    None,
+                    details,
+                    Record::TimelineDefinition(value.clone()),
+                )
+            }
+            SchemaDefinition::TimeUnit(value) => (
+                "time_unit",
+                value.symbol().as_str().to_owned(),
+                value.symbol().as_str().to_owned(),
+                lifecycle_word(value.lifecycle()),
+                value.created_revision(),
+                None,
+                serde_json::json!({
+                    "nanoseconds_per_tick": value.nanoseconds_per_tick().get().to_string(),
+                }),
+                Record::TimeUnitDefinition(value.clone()),
             ),
             SchemaDefinition::Layer(value) => (
                 "layer",
@@ -1127,12 +1253,15 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ConstraintDraft, EventTimeDraft, EventTimeFormDraft, SchemaCommand, SchemaFamily,
-        SchemaLifecycle, SchemaLifecycleUpdateDraft, SchemaModeInput, SchemaResponse,
-        SchemaSnapshotView, TimeBoundDraft, constraint,
+        ConstraintDraft, EventTimeDraft, EventTimeFormDraft, SchemaCommand, SchemaDefinitionDraft,
+        SchemaFamily, SchemaLifecycle, SchemaLifecycleUpdateDraft, SchemaModeInput, SchemaResponse,
+        SchemaSnapshotView, TimeBoundDraft, TimelineCalendarProfileDraft, build_schema_record,
+        constraint, schema_definition_view,
     };
     use crate::{Request, Response};
-    use worlddb_core::ValueConstraint;
+    use worlddb_core::{
+        Lifecycle, Record, Revision, SchemaDefinition, TimelineCalendarProfile, ValueConstraint,
+    };
 
     #[test]
     fn every_typed_constraint_draft_preserves_its_closed_value_kind() {
@@ -1287,5 +1416,174 @@ mod tests {
         };
         let event_time_wire = serde_json::to_value(event_time).expect("serialize event time");
         assert_eq!(event_time_wire["form"], "instant_only");
+
+        let timeline = SchemaCommand::Create {
+            expected_base_revision: 12,
+            definition: SchemaDefinitionDraft::Timeline {
+                symbol: "gregorian_utc".to_owned(),
+                calendar_profile: TimelineCalendarProfileDraft::ProlepticGregorianUtc {
+                    epoch_unix_nanoseconds: "-1".to_owned(),
+                },
+            },
+        };
+        let timeline_wire = serde_json::to_value(timeline).expect("serialize timeline draft");
+        assert_eq!(timeline_wire["definition"]["family"], "timeline");
+        assert_eq!(
+            timeline_wire["definition"]["calendar_profile"]["profile"],
+            "proleptic_gregorian_utc"
+        );
+        assert_eq!(
+            timeline_wire["definition"]["calendar_profile"]["epoch_unix_nanoseconds"],
+            "-1"
+        );
+
+        let time_unit: SchemaCommand = serde_json::from_value(json!({
+            "command": "create",
+            "expected_base_revision": 12,
+            "definition": {
+                "family": "time_unit",
+                "symbol": "nanosecond",
+                "nanoseconds_per_tick": "18446744073709551615"
+            }
+        }))
+        .expect("deserialize exact time-unit draft");
+        let encoded = serde_json::to_value(time_unit).expect("serialize time-unit draft");
+        assert_eq!(
+            encoded["definition"]["nanoseconds_per_tick"],
+            "18446744073709551615"
+        );
+        assert!(
+            serde_json::from_value::<SchemaCommand>(json!({
+                "command": "create",
+                "expected_base_revision": 12,
+                "definition": {
+                    "family": "time_unit",
+                    "symbol": "nanosecond",
+                    "nanoseconds_per_tick": "1",
+                    "extra": true
+                }
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn timeline_and_time_unit_drafts_validate_and_publish_exact_views() {
+        let revision = Revision::new(12).expect("non-genesis revision");
+        let timeline = build_schema_record(
+            SchemaDefinitionDraft::Timeline {
+                symbol: "gregorian_utc".to_owned(),
+                calendar_profile: TimelineCalendarProfileDraft::ProlepticGregorianUtc {
+                    epoch_unix_nanoseconds: "-170141183460469231731687303715884105728".to_owned(),
+                },
+            },
+            revision,
+        )
+        .expect("valid Gregorian timeline");
+        let Record::TimelineDefinition(timeline) = timeline else {
+            panic!("timeline draft creates a timeline record");
+        };
+        assert_eq!(
+            timeline.calendar(),
+            TimelineCalendarProfile::ProlepticGregorianUtc {
+                epoch_unix_nanoseconds: i128::MIN,
+            }
+        );
+        let timeline_view = schema_definition_view(&SchemaDefinition::Timeline(timeline.clone()))
+            .expect("timeline snapshot view");
+        assert_eq!(timeline_view.family, "timeline");
+        assert_eq!(timeline_view.symbol, "gregorian_utc");
+        assert_eq!(
+            timeline_view.details["epoch_unix_nanoseconds"],
+            i128::MIN.to_string()
+        );
+
+        let uncalendared = build_schema_record(
+            SchemaDefinitionDraft::Timeline {
+                symbol: "linear_ticks".to_owned(),
+                calendar_profile: TimelineCalendarProfileDraft::None,
+            },
+            revision,
+        )
+        .expect("timeline without a civil calendar");
+        let Record::TimelineDefinition(uncalendared) = uncalendared else {
+            panic!("uncalendared draft creates a timeline record");
+        };
+        let uncalendared_view = schema_definition_view(&SchemaDefinition::Timeline(uncalendared))
+            .expect("uncalendared timeline view");
+        assert_eq!(uncalendared_view.details["calendar_profile"], "none");
+        assert!(uncalendared_view.details["epoch_unix_nanoseconds"].is_null());
+
+        let time_unit = build_schema_record(
+            SchemaDefinitionDraft::TimeUnit {
+                symbol: "max_scale".to_owned(),
+                nanoseconds_per_tick: u64::MAX.to_string(),
+            },
+            revision,
+        )
+        .expect("maximum exact u64 scale");
+        let Record::TimeUnitDefinition(time_unit) = time_unit else {
+            panic!("time-unit draft creates a time-unit record");
+        };
+        assert_eq!(time_unit.nanoseconds_per_tick().get(), u64::MAX);
+        let time_unit_view = schema_definition_view(&SchemaDefinition::TimeUnit(time_unit.clone()))
+            .expect("time-unit snapshot view");
+        assert_eq!(time_unit_view.family, "time_unit");
+        assert_eq!(time_unit_view.identity, "max_scale");
+        assert_eq!(
+            time_unit_view.details["nanoseconds_per_tick"],
+            u64::MAX.to_string()
+        );
+
+        assert!(
+            build_schema_record(
+                SchemaDefinitionDraft::Timeline {
+                    symbol: "Bad_symbol".to_owned(),
+                    calendar_profile: TimelineCalendarProfileDraft::ProlepticGregorianUtc {
+                        epoch_unix_nanoseconds: "0".to_owned(),
+                    },
+                },
+                revision,
+            )
+            .is_err()
+        );
+        assert!(
+            build_schema_record(
+                SchemaDefinitionDraft::Timeline {
+                    symbol: "out_of_range_epoch".to_owned(),
+                    calendar_profile: TimelineCalendarProfileDraft::ProlepticGregorianUtc {
+                        epoch_unix_nanoseconds: "170141183460469231731687303715884105728"
+                            .to_owned(),
+                    },
+                },
+                revision,
+            )
+            .is_err()
+        );
+        assert!(
+            build_schema_record(
+                SchemaDefinitionDraft::TimeUnit {
+                    symbol: "zero_scale".to_owned(),
+                    nanoseconds_per_tick: "0".to_owned(),
+                },
+                revision,
+            )
+            .is_err()
+        );
+        assert!(
+            build_schema_record(
+                SchemaDefinitionDraft::TimeUnit {
+                    symbol: "overflow_scale".to_owned(),
+                    nanoseconds_per_tick: "18446744073709551616".to_owned(),
+                },
+                revision,
+            )
+            .is_err()
+        );
+
+        let deprecated = timeline
+            .revise_lifecycle(Lifecycle::Deprecated, Revision::new(13).expect("revision"))
+            .expect("timeline lifecycle can advance");
+        assert_eq!(deprecated.lifecycle(), Lifecycle::Deprecated);
     }
 }
