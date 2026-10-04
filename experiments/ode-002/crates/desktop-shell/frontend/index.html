@@ -604,6 +604,45 @@
             <div class="actions"><button id="facts-event-correction-commit" type="button" disabled>Event-Korrektur speichern</button></div>
           </fieldset>
         </div>
+        <div class="grid">
+          <fieldset id="facts-event-create-fields">
+            <legend>Event erfassen</legend>
+            <p class="muted">Wähle Schema-IDs aus dem Bereich „EventKind, Rollen und Attribute“ und gib alle Teilnehmer, typisierten Attribute und die Zeitform vollständig an.</p>
+            <label for="facts-event-kind">Aktives EventKind</label><select id="facts-event-kind"></select>
+            <label for="facts-event-draft">Event-Datensatz</label>
+            <textarea id="facts-event-draft" rows="9" spellcheck="false" placeholder='{"history_space_id":"…","layer_id":"…","event_kind_id":"…","participants":[{"role_id":"…","entity_id":"…"}],"attributes":[{"attribute_id":"…","value":{"kind":"string","data":"…"}}],"event_time":{"kind":"instant","timeline_id":"…","nanoseconds":"0"}}'></textarea>
+            <p class="muted">`event_time` ist entweder `instant` mit `nanoseconds` oder `span` mit `start_nanoseconds` und optionalem `end_nanoseconds`. Ein offener Span kann später ausdrücklich geschlossen werden.</p>
+            <div class="actions"><button id="facts-event-create" type="button" disabled>Event speichern</button></div>
+          </fieldset>
+          <fieldset id="facts-event-mask-fields">
+            <legend>EventMask erfassen</legend>
+            <label for="facts-event-mask-target">Sichtbares Ziel-Event</label><select id="facts-event-mask-target"></select>
+            <p class="muted">Die aktuelle Branch- und Layerauswahl bildet den Maskenkontext. Er muss strikt spezifischer sein als der Kontext des Ziel-Events. Die Maske blendet nur dieses Event aus; sie nimmt weder das Event zurück noch ändert sie Assertions.</p>
+            <div class="actions"><button id="facts-event-mask-create" type="button" disabled>EventMask speichern</button></div>
+          </fieldset>
+        </div>
+        <div class="grid">
+          <fieldset id="facts-event-relation-fields">
+            <legend>Eventrelation ausdrücklich erfassen</legend>
+            <div class="grid">
+              <div><label for="facts-event-relation-from">Von</label><select id="facts-event-relation-from"></select></div>
+              <div><label for="facts-event-relation-kind">Relation</label><select id="facts-event-relation-kind"><option value="before">Before</option><option value="after">After</option><option value="same_time">SameTime</option><option value="causes">Causes</option></select></div>
+              <div><label for="facts-event-relation-to">Nach / zweites Event</label><select id="facts-event-relation-to"></select></div>
+            </div>
+            <div id="facts-event-graph-guidance" class="muted" aria-live="polite"></div>
+            <div class="actions"><button id="facts-event-relation-create" type="button" disabled>Relation prüfen und speichern</button></div>
+          </fieldset>
+          <fieldset id="facts-event-span-close-fields">
+            <legend>Offenen Event-Span schließen</legend>
+            <label for="facts-event-span-close-target">Event</label><select id="facts-event-span-close-target"></select>
+            <div class="grid">
+              <div><label for="facts-event-span-close-timeline">Timeline</label><select id="facts-event-span-close-timeline"></select></div>
+              <div><label for="facts-event-span-close-nanoseconds">Endzeit (Nanosekunden)</label><input id="facts-event-span-close-nanoseconds" inputmode="numeric" autocomplete="off" value="0" /></div>
+            </div>
+            <p class="muted">Das Event muss als offener Span angelegt worden sein. Der Endpunkt muss auf derselben Timeline nach dem Start liegen.</p>
+            <div class="actions"><button id="facts-event-span-close" type="button" disabled>Span schließen</button></div>
+          </fieldset>
+        </div>
         <fieldset id="facts-lifecycle-fields">
           <legend>Archivieren oder ausdrücklich zurücknehmen</legend>
           <div class="grid">

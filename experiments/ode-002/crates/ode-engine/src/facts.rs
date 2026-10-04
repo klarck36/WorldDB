@@ -1,4 +1,4 @@
-//! Authenticated Assertion, Mask, ReplacementBoundary, and resolution-preview commands.
+//! Authenticated factual-record, Event graph, and resolution-preview commands.
 
 use std::fmt;
 use std::str::FromStr;
@@ -8,11 +8,13 @@ use worlddb_core::{
     ArchiveAction, ArchiveHistoryReferenceModel, ArchiveState, ArchiveTargetRecord,
     ArchiveTargetRef, ArchiveTransitionId, AssertionDraft, AssertionId, AssertionRetractionId,
     AssertionValidity, Bytes, ContextKey, Decimal, DomainId, EntityId, EpistemicMode,
-    EventAttributeId, EventAttributeValue, EventDraft, EventId, EventKindId, EventParticipant,
-    EventRetractionId, EventRoleId, EventTime, HistorySpaceId, Int, LayerId, LayerSelection,
-    MaskId, MaskRetractionId, MaskSelector, MaskSlotSelector, MultiValueConflict, MultiValueEntry,
-    MultiValueOutcome, NonEmptySet, PerspectiveId, PerspectiveScope, Polarity, PredicateId,
-    PropositionKey, ProvenanceId, QueryEngineOutput, RecordRef, RecordedAsOf,
+    EventAttributeId, EventAttributeValue, EventDraft, EventId, EventKindId, EventMaskId,
+    EventMaskRetractionId, EventParticipant, EventRelationId, EventRelationInputKind,
+    EventRelationRetractionId, EventRetractionId, EventRoleId, EventSpanClosureId, EventTime,
+    EventRelationKind, HistorySpaceId, Int, LayerId, LayerSelection, MaskId, MaskRetractionId, MaskSelector,
+    MaskSlotSelector, MultiValueConflict, MultiValueEntry, MultiValueOutcome, NonEmptySet,
+    PerspectiveId, PerspectiveScope, Polarity, PredicateId, PropositionKey, ProvenanceId,
+    QueryEngineOutput, RecordRef, RecordedAsOf,
     ReplacementBoundaryId, ReplacementBoundaryRetractionId, ResolutionPreview, ResolvedOutcome,
     ResolvedView, Revision, SchemaDefinition, SchemaMode, Subject, Symbol, Time, TimeInterval,
     Timeline, TimelineId, UInt, Value, WorldTime, WorldTimeSelector,
@@ -54,6 +56,32 @@ pub enum FactCommand {
         subject_id: String,
         predicate_id: String,
         validity: Option<ValidityInput>,
+    },
+    /// Publishes one schema-checked Event with explicit participants, attributes, and time.
+    CreateEvent {
+        expected_base_revision: u64,
+        draft: EventDraftInput,
+    },
+    /// Publishes an EventMask after strict HistorySpace/Layer precedence validation.
+    CreateEventMask {
+        expected_base_revision: u64,
+        history_space_id: String,
+        layer_id: String,
+        target_event_id: String,
+    },
+    /// Publishes a canonical relation after complete graph validation.
+    CreateEventRelation {
+        expected_base_revision: u64,
+        from_event_id: String,
+        to_event_id: String,
+        relation_kind: EventRelationKindInput,
+    },
+    /// Closes an Event span created without an end coordinate.
+    CloseEventSpan {
+        expected_base_revision: u64,
+        event_id: String,
+        timeline_id: String,
+        close_nanoseconds: String,
     },
     /// Replaces one assertion in place semantically using an explicit three-record effect.
     CorrectAssertion {
@@ -118,6 +146,16 @@ pub struct EventDraftInput {
     pub event_time: EventTimeInput,
 }
 
+/// Accepted EventRelation spellings. `After` is stored as inverse `Before`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventRelationKindInput {
+    Before,
+    After,
+    SameTime,
+    Causes,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventParticipantInput {
@@ -153,6 +191,8 @@ pub enum FactTargetInput {
     Mask { mask_id: String },
     ReplacementBoundary { replacement_boundary_id: String },
     Event { event_id: String },
+    EventMask { event_mask_id: String },
+    EventRelation { event_relation_id: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -254,8 +294,16 @@ pub enum FactResponse {
     Preview(ResolutionPreviewView),
     AssertionCorrected(AssertionCorrectionView),
     EventCorrected(EventCorrectionView),
+    EventGraphConflict(EventGraphConflictView),
     OperationStatus(FactOperationStatusView),
     LifecycleChanged(FactLifecycleView),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EventGraphConflictView {
+    pub explanation: String,
+    pub relation_saved: bool,
+    pub automatic_inference_applied: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -278,6 +326,7 @@ pub struct FactCatalogView {
     pub revision: u64,
     pub lifecycle_visible: bool,
     pub records: Vec<FactCatalogRecordView>,
+    pub event_graph_guidance: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -294,6 +343,13 @@ pub struct FactCatalogRecordView {
     pub subject_id: Option<String>,
     pub predicate_id: Option<String>,
     pub event_kind_id: Option<String>,
+    pub target_event_id: Option<String>,
+    pub from_event_id: Option<String>,
+    pub to_event_id: Option<String>,
+    pub relation_kind: Option<String>,
+    pub timeline_id: Option<String>,
+    pub time_start_nanoseconds: Option<String>,
+    pub time_end_nanoseconds: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -519,6 +575,124 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 record_id: record_id.to_string(),
             }))
         }
+        FactCommand::CreateEvent {
+            expected_base_revision,
+            draft,
+        } => {
+            let base_revision = revision(expected_base_revision)?;
+            let schema_manager =
+                FileSchemaManager::open(engine._layout.clone(), &engine._writer_lock, principal)
+                    .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let schema = schema_manager
+                .schema_at(SchemaMode::Current, base_revision)
+                .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let draft = parse_event_draft(draft, &schema)?;
+            let operation_id = operation_id()?;
+            let record_id = identity::<EventId>("Event")?;
+            let receipt = manager
+                .create_event(base_revision, operation_id, record_id, draft)
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "event".to_owned(),
+                record_id: record_id.to_string(),
+            }))
+        }
+        FactCommand::CreateEventMask {
+            expected_base_revision,
+            history_space_id,
+            layer_id,
+            target_event_id,
+        } => {
+            let operation_id = operation_id()?;
+            let record_id = identity::<EventMaskId>("EventMask")?;
+            let receipt = manager
+                .create_event_mask(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    record_id,
+                    parse_id::<HistorySpaceId>(&history_space_id, "HistorySpace")?,
+                    parse_id::<LayerId>(&layer_id, "Layer")?,
+                    parse_id::<EventId>(&target_event_id, "Event")?,
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "event_mask".to_owned(),
+                record_id: record_id.to_string(),
+            }))
+        }
+        FactCommand::CreateEventRelation {
+            expected_base_revision,
+            from_event_id,
+            to_event_id,
+            relation_kind,
+        } => {
+            let operation_id = operation_id()?;
+            let record_id = identity::<EventRelationId>("EventRelation")?;
+            let receipt = match manager.create_event_relation(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    record_id,
+                    parse_id::<EventId>(&from_event_id, "source Event")?,
+                    parse_id::<EventId>(&to_event_id, "destination Event")?,
+                    relation_kind.into(),
+                ) {
+                Ok(receipt) => receipt,
+                Err(worlddb_storage_file::FactManagementError::EventGraphConflict(explanation)) => {
+                    return Ok(FactResponse::EventGraphConflict(EventGraphConflictView {
+                        explanation,
+                        relation_saved: false,
+                        automatic_inference_applied: false,
+                    }));
+                }
+                Err(error) => return Err(fact_error(error)),
+            };
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "event_relation".to_owned(),
+                record_id: record_id.to_string(),
+            }))
+        }
+        FactCommand::CloseEventSpan {
+            expected_base_revision,
+            event_id,
+            timeline_id,
+            close_nanoseconds,
+        } => {
+            let base_revision = revision(expected_base_revision)?;
+            let schema_manager =
+                FileSchemaManager::open(engine._layout.clone(), &engine._writer_lock, principal)
+                    .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let schema = schema_manager
+                .schema_at(SchemaMode::Current, base_revision)
+                .map_err(|error| EngineError::Fact(error.to_string()))?;
+            let timeline_id = parse_id::<TimelineId>(&timeline_id, "Timeline")?;
+            if !schema
+                .timeline(timeline_id)
+                .is_some_and(|timeline| timeline.lifecycle() == worlddb_core::Lifecycle::Active)
+            {
+                return Err(EngineError::Fact(
+                    "Event span closure requires an Active registered Timeline".to_owned(),
+                ));
+            }
+            let close_at = parse_world_time(Timeline::new(timeline_id), &close_nanoseconds)?;
+            let operation_id = operation_id()?;
+            let record_id = identity::<EventSpanClosureId>("EventSpanClosure")?;
+            let event_id = parse_id::<EventId>(&event_id, "Event")?;
+            let receipt = manager
+                .close_event_span(base_revision, operation_id, record_id, event_id, close_at)
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "event_span_closure".to_owned(),
+                record_id: record_id.to_string(),
+            }))
+        }
         FactCommand::CorrectAssertion {
             operation_id,
             expected_base_revision,
@@ -691,6 +865,12 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             value.created_revision(),
         )
     }));
+    targets.extend(snapshot.event_masks().iter().map(|value| {
+        ArchiveTargetRecord::new(
+            ArchiveTargetRef::EventMask(value.id()),
+            value.created_revision(),
+        )
+    }));
     let archive = if snapshot.lifecycle_visible() {
         Some(
             ArchiveHistoryReferenceModel::new(targets, snapshot.archive_transitions().to_vec())
@@ -742,6 +922,13 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             subject_id: Some(value.subject().entity_id().to_string()),
             predicate_id: Some(value.predicate_id().to_string()),
             event_kind_id: None,
+            target_event_id: None,
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
         });
     }
     for value in snapshot.masks() {
@@ -763,6 +950,13 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             subject_id: None,
             predicate_id: None,
             event_kind_id: None,
+            target_event_id: None,
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
         });
     }
     for value in snapshot.replacement_boundaries() {
@@ -784,6 +978,13 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             subject_id: None,
             predicate_id: None,
             event_kind_id: None,
+            target_event_id: None,
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
         });
     }
     for value in snapshot.events() {
@@ -805,6 +1006,93 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             subject_id: None,
             predicate_id: None,
             event_kind_id: value.event_kind_id().map(|id| id.to_string()),
+            target_event_id: None,
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
+        });
+    }
+    for value in snapshot.event_masks() {
+        records.push(FactCatalogRecordView {
+            family: "event_mask".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .event_mask_retractions()
+                    .iter()
+                    .any(|item| item.event_mask_id() == value.id())
+            }),
+            archived: archived(ArchiveTargetRef::EventMask(value.id()))?,
+            history_space_id: Some(value.history_space_id().to_string()),
+            layer_id: Some(value.layer_id().to_string()),
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: None,
+            target_event_id: Some(value.target_event().to_string()),
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
+        });
+    }
+    for value in snapshot.event_relations() {
+        records.push(FactCatalogRecordView {
+            family: "event_relation".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: lifecycle.then(|| {
+                snapshot
+                    .event_relation_retractions()
+                    .iter()
+                    .any(|item| item.event_relation_id() == value.id())
+            }),
+            archived: None,
+            history_space_id: None,
+            layer_id: None,
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: None,
+            target_event_id: None,
+            from_event_id: Some(value.from_event().to_string()),
+            to_event_id: Some(value.to_event().to_string()),
+            relation_kind: Some(event_relation_kind_label(value.kind()).to_owned()),
+            timeline_id: None,
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: None,
+        });
+    }
+    for value in snapshot.event_span_closures() {
+        let close_at = value.close_at_event_time();
+        records.push(FactCatalogRecordView {
+            family: "event_span_closure".to_owned(),
+            record_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            retracted: None,
+            archived: None,
+            history_space_id: None,
+            layer_id: None,
+            perspective_id: None,
+            epistemic_mode: None,
+            subject_id: None,
+            predicate_id: None,
+            event_kind_id: None,
+            target_event_id: Some(value.event_id().to_string()),
+            from_event_id: None,
+            to_event_id: None,
+            relation_kind: None,
+            timeline_id: Some(close_at.timeline().id().to_string()),
+            time_start_nanoseconds: None,
+            time_end_nanoseconds: Some(close_at.nanoseconds().to_string()),
         });
     }
     records.sort_by(|left, right| {
@@ -817,7 +1105,20 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
         revision: revision.value(),
         lifecycle_visible: lifecycle,
         records,
+        event_graph_guidance: vec![
+            "Zeitnähe, Reihenfolge und Überlappung erzeugen niemals automatisch Before, SameTime oder Causes.".to_owned(),
+            "After wird als umgekehrtes Before gespeichert; SameTime wird als ungeordnetes Paar gespeichert.".to_owned(),
+            "Before muss auch nach Zusammenfassen von SameTime-Gruppen azyklisch bleiben; Causes hat einen separaten azyklischen Graphen.".to_owned(),
+        ],
     })
+}
+
+fn event_relation_kind_label(kind: EventRelationKind) -> &'static str {
+    match kind {
+        EventRelationKind::Before => "before",
+        EventRelationKind::SameTime => "same_time",
+        EventRelationKind::Causes => "causes",
+    }
 }
 
 fn execute_lifecycle(
@@ -868,6 +1169,35 @@ fn execute_lifecycle(
                     .map_err(fact_error)?;
                 ("event", id.to_string(), "retracted", receipt)
             }
+            FactTargetInput::EventMask { event_mask_id } => {
+                let id = parse_id::<EventMaskId>(&event_mask_id, "EventMask")?;
+                let record_id = identity::<EventMaskRetractionId>("EventMaskRetraction")?;
+                let receipt = manager
+                    .retract_event_mask(base, operation_id, record_id, id, reason)
+                    .map_err(fact_error)?;
+                ("event_mask", id.to_string(), "retracted", receipt)
+            }
+            FactTargetInput::EventRelation { event_relation_id } => {
+                let id = parse_id::<EventRelationId>(&event_relation_id, "EventRelation")?;
+                let record_id =
+                    identity::<EventRelationRetractionId>("EventRelationRetraction")?;
+                let receipt = match manager
+                    .retract_event_relation(base, operation_id, record_id, id, reason)
+                {
+                    Ok(receipt) => receipt,
+                    Err(worlddb_storage_file::FactManagementError::EventGraphConflict(
+                        explanation,
+                    )) => {
+                        return Ok(FactResponse::EventGraphConflict(EventGraphConflictView {
+                            explanation,
+                            relation_saved: false,
+                            automatic_inference_applied: false,
+                        }));
+                    }
+                    Err(error) => return Err(fact_error(error)),
+                };
+                ("event_relation", id.to_string(), "retracted", receipt)
+            }
         },
         archive_action => {
             let action = match archive_action {
@@ -908,6 +1238,9 @@ fn lifecycle_record_id(reference: RecordRef) -> String {
         RecordRef::MaskRetraction(id) => id.to_string(),
         RecordRef::ReplacementBoundaryRetraction(id) => id.to_string(),
         RecordRef::EventRetraction(id) => id.to_string(),
+        RecordRef::EventMaskRetraction(id) => id.to_string(),
+        RecordRef::EventRelationRetraction(id) => id.to_string(),
+        RecordRef::EventSpanClosure(id) => id.to_string(),
         RecordRef::ArchiveTransition(id) => id.to_string(),
         _ => String::new(),
     }
@@ -940,6 +1273,17 @@ fn parse_archive_target(
             let id = parse_id::<EventId>(&event_id, "Event")?;
             Ok((ArchiveTargetRef::Event(id), "event", id.to_string()))
         }
+        FactTargetInput::EventMask { event_mask_id } => {
+            let id = parse_id::<EventMaskId>(&event_mask_id, "EventMask")?;
+            Ok((
+                ArchiveTargetRef::EventMask(id),
+                "event_mask",
+                id.to_string(),
+            ))
+        }
+        FactTargetInput::EventRelation { .. } => Err(EngineError::Fact(
+            "EventRelations use explicit retraction and cannot be archived".to_owned(),
+        )),
     }
 }
 
@@ -1024,6 +1368,17 @@ impl From<PolarityInput> for Polarity {
         match value {
             PolarityInput::Positive => Self::Positive,
             PolarityInput::Negative => Self::Negative,
+        }
+    }
+}
+
+impl From<EventRelationKindInput> for EventRelationInputKind {
+    fn from(value: EventRelationKindInput) -> Self {
+        match value {
+            EventRelationKindInput::Before => Self::Before,
+            EventRelationKindInput::After => Self::After,
+            EventRelationKindInput::SameTime => Self::SameTime,
+            EventRelationKindInput::Causes => Self::Causes,
         }
     }
 }

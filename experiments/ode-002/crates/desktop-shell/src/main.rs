@@ -708,8 +708,12 @@ fn manage_facts(
                 result,
             })
         }
-        Err(_) => {
+        Err(error) => {
             record_facts_smoke(window.label(), operation, selector_kind, false, None)?;
+            let _ = record_facts_smoke_diagnostic(
+                window.label(),
+                format!("facts_error:{operation}:{error}"),
+            );
             Err(IpcErrorV1::new("facts_rejected"))
         }
     }
@@ -717,6 +721,10 @@ fn manage_facts(
 
 #[tauri::command]
 fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Result<(), IpcErrorV1> {
+    record_facts_smoke_diagnostic(window.label(), details)
+}
+
+fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<(), IpcErrorV1> {
     let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT") else {
         return Ok(());
     };
@@ -729,11 +737,11 @@ fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Resu
         .and_then(std::ffi::OsStr::to_str)
         .unwrap_or("ipc");
     let result_path =
-        result_prefix.with_file_name(format!("{file_stem}-facts-{}.jsonl", window.label()));
+        result_prefix.with_file_name(format!("{file_stem}-facts-{window_label}.jsonl"));
     let record = serde_json::json!({
         "operation": "diagnostic",
         "details": details.chars().take(1024).collect::<String>(),
-        "window": window.label(),
+        "window": window_label,
         "succeeded": true,
     });
     let mut file = std::fs::OpenOptions::new()
@@ -1019,6 +1027,10 @@ fn facts_smoke_operation(command: &FactCommand) -> &'static str {
         FactCommand::CreateAssertion { .. } => "create_assertion",
         FactCommand::CreateMask { .. } => "create_mask",
         FactCommand::CreateReplacementBoundary { .. } => "create_replacement_boundary",
+        FactCommand::CreateEvent { .. } => "create_event",
+        FactCommand::CreateEventMask { .. } => "create_event_mask",
+        FactCommand::CreateEventRelation { .. } => "create_event_relation",
+        FactCommand::CloseEventSpan { .. } => "close_event_span",
         FactCommand::CorrectAssertion { .. } => "correct_assertion",
         FactCommand::CorrectEvent { .. } => "correct_event",
         FactCommand::CommitStatus { .. } => "commit_status",
@@ -1121,6 +1133,23 @@ fn record_facts_smoke(
                     None,
                     Some(2),
                     None,
+                ),
+                FactResponse::EventGraphConflict(conflict) => (
+                    Some("event_graph_conflict"),
+                    None,
+                    None,
+                    None,
+                    Some(if conflict.relation_saved {
+                        "unexpected_saved"
+                    } else {
+                        "not_saved"
+                    }),
+                    None,
+                    Some(if conflict.automatic_inference_applied {
+                        "inference_applied"
+                    } else {
+                        "no_automatic_inference"
+                    }),
                 ),
                 FactResponse::OperationStatus(status) => (
                     Some("operation_status"),
@@ -2290,7 +2319,7 @@ impl EngineBackend {
             #[cfg(feature = "in-process")]
             Self::InProcess(engine) => engine
                 .facts(command)
-                .map_err(|_| "engine rejected factual-record operation".to_owned()),
+                .map_err(|error| format!("engine rejected factual-record operation: {error}")),
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()

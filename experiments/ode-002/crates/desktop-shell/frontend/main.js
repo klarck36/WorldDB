@@ -211,6 +211,20 @@ const factsEventCorrectionDraft = document.querySelector("#facts-event-correctio
 const factsEventCorrectionPreviewButton = document.querySelector("#facts-event-correction-preview");
 const factsEventCorrectionPreviewResult = document.querySelector("#facts-event-correction-preview-result");
 const factsEventCorrectionCommitButton = document.querySelector("#facts-event-correction-commit");
+const factsEventKind = document.querySelector("#facts-event-kind");
+const factsEventDraft = document.querySelector("#facts-event-draft");
+const factsEventCreate = document.querySelector("#facts-event-create");
+const factsEventMaskTarget = document.querySelector("#facts-event-mask-target");
+const factsEventMaskCreate = document.querySelector("#facts-event-mask-create");
+const factsEventRelationFrom = document.querySelector("#facts-event-relation-from");
+const factsEventRelationTo = document.querySelector("#facts-event-relation-to");
+const factsEventRelationKind = document.querySelector("#facts-event-relation-kind");
+const factsEventRelationCreate = document.querySelector("#facts-event-relation-create");
+const factsEventGraphGuidance = document.querySelector("#facts-event-graph-guidance");
+const factsEventSpanCloseTarget = document.querySelector("#facts-event-span-close-target");
+const factsEventSpanCloseTimeline = document.querySelector("#facts-event-span-close-timeline");
+const factsEventSpanCloseNanoseconds = document.querySelector("#facts-event-span-close-nanoseconds");
+const factsEventSpanClose = document.querySelector("#facts-event-span-close");
 const factsLifecycleTarget = document.querySelector("#facts-lifecycle-target");
 const factsLifecycleAction = document.querySelector("#facts-lifecycle-action");
 const factsLifecycleReason = document.querySelector("#facts-lifecycle-reason");
@@ -258,6 +272,7 @@ let securityPolicyUnavailable = false;
 let branchLayerBusy = false;
 let transferBusy = false;
 let factBusy = false;
+let factsSmokeActive = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
@@ -271,6 +286,10 @@ let branchLayerCurrentMode = true;
 let transferCatalog = null;
 let transferPreviewTicket = null;
 let factCatalog = null;
+let factCatalogRefreshPromise = null;
+let factCatalogRefreshQueued = false;
+let projectRefreshPromise = null;
+let projectRefreshQueued = false;
 let pendingFactActionPreviews = { assertion: false, event: false, lifecycle: false };
 let pendingFactCorrectionCommands = { assertion: null, event: null };
 let stagedEventRoles = [];
@@ -446,72 +465,90 @@ async function getProject(activeSessionId) {
 }
 
 async function refreshProject(activeSessionId) {
-  const wasOpen = projectOpen;
-  const previousRevision = projectRevision;
-  renderProject(await getProject(activeSessionId));
-  if ((!wasOpen && projectOpen) || (wasOpen && projectOpen && projectRevision !== previousRevision && !schemaBusy)) {
-    await refreshSchema(activeSessionId).catch((error) => {
-      schemaStatus.textContent = showError(error);
-    });
-    await refreshEntities(activeSessionId).catch((error) => {
-      entityStatus.textContent = showError(error);
-    });
-    await refreshSecurityPolicy(activeSessionId).catch((error) => {
-      securityPolicyStatus.textContent = showError(error);
-    });
-    await refreshPerspectives(activeSessionId).catch((error) => {
-      perspectiveStatus.textContent = showError(error);
-    });
-    await refreshBranchLayers(activeSessionId).catch((error) => {
-      branchLayerStatus.textContent = showError(error);
-    });
-    await refreshTransferCatalog(activeSessionId).catch((error) => {
-      transferStatus.textContent = showError(error);
-    });
-    await refreshFactsCatalog(activeSessionId).catch((error) => {
-      factsContextNote.textContent = showError(error);
-    });
+  if (projectRefreshPromise) {
+    projectRefreshQueued = true;
+    await projectRefreshPromise;
+    return;
   }
-  if (!projectOpen) {
-    selectedSchema = null;
-    currentSchema = null;
-    selectedEntities = null;
-    selectedPerspectives = null;
-    currentPerspectives = null;
-    currentSecurityPolicy = null;
-    securityPolicyUnavailable = false;
-    selectedBranchLayers = null;
-    transferCatalog = null;
-    transferPreviewTicket = null;
-    factCatalog = null;
-    schemaDefinitions.replaceChildren();
-    entityList.replaceChildren();
-    securityPolicyPrincipals.replaceChildren();
-    securityPolicyRoles.replaceChildren();
-    securityPolicyAssignments.replaceChildren();
-    securityPolicyRules.replaceChildren();
-    perspectiveList.replaceChildren();
-    branchTree.replaceChildren();
-    layerList.replaceChildren();
-    transferContentList.replaceChildren();
-    transferRelationList.replaceChildren();
-    transferPreviewPanel.hidden = true;
-    factsHistorySpace.replaceChildren();
-    factsLayer.replaceChildren();
-    factsPerspective.replaceChildren();
-    factsSubject.replaceChildren();
-    factsPredicate.replaceChildren();
-    factsValueEntity.replaceChildren();
-    factsTimeValueTimeline.replaceChildren();
-    factsTimeValueUnit.replaceChildren();
-    factsValidityTimeline.replaceChildren();
-    factsQueryTimeline.replaceChildren();
-    factsPreviewResults.replaceChildren();
-    factsWriteStatus.textContent = "";
-    factsPreviewStatus.textContent = "";
-    entityTypeSelect.replaceChildren();
-    entityAcceptDeprecated.checked = false;
-    updateEntityControls();
+  const refresh = (async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      projectRefreshQueued = false;
+      const wasOpen = projectOpen;
+      const previousRevision = projectRevision;
+      renderProject(await getProject(activeSessionId));
+      if ((!wasOpen && projectOpen) || (wasOpen && projectOpen && projectRevision !== previousRevision && !schemaBusy)) {
+        await refreshSchema(activeSessionId).catch((error) => {
+          schemaStatus.textContent = showError(error);
+        });
+        await refreshEntities(activeSessionId).catch((error) => {
+          entityStatus.textContent = showError(error);
+        });
+        await refreshSecurityPolicy(activeSessionId).catch((error) => {
+          securityPolicyStatus.textContent = showError(error);
+        });
+        await refreshPerspectives(activeSessionId).catch((error) => {
+          perspectiveStatus.textContent = showError(error);
+        });
+        await refreshBranchLayers(activeSessionId).catch((error) => {
+          branchLayerStatus.textContent = showError(error);
+        });
+        await refreshTransferCatalog(activeSessionId).catch((error) => {
+          transferStatus.textContent = showError(error);
+        });
+        await refreshFactsCatalog(activeSessionId).catch((error) => {
+          factsContextNote.textContent = showError(error);
+        });
+      }
+      if (!projectOpen) {
+        selectedSchema = null;
+        currentSchema = null;
+        selectedEntities = null;
+        selectedPerspectives = null;
+        currentPerspectives = null;
+        currentSecurityPolicy = null;
+        securityPolicyUnavailable = false;
+        selectedBranchLayers = null;
+        transferCatalog = null;
+        transferPreviewTicket = null;
+        factCatalog = null;
+        schemaDefinitions.replaceChildren();
+        entityList.replaceChildren();
+        securityPolicyPrincipals.replaceChildren();
+        securityPolicyRoles.replaceChildren();
+        securityPolicyAssignments.replaceChildren();
+        securityPolicyRules.replaceChildren();
+        perspectiveList.replaceChildren();
+        branchTree.replaceChildren();
+        layerList.replaceChildren();
+        transferContentList.replaceChildren();
+        transferRelationList.replaceChildren();
+        transferPreviewPanel.hidden = true;
+        factsHistorySpace.replaceChildren();
+        factsLayer.replaceChildren();
+        factsPerspective.replaceChildren();
+        factsSubject.replaceChildren();
+        factsPredicate.replaceChildren();
+        factsValueEntity.replaceChildren();
+        factsTimeValueTimeline.replaceChildren();
+        factsTimeValueUnit.replaceChildren();
+        factsValidityTimeline.replaceChildren();
+        factsQueryTimeline.replaceChildren();
+        factsPreviewResults.replaceChildren();
+        factsWriteStatus.textContent = "";
+        factsPreviewStatus.textContent = "";
+        entityTypeSelect.replaceChildren();
+        entityAcceptDeprecated.checked = false;
+        updateEntityControls();
+      }
+      if (!projectRefreshQueued) return;
+    }
+    throw new Error("project_busy");
+  })();
+  projectRefreshPromise = refresh;
+  try {
+    await refresh;
+  } finally {
+    if (projectRefreshPromise === refresh) projectRefreshPromise = null;
   }
 }
 
@@ -641,27 +678,48 @@ async function manageFacts(command, activeSessionId = sessionId) {
 
 async function refreshFactsCatalog(activeSessionId = sessionId) {
   if (!projectOpen || !activeSessionId) return;
-  factsContextNote.textContent = "Aktuelle Branches, Layer, Entitäten und Schemadefinitionen werden geladen …";
-  const [schema, entities, branches, perspectives, records] = await Promise.all([
-    manageSchema({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
-    manageEntities({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
-    manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
-    invokePerspectiveSnapshot(activeSessionId, { mode: "current" }),
-    manageFacts({ command: "snapshot" }, activeSessionId),
-  ]);
-  if ([schema, entities, branches, perspectives].some((snapshot) => snapshot.kind !== "snapshot")
-    || records.kind !== "catalog") {
-    throw new Error("unsupported_protocol");
+  if (factCatalogRefreshPromise) {
+    factCatalogRefreshQueued = true;
+    await factCatalogRefreshPromise;
+    return;
   }
-  const revisions = [schema.revision, entities.revision, branches.revision, perspectives.revision, records.revision];
-  if (revisions.some((revision) => revision !== revisions[0])) {
-    throw new Error("invalid_request");
+
+  const refresh = (async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      factCatalogRefreshQueued = false;
+      factsContextNote.textContent = "Aktuelle Branches, Layer, Entitäten und Schemadefinitionen werden geladen …";
+      const [schema, entities, branches, perspectives, records] = await Promise.all([
+        manageSchema({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
+        manageEntities({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
+        manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId),
+        invokePerspectiveSnapshot(activeSessionId, { mode: "current" }),
+        manageFacts({ command: "snapshot" }, activeSessionId),
+      ]);
+      if ([schema, entities, branches, perspectives].some((snapshot) => snapshot.kind !== "snapshot")
+        || records.kind !== "catalog") {
+        throw new Error("unsupported_protocol");
+      }
+      const revisions = [schema.revision, entities.revision, branches.revision, perspectives.revision, records.revision];
+      if (revisions.some((revision) => revision !== revisions[0])) {
+        if (attempt < 4) continue;
+        throw new Error("invalid_request");
+      }
+      factCatalog = { schema, entities, branches, perspectives, records: records.records,
+        lifecycleVisible: records.lifecycle_visible, revision: revisions[0],
+        eventGraphGuidance: records.event_graph_guidance ?? [] };
+      renderFactsChoices();
+      renderFactRecordCatalog();
+      updateFactControls();
+      if (!factCatalogRefreshQueued) return;
+    }
+    throw new Error("project_busy");
+  })();
+  factCatalogRefreshPromise = refresh;
+  try {
+    await refresh;
+  } finally {
+    if (factCatalogRefreshPromise === refresh) factCatalogRefreshPromise = null;
   }
-  factCatalog = { schema, entities, branches, perspectives, records: records.records,
-    lifecycleVisible: records.lifecycle_visible, revision: revisions[0] };
-  renderFactsChoices();
-  renderFactRecordCatalog();
-  updateFactControls();
 }
 
 function replaceFactOptions(select, entries, previousValue, placeholder) {
@@ -700,6 +758,8 @@ function renderFactsChoices() {
     validityTimeline: factsValidityTimeline.value,
     queryTimeline: factsQueryTimeline.value,
     timeUnit: factsTimeValueUnit.value,
+    eventKind: factsEventKind.value,
+    eventCloseTimeline: factsEventSpanCloseTimeline.value,
   };
   const branchNames = branchLabels(factCatalog.branches);
   replaceFactOptions(factsHistorySpace, factCatalog.branches.branches.map((branch) => ({
@@ -743,6 +803,13 @@ function renderFactsChoices() {
     value: definition.symbol,
     label: definition.symbol,
   })), previous.timeUnit, "Keine aktive Zeiteinheit vorhanden");
+  replaceFactOptions(factsEventKind, factsSchemaDefinitions("event_kind", true).map((definition) => ({
+    value: definition.identity,
+    label: definition.symbol,
+  })), previous.eventKind, "Kein aktives EventKind vorhanden");
+  replaceFactOptions(factsEventSpanCloseTimeline, timelines, previous.eventCloseTimeline,
+    "Keine aktive Timeline vorhanden");
+  updateEventDraftTemplate();
   updateFactsValueFields();
   updateFactControls();
 }
@@ -751,7 +818,7 @@ function renderFactRecordCatalog() {
   factsRecordCatalog.replaceChildren();
   const records = factCatalog?.records ?? [];
   if (!records.length) {
-    appendText(factsRecordCatalog, "p", "Noch keine für dich sichtbaren Assertion-, Mask-, Boundary- oder Event-Datensätze.", "muted");
+    appendText(factsRecordCatalog, "p", "Noch keine für dich sichtbaren Fakten, Events oder Eventrelationen.", "muted");
   } else {
     const list = document.createElement("ul");
     for (const record of records) {
@@ -761,7 +828,11 @@ function renderFactRecordCatalog() {
       if (record.archived === true) status.push("archiviert");
       else if (record.archived === false) status.push("nicht archiviert");
       const suffix = status.length ? ` · ${status.join(" · ")}` : "";
-      appendText(list, "li", `${record.family} · ${record.record_id} · Revision ${record.created_revision}${suffix}`);
+      const detail = record.family === "event_relation"
+        ? ` · ${record.from_event_id} ${record.relation_kind} ${record.to_event_id}`
+        : record.family === "event_mask" ? ` · Ziel-Event ${record.target_event_id}`
+          : record.family === "event_span_closure" ? ` · Ende ${record.time_end_nanoseconds} ns auf ${record.timeline_id}` : "";
+      appendText(list, "li", `${record.family} · ${record.record_id}${detail} · Revision ${record.created_revision}${suffix}`);
     }
     factsRecordCatalog.append(list);
   }
@@ -772,16 +843,36 @@ function renderFactRecordCatalog() {
     label: `${record.record_id} · Revision ${record.created_revision}`,
   })), factsCorrectionTarget.value, "Keine sichtbare aktive Assertion vorhanden");
   const eventRecords = records.filter((record) => record.family === "event" && record.retracted !== true);
+  const unarchivedEvents = eventRecords.filter((record) => record.archived !== true);
   replaceFactOptions(factsEventCorrectionTarget, eventRecords.map((record) => ({
     value: record.record_id,
     label: `${record.record_id} · Revision ${record.created_revision}`,
   })), factsEventCorrectionTarget.value, "Kein sichtbarer aktiver Event vorhanden");
-  const lifecycleRecords = records.filter((record) => record.retracted !== true);
+  replaceFactOptions(factsEventMaskTarget, unarchivedEvents.map((record) => ({
+    value: record.record_id,
+    label: `${record.event_kind_id ?? "Event"} · ${record.record_id}`,
+  })), factsEventMaskTarget.value, "Kein sichtbares, nicht archiviertes Event vorhanden");
+  const relationOptions = eventRecords.map((record) => ({
+    value: record.record_id,
+    label: `${record.event_kind_id ?? "Event"} · ${record.record_id}`,
+  }));
+  replaceFactOptions(factsEventRelationFrom, relationOptions, factsEventRelationFrom.value,
+    "Kein sichtbares aktives Event vorhanden");
+  replaceFactOptions(factsEventRelationTo, relationOptions, factsEventRelationTo.value,
+    "Kein sichtbares aktives Event vorhanden");
+  replaceFactOptions(factsEventSpanCloseTarget, eventRecords.map((record) => ({
+    value: record.record_id,
+    label: `${record.event_kind_id ?? "Event"} · ${record.record_id}`,
+  })), factsEventSpanCloseTarget.value, "Kein sichtbares aktives Event vorhanden");
+  const lifecycleFamilies = new Set(["assertion", "mask", "replacement_boundary", "event", "event_mask", "event_relation"]);
+  const lifecycleRecords = records.filter((record) => lifecycleFamilies.has(record.family) && record.retracted !== true);
   replaceFactOptions(factsLifecycleTarget, lifecycleRecords.map((record) => ({
     value: `${record.family}:${record.record_id}`,
     label: `${record.family} · ${record.record_id}${record.archived === true ? " · archiviert" : ""}`,
   })), factsLifecycleTarget.value, "Keine Datensätze für Lebenszyklusaktionen vorhanden");
   updateEventCorrectionTemplate();
+  factsEventGraphGuidance.replaceChildren();
+  for (const line of factCatalog?.eventGraphGuidance ?? []) appendText(factsEventGraphGuidance, "p", line);
   clearFactActionPreviews();
 }
 
@@ -807,6 +898,22 @@ function updateEventCorrectionTemplate() {
     event_time: { kind: "instant", timeline_id: activeTimeline, nanoseconds: "0" },
   }, null, 2);
   factsEventCorrectionDraft.dataset.templateTarget = record.record_id;
+}
+
+function updateEventDraftTemplate() {
+  const eventKindId = factsEventKind.value;
+  if (!eventKindId) return;
+  if (factsEventDraft.dataset.templateKind === eventKindId && factsEventDraft.value.trim()) return;
+  const activeTimeline = factsSchemaDefinitions("timeline", true)[0]?.identity ?? "";
+  factsEventDraft.value = JSON.stringify({
+    history_space_id: factsHistorySpace.value,
+    layer_id: factsLayer.value,
+    event_kind_id: eventKindId,
+    participants: [],
+    attributes: [],
+    event_time: { kind: "instant", timeline_id: activeTimeline, nanoseconds: "0" },
+  }, null, 2);
+  factsEventDraft.dataset.templateKind = eventKindId;
 }
 
 function clearFactActionPreviews() {
@@ -999,6 +1106,26 @@ function factsEventCorrectionCommand() {
   };
 }
 
+function factsEventCreateCommand() {
+  if (!factCatalog || !factsHistorySpace.value || !factsLayer.value || !factsEventKind.value) {
+    throw new Error("invalid_request");
+  }
+  let draft;
+  try { draft = JSON.parse(factsEventDraft.value); } catch { throw new Error("invalid_request"); }
+  if (!draft || typeof draft.history_space_id !== "string" || !draft.history_space_id
+    || typeof draft.layer_id !== "string" || !draft.layer_id
+    || draft.event_kind_id !== factsEventKind.value
+    || !Array.isArray(draft.participants) || !Array.isArray(draft.attributes)
+    || !draft.event_time || !["instant", "span"].includes(draft.event_time.kind)) {
+    throw new Error("invalid_request");
+  }
+  return {
+    command: "create_event",
+    expected_base_revision: factCatalog.revision,
+    draft,
+  };
+}
+
 function factsLifecycleCommand() {
   if (!factCatalog?.lifecycleVisible) throw new Error("invalid_request");
   const record = selectedFactRecord(factsLifecycleTarget, true);
@@ -1008,7 +1135,10 @@ function factsLifecycleCommand() {
     mask: "mask_id",
     replacement_boundary: "replacement_boundary_id",
     event: "event_id",
+    event_mask: "event_mask_id",
+    event_relation: "event_relation_id",
   }[record.family];
+  if (!key) throw new Error("invalid_request");
   const target = { family: record.family, [key]: record.record_id };
   const action = factsLifecycleAction.value;
   if (action === "retract") {
@@ -1151,8 +1281,21 @@ async function publishFact(command, successLabel, expectedKind = "published") {
   let publication;
   try {
     publication = await manageFacts(command);
+    if (publication.kind === "event_graph_conflict") {
+      const effects = publication.automatic_inference_applied
+        ? " Der Graph hat eine automatische Relation ergänzt."
+        : " Es wurde keine Relation aus Zeit oder Reihenfolge abgeleitet.";
+      factsWriteStatus.textContent = `${publication.explanation} ${publication.relation_saved ? "Die Relation wurde gespeichert." : "Es wurde nichts gespeichert."}${effects}`;
+      setFactsBusy(false);
+      return;
+    }
     if (publication.kind !== expectedKind) throw new Error("unsupported_protocol");
   } catch (error) {
+    if (factsSmokeActive) {
+      await invoke("facts_smoke_diagnostic", {
+        details: JSON.stringify({ operation: command.command, error: String(error?.stack ?? error) }),
+      }).catch(() => {});
+    }
     if (command.operation_id && ["correct_assertion", "correct_event"].includes(command.command)) {
       try {
         const status = await manageFacts({ command: "commit_status", operation_id: command.operation_id });
@@ -1193,9 +1336,6 @@ async function publishFact(command, successLabel, expectedKind = "published") {
   } else {
     factsWriteStatus.textContent = `${successLabel} gespeichert · Revision ${publication.revision} · Beleg ${publication.record_id}`;
   }
-  await refreshProject(sessionId).catch((error) => {
-    factsContextNote.textContent = showError(error);
-  });
   await refreshFactsCatalog(sessionId).catch((error) => {
     factsContextNote.textContent = showError(error);
   });
@@ -1218,13 +1358,28 @@ function updateFactControls() {
   let queryTimeValid = false;
   let assertionCorrectionValid = false;
   let eventCorrectionValid = false;
+  let eventCreateValid = false;
   let lifecycleValid = false;
   try { factsValueInput(); valueValid = true; } catch {}
   try { factsValidityInput(); validityValid = true; } catch {}
   try { factsWorldTimeInput(); queryTimeValid = true; } catch {}
   try { factsAssertionCorrectionCommand(); assertionCorrectionValid = true; } catch {}
   try { factsEventCorrectionCommand(); eventCorrectionValid = true; } catch {}
+  try { factsEventCreateCommand(); eventCreateValid = true; } catch {}
   try { factsLifecycleCommand(); lifecycleValid = true; } catch {}
+  const eventMaskValid = Boolean(factsHistorySpace.value && factsLayer.value && factsEventMaskTarget.value);
+  const eventRelationValid = Boolean(factsEventRelationFrom.value && factsEventRelationTo.value
+    && factsEventRelationFrom.value !== factsEventRelationTo.value && factsEventRelationKind.value);
+  const closeTime = factsEventSpanCloseNanoseconds.value.trim();
+  let closeTimeValid = false;
+  try {
+    if (/^-?(0|[1-9][0-9]*)$/.test(closeTime)) {
+      const value = BigInt(closeTime);
+      closeTimeValid = value >= -(1n << 127n) && value <= (1n << 127n) - 1n;
+    }
+  } catch {}
+  const eventSpanCloseValid = Boolean(factsEventSpanCloseTarget.value
+    && factsEventSpanCloseTimeline.value && closeTimeValid);
   const maskSelectorValid = factsMaskSelector.value === "exact_assertion"
     ? /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(factsMaskAssertionId.value.trim())
     : factsMaskSelector.value === "proposition" ? valueValid : factsMaskSelector.value === "slot";
@@ -1248,6 +1403,10 @@ function updateFactControls() {
   factsCreateBoundary.disabled = !canRead || !contextValid || !slotValid
     || predicate?.details?.resolution_policy !== "multi_value_replace"
     || (factsValidityEnabled.checked && !validityValid);
+  factsEventCreate.disabled = !canRead || !eventCreateValid;
+  factsEventMaskCreate.disabled = !canRead || !eventMaskValid;
+  factsEventRelationCreate.disabled = !canRead || !eventRelationValid;
+  factsEventSpanClose.disabled = !canRead || !eventSpanCloseValid;
   factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid;
   factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
   factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
@@ -2876,8 +3035,14 @@ async function commitPreviewedFactAction(previewButton, commitButton, statusPref
   return status;
 }
 
-async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cutoffRevision) {
+async function recordFactsSmokeStage(stage) {
+  await invoke("facts_smoke_diagnostic", { details: `facts-smoke:${stage}` }).catch(() => {});
+}
+
+async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cutoffRevision, stage = "mask-branch") {
+  await recordFactsSmokeStage(`${stage}:before-snapshot`);
   const before = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  await recordFactsSmokeStage(`${stage}:before-create`);
   const existing = new Set(before.branches.map((branch) => branch.history_space_id));
   const created = await manageBranchLayers({
     command: "create_child",
@@ -2885,13 +3050,16 @@ async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cuto
     parent_history_space_id: parentHistorySpaceId,
     base_revision: cutoffRevision,
   }, activeSessionId);
+  await recordFactsSmokeStage(`${stage}:after-create`);
   if (created.kind !== "published") throw new Error("the facts smoke overlay Branch was not published");
   const after = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
+  await recordFactsSmokeStage(`${stage}:after-verify-snapshot`);
   const branch = after.branches.find((item) => !existing.has(item.history_space_id)
     && item.parent_history_space_id === parentHistorySpaceId
     && item.base_revision === cutoffRevision);
   if (!branch) throw new Error("the facts smoke overlay Branch did not preserve its parent cutoff");
   await refreshFactsCatalog(activeSessionId);
+  await recordFactsSmokeStage(`${stage}:after-catalog`);
   return branch;
 }
 
@@ -2929,6 +3097,32 @@ async function runFactsSmoke(activeSessionId) {
   updateEntityTypeSelectionState();
   const createdEntity = await createEntity({ propagateErrors: true });
   if (createdEntity?.kind !== "published" || !createdEntity.entity_id) throw new Error("the smoke subject Entity was not persisted");
+
+  schemaFamily.value = "event_kind";
+  schemaSymbol.value = "ipc_smoke_event";
+  stagedEventRoles = [{
+    symbol: "actor",
+    entity_constraint: { kind: "exact", entity_type_id: subjectType.entity_type_id },
+    min_participants: 1,
+    max_participants: 1,
+  }];
+  stagedEventAttributes = [{
+    symbol: "summary",
+    value_kind: "string",
+    object_constraint: null,
+    constraints: [],
+    decimal_metadata: null,
+    required: true,
+  }];
+  eventTimeForm.value = "open_span_allowed";
+  updateSchemaFormVisibility();
+  await publishDefinition();
+  const eventKind = selectedSchema?.definitions.find((item) => item.family === "event_kind" && item.symbol === "ipc_smoke_event");
+  const eventRole = eventKind?.details.roles?.[0];
+  const eventAttribute = eventKind?.details.attributes?.[0];
+  if (!eventKind || !eventRole || !eventAttribute || eventKind.details.event_time.form !== "open_span_allowed") {
+    throw new Error("the smoke EventKind did not publish its required role, typed attribute, and open-span form");
+  }
 
   const branchSnapshot = await manageBranchLayers({ command: "snapshot", mode: { mode: "current" } }, activeSessionId);
   const rootBranch = branchSnapshot.branches.find((branch) => branch.parent_history_space_id == null);
@@ -3122,6 +3316,132 @@ async function runFactsSmoke(activeSessionId) {
   factsQueryTimeMode.value = "all_times";
   factsQueryTimeline.value = savedQueryTimeline;
   updateFactControls();
+
+  await refreshFactsCatalog(activeSessionId);
+  factsHistorySpace.value = root.history_space_id;
+  factsLayer.value = baseLayer.layer_id;
+  factsEventKind.value = eventKind.identity;
+  const setSmokeEventDraft = (eventTime, summary) => {
+    factsEventDraft.value = JSON.stringify({
+      history_space_id: root.history_space_id,
+      layer_id: baseLayer.layer_id,
+      event_kind_id: eventKind.identity,
+      participants: [{ role_id: eventRole.identity, entity_id: createdEntity.entity_id }],
+      attributes: [{ attribute_id: eventAttribute.identity, value: { kind: "string", data: summary } }],
+      event_time: eventTime,
+    }, null, 2);
+    factsEventDraft.dataset.templateKind = eventKind.identity;
+    updateFactControls();
+  };
+  setSmokeEventDraft({ kind: "instant", timeline_id: timeline.identity, nanoseconds: "10" }, "erster Smoke-Event");
+  const eventA = await clickFactWrite(factsEventCreate, "Event");
+  setSmokeEventDraft({ kind: "instant", timeline_id: timeline.identity, nanoseconds: "20" }, "zweiter Smoke-Event");
+  const eventB = await clickFactWrite(factsEventCreate, "Event");
+  setSmokeEventDraft({ kind: "span", timeline_id: timeline.identity, start_nanoseconds: "30", end_nanoseconds: null }, "offener Smoke-Span");
+  const openSpan = await clickFactWrite(factsEventCreate, "Event");
+
+  factsEventSpanCloseTarget.value = openSpan.recordId;
+  factsEventSpanCloseTimeline.value = timeline.identity;
+  factsEventSpanCloseNanoseconds.value = "50";
+  updateFactControls();
+  const spanClosure = await clickFactWrite(factsEventSpanClose, "Event-Spanabschluss");
+  if (!factCatalog.records.some((item) => item.family === "event_span_closure" && item.record_id === spanClosure.recordId
+    && item.time_end_nanoseconds === "50")) {
+    throw new Error("the UI did not expose the explicit open-span closure record");
+  }
+
+  factsEventRelationFrom.value = eventA.recordId;
+  factsEventRelationTo.value = eventB.recordId;
+  factsEventRelationKind.value = "before";
+  updateFactControls();
+  const beforeRelation = await clickFactWrite(factsEventRelationCreate, "Eventrelation");
+  const waitForEventGraphConflict = async (expectedText) => {
+    const deadline = Date.now() + 30000;
+    while (factBusy && Date.now() < deadline) await new Promise((resolve) => window.setTimeout(resolve, 50));
+    const status = factsWriteStatus.textContent;
+    if (!status.includes(expectedText) || !status.includes("Es wurde nichts gespeichert.")) {
+      throw new Error(`the Event graph conflict was not explained safely: ${status}`);
+    }
+  };
+  const revisionBeforeConflict = factCatalog.revision;
+  factsEventRelationFrom.value = eventB.recordId;
+  factsEventRelationTo.value = eventA.recordId;
+  factsEventRelationKind.value = "after";
+  updateFactControls();
+  if (factsEventRelationCreate.disabled) throw new Error("the inverse After conflict fixture was disabled");
+  factsEventRelationCreate.click();
+  await waitForEventGraphConflict("bereits aktiv");
+  if (factCatalog.revision !== revisionBeforeConflict) throw new Error("a rejected inverse After relation changed the data revision");
+
+  factsEventRelationFrom.value = eventA.recordId;
+  factsEventRelationTo.value = eventB.recordId;
+  factsEventRelationKind.value = "causes";
+  updateFactControls();
+  await clickFactWrite(factsEventRelationCreate, "Eventrelation");
+  const revisionBeforeCauseCycle = factCatalog.revision;
+  factsEventRelationFrom.value = eventB.recordId;
+  factsEventRelationTo.value = eventA.recordId;
+  factsEventRelationKind.value = "causes";
+  updateFactControls();
+  factsEventRelationCreate.click();
+  await waitForEventGraphConflict("Zyklus im Kausalgraphen");
+  if (factCatalog.revision !== revisionBeforeCauseCycle) throw new Error("a rejected Causes cycle changed the data revision");
+
+  factsEventRelationFrom.value = eventA.recordId;
+  factsEventRelationTo.value = eventB.recordId;
+  factsEventRelationKind.value = "same_time";
+  updateFactControls();
+  factsEventRelationCreate.click();
+  await waitForEventGraphConflict("SameTime-Gruppe");
+  if (factCatalog.revision !== revisionBeforeCauseCycle) throw new Error("a rejected SameTime conflict changed the data revision");
+  if (!factCatalog.eventGraphGuidance.some((line) => line.includes("niemals automatisch Before, SameTime oder Causes"))) {
+    throw new Error("the Event UI omitted its explicit no-inference guidance");
+  }
+  if (!factCatalog.records.some((item) => item.family === "event_relation" && item.record_id === beforeRelation.recordId
+    && item.from_event_id === eventA.recordId && item.to_event_id === eventB.recordId && item.relation_kind === "before")) {
+    throw new Error("the Event relation catalog did not expose the canonical Before relation");
+  }
+
+  const eventMaskBranch = await createFactsMaskBranch(
+    activeSessionId,
+    root.history_space_id,
+    factCatalog.revision,
+    "event-mask-branch",
+  );
+  factsHistorySpace.value = eventMaskBranch.history_space_id;
+  factsLayer.value = baseLayer.layer_id;
+  factsEventMaskTarget.value = eventA.recordId;
+  updateFactControls();
+  const eventMask = await clickFactWrite(factsEventMaskCreate, "EventMask");
+  const visibleMaskedEvent = factCatalog.records.find((item) => item.family === "event" && item.record_id === eventA.recordId);
+  if (visibleMaskedEvent?.retracted !== false) throw new Error("EventMask incorrectly changed the target Event's retraction state");
+  factsLifecycleTarget.value = `event_mask:${eventMask.recordId}`;
+  factsLifecycleAction.value = "retract";
+  factsLifecycleReason.value = "IPC smoke: EventMask separately retracted";
+  updateFactControls();
+  const eventMaskStatus = await commitPreviewedFactAction(
+    factsLifecyclePreviewButton,
+    factsLifecycleCommitButton,
+    `event_mask ${eventMask.recordId}: retracted · Revision `,
+  );
+  if (!eventMaskStatus.includes("Lebenszyklusbeleg")) throw new Error("EventMask retraction did not return its lifecycle receipt");
+  const retractedEventMask = factCatalog.records.find((item) => item.family === "event_mask" && item.record_id === eventMask.recordId);
+  if (retractedEventMask?.retracted !== true) throw new Error("the UI did not expose the EventMask's explicit retraction");
+  const stillActiveEvent = factCatalog.records.find((item) => item.family === "event" && item.record_id === eventA.recordId);
+  if (stillActiveEvent?.retracted !== false) throw new Error("retracting an EventMask also retracted its target Event");
+
+  factsLifecycleTarget.value = `event:${eventB.recordId}`;
+  factsLifecycleAction.value = "retract";
+  factsLifecycleReason.value = "IPC smoke: explicit Event retraction";
+  updateFactControls();
+  await commitPreviewedFactAction(
+    factsLifecyclePreviewButton,
+    factsLifecycleCommitButton,
+    `event ${eventB.recordId}: retracted · Revision `,
+  );
+  if (factCatalog.records.find((item) => item.family === "event" && item.record_id === eventB.recordId)?.retracted !== true) {
+    throw new Error("the explicit Event retraction did not appear in the record catalog");
+  }
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
@@ -3751,6 +4071,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       const listen = window.__TAURI__?.event?.listen;
       if (listen) {
         await listen("project-state-changed", () => {
+          if (factBusy) return;
           refreshProject(sessionId).catch(() => {});
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
@@ -3797,18 +4118,23 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           await runBranchLayerSmoke(sessionId);
           await runPerspectiveSmoke(sessionId);
           await runSecurityPolicySmoke(sessionId);
+          factsSmokeActive = true;
           try {
             await runFactsSmoke(sessionId);
           } catch (error) {
             await invoke("facts_smoke_diagnostic", { details: String(error?.message ?? error) }).catch(() => {});
             throw error;
+          } finally {
+            factsSmokeActive = false;
           }
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
       }
 
-      window.setInterval(() => refreshProject(sessionId).catch(() => {}), 1200);
+      window.setInterval(() => {
+        if (!factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
+      }, 1200);
     })
     .catch((error) => {
       windowStatus.textContent = "Die lokale Host-Sitzung konnte nicht eingerichtet werden.";
@@ -3960,9 +4286,16 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   for (const select of [factsHistorySpace, factsLayer, factsPerspective, factsSubject, factsPolarity,
     factsValueBool, factsValueEntity, factsTimeValueTimeline, factsTimeValueUnit, factsValidityTimeline,
     factsMaskSelector, factsQueryTimeMode, factsQueryTimeline, factsCorrectionTarget,
-    factsLifecycleTarget, factsLifecycleAction]) {
+    factsLifecycleTarget, factsLifecycleAction, factsEventKind, factsEventMaskTarget,
+    factsEventRelationFrom, factsEventRelationTo, factsEventRelationKind,
+    factsEventSpanCloseTarget, factsEventSpanCloseTimeline]) {
     select.addEventListener("change", clearFactActionPreviews);
   }
+  factsEventKind.addEventListener("change", () => {
+    factsEventDraft.dataset.templateKind = "";
+    updateEventDraftTemplate();
+    clearFactActionPreviews();
+  });
   factsPredicate.addEventListener("change", () => { clearFactActionPreviews(); updateFactsValueFields(); });
   factsValidityEnabled.addEventListener("change", clearFactActionPreviews);
   factsEventCorrectionTarget.addEventListener("change", () => {
@@ -3988,7 +4321,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   });
   for (const input of [factsValueText, factsTimeValueTicks, factsValidityStart, factsValidityEnd,
     factsMaskAssertionId, factsQueryNanoseconds, factsCorrectionReason, factsEventCorrectionDraft,
-    factsLifecycleReason]) {
+    factsEventDraft, factsLifecycleReason, factsEventSpanCloseNanoseconds]) {
     input.addEventListener("input", clearFactActionPreviews);
   }
   factsCreateAssertion.addEventListener("click", () => submitFact(() => ({
@@ -4016,6 +4349,28 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     predicate_id: factsPredicate.value,
     validity: factsValidityEnabled.checked ? factsValidityInput() : null,
   }), "ReplacementBoundary"));
+  factsEventCreate.addEventListener("click", () => submitFact(factsEventCreateCommand, "Event"));
+  factsEventMaskCreate.addEventListener("click", () => submitFact(() => ({
+    command: "create_event_mask",
+    expected_base_revision: factCatalog.revision,
+    history_space_id: factsHistorySpace.value,
+    layer_id: factsLayer.value,
+    target_event_id: factsEventMaskTarget.value,
+  }), "EventMask"));
+  factsEventRelationCreate.addEventListener("click", () => submitFact(() => ({
+    command: "create_event_relation",
+    expected_base_revision: factCatalog.revision,
+    from_event_id: factsEventRelationFrom.value,
+    to_event_id: factsEventRelationTo.value,
+    relation_kind: factsEventRelationKind.value,
+  }), "Eventrelation"));
+  factsEventSpanClose.addEventListener("click", () => submitFact(() => ({
+    command: "close_event_span",
+    expected_base_revision: factCatalog.revision,
+    event_id: factsEventSpanCloseTarget.value,
+    timeline_id: factsEventSpanCloseTimeline.value,
+    close_nanoseconds: factsEventSpanCloseNanoseconds.value.trim(),
+  }), "Event-Spanabschluss"));
   factsPreviewButton.addEventListener("click", () => runFactsPreview());
   factsCorrectionPreviewButton.addEventListener("click", previewAssertionCorrection);
   factsCorrectionCommitButton.addEventListener("click", () => {

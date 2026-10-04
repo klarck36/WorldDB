@@ -1,4 +1,4 @@
-//! Authorized, schema-checked, WAL-backed Assertion, Mask, and Boundary writes.
+//! Authorized, schema-checked, WAL-backed factual-record writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -11,18 +11,22 @@ use worlddb_core::{
     AssertionRetractionId, AssertionValidity, AuditAction, AuditCommitContext, AuditObjectClass,
     AuditOutcome, AuditPolicyFingerprint, AuditRecord, AuditRecordDetails, AuditRecordIdentity,
     AuthorizationDecision, AuthorizedAssertionMaskHistory, Bytes, CancellationToken, Capability,
-    ContextKey, EntityTypeConstraint, EpistemicMode, Event, EventDraft, EventId, EventKindId,
-    EventRetraction, EventRetractionId, FieldSelector, FullScanBudget, HistoricalQueryBinding,
-    HistorySpaceId, HistorySpaceReferenceModel, LayerSelection, Lifecycle, Mask, MaskId,
-    MaskRetraction, MaskRetractionId, MaskSelector, OperationId, PerspectiveScope, PolicyTarget,
-    PredicateId, ProductiveQueryEngine, ProvenanceId, ProvenanceRelationship, QueryBudget,
-    QueryBudgetLimits, QueryContext, QueryContextInput, QueryEngineOutput, Record, RecordRef,
-    RecordedAsOf, RelationshipSelector, ReplacementBoundary, ReplacementBoundaryId,
-    ReplacementBoundaryRetraction, ReplacementBoundaryRetractionId, ReplacementBoundarySource,
-    ResolutionPreview, Revision, SchemaDefinition, SchemaMode, SecurityContext,
-    SecurityPolicyVersion, SnapshotRef, Subject, ValidatedLayerSelection, Value, WorldTimeSelector,
-    WriteReferenceSnapshot, encode_record, prepare_assertion_correction, prepare_event_correction,
-    validate_assertion_batch, validate_value_for_predicate, validate_write_references,
+    ContextKey, ContextPrecedence, EntityTypeConstraint, EpistemicMode, Event, EventDraft, EventId,
+    EventKindId, EventMask, EventMaskId, EventMaskRetraction, EventMaskRetractionId, EventRelation,
+    EventRelationBatch, EventRelationHistory, EventRelationId, EventRelationInputKind,
+    EventRelationKind, EventRelationRetraction, EventRelationRetractionId, EventRetraction,
+    EventRetractionId, EventSpanClosure, EventSpanClosureId, FieldSelector, FullScanBudget,
+    HistoricalQueryBinding, HistorySpaceId, HistorySpaceReferenceModel, LayerSelection, Lifecycle,
+    Mask, MaskId, MaskRetraction, MaskRetractionId, MaskSelector, OperationId, PerspectiveScope,
+    PolicyEventRelationKind, PolicyTarget, PredicateId, ProductiveQueryEngine, ProvenanceId,
+    ProvenanceRelationship, QueryBudget, QueryBudgetLimits, QueryContext, QueryContextInput,
+    QueryEngineOutput, Record, RecordRef, RecordedAsOf, RelationshipSelector, ReplacementBoundary,
+    ReplacementBoundaryId, ReplacementBoundaryRetraction, ReplacementBoundaryRetractionId,
+    ReplacementBoundarySource, ResolutionPreview, Revision, SchemaDefinition, SchemaMode,
+    SecurityContext, SecurityPolicyVersion, SnapshotRef, Subject, ValidatedLayerSelection, Value,
+    WorldTimeSelector, WriteReferenceSnapshot, encode_record, prepare_assertion_correction,
+    prepare_event_correction, validate_assertion_batch, validate_event_graph_transaction,
+    validate_value_for_predicate, validate_write_references,
 };
 
 use crate::{
@@ -263,6 +267,11 @@ pub struct FactSnapshot {
     replacement_boundary_retractions: Vec<ReplacementBoundaryRetraction>,
     events: Vec<EventSnapshotRef>,
     event_retractions: Vec<EventRetraction>,
+    event_span_closures: Vec<EventSpanClosure>,
+    event_masks: Vec<EventMask>,
+    event_mask_retractions: Vec<EventMaskRetraction>,
+    event_relations: Vec<EventRelation>,
+    event_relation_retractions: Vec<EventRelationRetraction>,
     archive_transitions: Vec<ArchiveTransition>,
     lifecycle_visible: bool,
 }
@@ -339,6 +348,36 @@ impl FactSnapshot {
     #[must_use]
     pub fn event_retractions(&self) -> &[EventRetraction] {
         &self.event_retractions
+    }
+
+    /// Visible span closures for returned Events.
+    #[must_use]
+    pub fn event_span_closures(&self) -> &[EventSpanClosure] {
+        &self.event_span_closures
+    }
+
+    /// Immutable EventMasks whose concrete target Event is visible.
+    #[must_use]
+    pub fn event_masks(&self) -> &[EventMask] {
+        &self.event_masks
+    }
+
+    /// Visible Transaction-Time retractions for returned EventMasks.
+    #[must_use]
+    pub fn event_mask_retractions(&self) -> &[EventMaskRetraction] {
+        &self.event_mask_retractions
+    }
+
+    /// Canonical EventRelations whose endpoint Events are visible.
+    #[must_use]
+    pub fn event_relations(&self) -> &[EventRelation] {
+        &self.event_relations
+    }
+
+    /// Visible Transaction-Time retractions for returned EventRelations.
+    #[must_use]
+    pub fn event_relation_retractions(&self) -> &[EventRelationRetraction] {
+        &self.event_relation_retractions
     }
 
     /// Visible operational archive transitions for the returned factual records.
@@ -819,6 +858,91 @@ impl<'a> FileFactManager<'a> {
             retraction: retraction_id,
             corrects: corrects_id,
         })
+    }
+
+    /// Creates one immutable Event after schema, reference, and policy validation.
+    pub fn create_event(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        event_id: EventId,
+        draft: EventDraft,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        let history_space = draft.history_space_id();
+        let layer = draft.layer_id();
+        let target = context_target_parts(history_space, layer);
+        self.authorize(Capability::EventCreate, target)?;
+        self.authorize(Capability::LayerWrite, target)?;
+        self.authorize(Capability::EntityReference, target)?;
+        self.authorize(
+            Capability::FieldWrite,
+            field_target_parts(history_space, layer, FieldSelector::EventKind),
+        )?;
+        for participant in draft.participants().as_slice() {
+            self.authorize(
+                Capability::FieldWrite,
+                field_target_parts(
+                    history_space,
+                    layer,
+                    FieldSelector::EventParticipant(draft.event_kind_id(), participant.role_id()),
+                ),
+            )?;
+        }
+        for attribute in draft.attributes().as_slice() {
+            self.authorize(
+                Capability::FieldWrite,
+                field_target_parts(
+                    history_space,
+                    layer,
+                    FieldSelector::EventAttribute(draft.event_kind_id(), attribute.attribute_id()),
+                ),
+            )?;
+        }
+        self.authorize(
+            Capability::FieldWrite,
+            field_target_parts(
+                history_space,
+                layer,
+                FieldSelector::EventTime(draft.event_kind_id()),
+            ),
+        )?;
+
+        let metadata = self.write_validation_metadata()?;
+        if metadata.revision() != expected_base {
+            return Err(FactManagementError::Conflict);
+        }
+        let references = validate_write_references(
+            vec![],
+            vec![draft.clone()],
+            &WriteReferenceSnapshot {
+                history_spaces: metadata.history_spaces(),
+                layers: metadata.layers(),
+                entities: metadata.entities(),
+                perspectives: metadata.perspectives(),
+                schema: metadata.schema(),
+            },
+        )
+        .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        worlddb_core::authorize_validated_write_batch(
+            &references,
+            self.policy_snapshot()?,
+            self.schema.principal,
+        )
+        .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+
+        self.ensure_identity_available(RecordRef::Event(event_id))?;
+        let revision = self.next_revision()?;
+        let event = Event::new(event_id, draft, revision)
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        let event_target = event_target(&event);
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::Event(event),
+            RecordRef::Event(event_id),
+            event_target,
+        )
     }
 
     /// Corrects one Event by committing a new Event and `Corrects(new, old)`.
@@ -1356,6 +1480,375 @@ impl<'a> FileFactManager<'a> {
         )
     }
 
+    /// Closes an Event span that was created without an end coordinate.
+    pub fn close_event_span(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        closure_id: EventSpanClosureId,
+        target_id: EventId,
+        close_at: worlddb_core::WorldTime,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        let records = self.records_at_revision(expected_base)?;
+        let target = records
+            .iter()
+            .find_map(|record| match record {
+                Record::Event(value) if value.id() == target_id => Some(value.clone()),
+                _ => None,
+            })
+            .ok_or(FactManagementError::InvalidCandidate(
+                "the selected Event is unavailable",
+            ))?;
+        let target_policy = event_target(&target);
+        self.authorize(Capability::EventRead, target_policy)
+            .map_err(|_| {
+                FactManagementError::InvalidCandidate("the selected Event is unavailable")
+            })?;
+        self.authorize(
+            Capability::HistorySpaceRead,
+            context_target_parts(target.history_space_id(), target.layer_id()),
+        )
+        .map_err(|_| FactManagementError::InvalidCandidate("the selected Event is unavailable"))?;
+        self.authorize(
+            Capability::LayerRead,
+            context_target_parts(target.history_space_id(), target.layer_id()),
+        )
+        .map_err(|_| FactManagementError::InvalidCandidate("the selected Event is unavailable"))?;
+        self.authorize(Capability::LifecycleRead, target_policy)?;
+        self.authorize(Capability::EventSpanClose, target_policy)?;
+        self.authorize(
+            Capability::RelationshipCreate,
+            lifecycle_relationship_target_parts(
+                target.history_space_id(),
+                target.layer_id(),
+                RecordRef::Event(target_id),
+            ),
+        )?;
+        if records.iter().any(|record| {
+            matches!(record, Record::EventSpanClosure(value) if value.event_id() == target_id)
+        }) {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected Event span is already closed",
+            ));
+        }
+        if records.iter().any(|record| {
+            matches!(record, Record::EventRetraction(value) if value.event_id() == target_id)
+        }) {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected Event is already retracted",
+            ));
+        }
+        self.ensure_identity_available(RecordRef::EventSpanClosure(closure_id))?;
+        let revision = self.next_revision()?;
+        let closure = EventSpanClosure::new(closure_id, &target, close_at, revision)
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::EventSpanClosure(closure),
+            RecordRef::EventSpanClosure(closure_id),
+            target_policy,
+        )
+    }
+
+    /// Creates an EventMask only when its HistorySpace/Layer context strictly
+    /// outranks the target Event.
+    pub fn create_event_mask(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        mask_id: EventMaskId,
+        history_space_id: HistorySpaceId,
+        layer_id: worlddb_core::LayerId,
+        target_event_id: EventId,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        let records = self.records_at_revision(expected_base)?;
+        let event = records
+            .iter()
+            .find_map(|record| match record {
+                Record::Event(value) if value.id() == target_event_id => Some(value.clone()),
+                _ => None,
+            })
+            .ok_or(FactManagementError::InvalidCandidate(
+                "the selected Event is unavailable",
+            ))?;
+        let event_target = event_target(&event);
+        self.authorize(Capability::EventRead, event_target)
+            .map_err(|_| {
+                FactManagementError::InvalidCandidate("the selected Event is unavailable")
+            })?;
+        self.authorize(
+            Capability::HistorySpaceRead,
+            context_target_parts(event.history_space_id(), event.layer_id()),
+        )
+        .map_err(|_| FactManagementError::InvalidCandidate("the selected Event is unavailable"))?;
+        self.authorize(
+            Capability::LayerRead,
+            context_target_parts(event.history_space_id(), event.layer_id()),
+        )
+        .map_err(|_| FactManagementError::InvalidCandidate("the selected Event is unavailable"))?;
+        if records.iter().any(|record| {
+            matches!(record, Record::EventRetraction(value) if value.event_id() == target_event_id)
+        }) {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected Event is already retracted",
+            ));
+        }
+        let metadata = self.write_validation_metadata()?;
+        if metadata.revision() != expected_base {
+            return Err(FactManagementError::Conflict);
+        }
+        let layer =
+            metadata
+                .layers()
+                .definition(layer_id)
+                .ok_or(FactManagementError::InvalidCandidate(
+                    "the selected EventMask Layer is unavailable",
+                ))?;
+        if layer.lifecycle() == Lifecycle::Retired {
+            return Err(FactManagementError::InvalidCandidate(
+                "EventMask requires an Active Layer",
+            ));
+        }
+        let precedence = ContextPrecedence::compare_event_contexts(
+            history_space_id,
+            history_space_id,
+            layer_id,
+            event.history_space_id(),
+            event.layer_id(),
+            metadata.history_spaces(),
+            metadata.layers(),
+        )
+        .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        if precedence != std::cmp::Ordering::Greater {
+            return Err(FactManagementError::Validation(
+                "EventMask requires a strictly more specific HistorySpace/Layer context than its target Event".to_owned(),
+            ));
+        }
+        let (archive_targets, archive_transitions) = archive_history_records(&records);
+        let archive_history =
+            ArchiveHistoryReferenceModel::new(archive_targets, archive_transitions)
+                .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        if archive_history
+            .state_at(
+                ArchiveTargetRef::Event(target_event_id),
+                RecordedAsOf::from_published_revision(expected_base),
+            )
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?
+            == ArchiveState::Archived
+        {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected Event is archived",
+            ));
+        }
+        let owner = context_target_parts(history_space_id, layer_id);
+        self.authorize(Capability::EventMaskCreate, owner)?;
+        self.authorize(Capability::LayerWrite, owner)?;
+        self.authorize(
+            Capability::FieldWrite,
+            field_target_parts(history_space_id, layer_id, FieldSelector::EventMaskTarget),
+        )?;
+        let mask_policy = PolicyTarget::new(
+            Some(history_space_id),
+            Some(layer_id),
+            Some(RecordRef::EventMask(mask_id)),
+            None,
+            None,
+        );
+        self.ensure_identity_available(RecordRef::EventMask(mask_id))?;
+        let revision = self.next_revision()?;
+        let mask = EventMask::new(
+            mask_id,
+            history_space_id,
+            layer_id,
+            target_event_id,
+            revision,
+        );
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::EventMask(mask),
+            RecordRef::EventMask(mask_id),
+            mask_policy,
+        )
+    }
+
+    /// Appends a separate explicit Transaction-Time EventMaskRetraction.
+    pub fn retract_event_mask(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        retraction_id: EventMaskRetractionId,
+        target_id: EventMaskId,
+        reason: String,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        validate_retraction_reason(&reason)?;
+        let records = self.records_at_revision(expected_base)?;
+        let target = records
+            .iter()
+            .find_map(|record| match record {
+                Record::EventMask(value) if value.id() == target_id => Some(*value),
+                _ => None,
+            })
+            .ok_or(FactManagementError::InvalidCandidate(
+                "the selected EventMask is unavailable",
+            ))?;
+        let target_policy = event_mask_target(&target);
+        self.authorize(Capability::EventMaskRead, target_policy)
+            .map_err(|_| {
+                FactManagementError::InvalidCandidate("the selected EventMask is unavailable")
+            })?;
+        self.authorize(
+            Capability::HistorySpaceRead,
+            context_target_parts(target.history_space_id(), target.layer_id()),
+        )
+        .map_err(|_| {
+            FactManagementError::InvalidCandidate("the selected EventMask is unavailable")
+        })?;
+        self.authorize(
+            Capability::LayerRead,
+            context_target_parts(target.history_space_id(), target.layer_id()),
+        )
+        .map_err(|_| {
+            FactManagementError::InvalidCandidate("the selected EventMask is unavailable")
+        })?;
+        self.authorize(Capability::LifecycleRead, target_policy)?;
+        self.authorize(Capability::EventMaskRetract, target_policy)?;
+        self.authorize(
+            Capability::RelationshipCreate,
+            lifecycle_relationship_target_parts(
+                target.history_space_id(),
+                target.layer_id(),
+                RecordRef::EventMask(target_id),
+            ),
+        )?;
+        if records.iter().any(|record| {
+            matches!(record, Record::EventMaskRetraction(value) if value.event_mask_id() == target_id)
+        }) {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected EventMask is already retracted",
+            ));
+        }
+        self.ensure_identity_available(RecordRef::EventMaskRetraction(retraction_id))?;
+        let revision = self.next_revision()?;
+        let retraction = EventMaskRetraction::new(retraction_id, &target, reason, revision)
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::EventMaskRetraction(retraction),
+            RecordRef::EventMaskRetraction(retraction_id),
+            target_policy,
+        )
+    }
+
+    /// Adds a canonical EventRelation after endpoint, authorization, and full
+    /// post-transaction graph validation.
+    pub fn create_event_relation(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        relation_id: EventRelationId,
+        from_event_id: EventId,
+        to_event_id: EventId,
+        kind: EventRelationInputKind,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        let records = self.records_at_revision(expected_base)?;
+        let events = records
+            .iter()
+            .filter_map(|record| match record {
+                Record::Event(event) => Some(event.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for event_id in [from_event_id, to_event_id] {
+            let event = events.iter().find(|event| event.id() == event_id).ok_or(
+                FactManagementError::InvalidCandidate(
+                    "both EventRelation endpoints must identify existing Events",
+                ),
+            )?;
+            self.authorize(Capability::EventRead, event_target(event))
+                .map_err(|_| {
+                    FactManagementError::InvalidCandidate(
+                        "both EventRelation endpoints must be readable",
+                    )
+                })?;
+        }
+        let revision = self.next_revision()?;
+        let relation = EventRelation::new(relation_id, from_event_id, to_event_id, kind, revision)
+            .map_err(|error| {
+                FactManagementError::EventGraphConflict(format!("{error}. No relation was saved."))
+            })?;
+        let policy_target = event_relation_target(&relation);
+        self.authorize(Capability::RelationshipCreate, policy_target)?;
+        self.ensure_identity_available(RecordRef::EventRelation(relation_id))?;
+        let additions = EventRelationBatch::new(vec![relation]).map_err(|error| {
+            FactManagementError::EventGraphConflict(event_relation_error_message(&error))
+        })?;
+        validate_event_relation_transaction(&records, expected_base, revision, &[], &additions)?;
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::EventRelation(relation),
+            RecordRef::EventRelation(relation_id),
+            policy_target,
+        )
+    }
+
+    /// Retracts one active EventRelation without changing its Events.
+    pub fn retract_event_relation(
+        &mut self,
+        expected_base: Revision,
+        operation_id: OperationId,
+        retraction_id: EventRelationRetractionId,
+        target_id: EventRelationId,
+        reason: String,
+    ) -> Result<FactPublicationReceipt, FactManagementError> {
+        self.check_base(expected_base)?;
+        validate_retraction_reason(&reason)?;
+        let records = self.records_at_revision(expected_base)?;
+        let relation = records
+            .iter()
+            .find_map(|record| match record {
+                Record::EventRelation(value) if value.id() == target_id => Some(*value),
+                _ => None,
+            })
+            .ok_or(FactManagementError::InvalidCandidate(
+                "the selected EventRelation is unavailable",
+            ))?;
+        let target_policy = event_relation_target(&relation);
+        self.authorize(Capability::RelationshipRead, target_policy)
+            .map_err(|_| {
+                FactManagementError::InvalidCandidate("the selected EventRelation is unavailable")
+            })?;
+        self.authorize(Capability::LifecycleRead, target_policy)?;
+        self.authorize(Capability::RelationshipRetract, target_policy)?;
+        let revision = self.next_revision()?;
+        let retraction = EventRelationRetraction::new(retraction_id, &relation, reason, revision)
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        self.ensure_identity_available(RecordRef::EventRelationRetraction(retraction_id))?;
+        let empty = EventRelationBatch::new(Vec::new())
+            .map_err(|error| FactManagementError::Validation(error.to_string()))?;
+        validate_event_relation_transaction(
+            &records,
+            expected_base,
+            revision,
+            &[retraction.clone()],
+            &empty,
+        )?;
+        self.publish(
+            expected_base,
+            operation_id,
+            Record::EventRelationRetraction(retraction),
+            RecordRef::EventRelationRetraction(retraction_id),
+            target_policy,
+        )
+    }
+
     /// Appends an explicit Transaction-Time retraction for one active Assertion.
     pub fn retract_assertion(
         &mut self,
@@ -1556,7 +2049,8 @@ impl<'a> FileFactManager<'a> {
         )
     }
 
-    /// Archives or unarchives one Assertion, Mask, ReplacementBoundary, or Event.
+    /// Archives or unarchives one Assertion, Mask, ReplacementBoundary, Event,
+    /// or EventMask.
     /// The transition is append-only and is always committed strictly after
     /// the selected target's creation revision.
     pub fn transition_archive(
@@ -1606,6 +2100,15 @@ impl<'a> FileFactManager<'a> {
                     value.created_revision(),
                     Capability::EventRead,
                 )),
+                (ArchiveTargetRef::EventMask(id), Record::EventMask(value)) if id == value.id() => {
+                    Some((
+                        RecordRef::EventMask(id),
+                        value.history_space_id(),
+                        value.layer_id(),
+                        value.created_revision(),
+                        Capability::EventMaskRead,
+                    ))
+                }
                 _ => None,
             })
             .ok_or(FactManagementError::InvalidCandidate(
@@ -1636,36 +2139,7 @@ impl<'a> FileFactManager<'a> {
         )?;
         self.ensure_identity_available(RecordRef::ArchiveTransition(transition_id))?;
 
-        let mut archive_targets = Vec::new();
-        let mut transitions = Vec::new();
-        for record in &records {
-            match record {
-                Record::Assertion(value) => archive_targets.push(ArchiveTargetRecord::new(
-                    ArchiveTargetRef::Assertion(value.id()),
-                    value.created_revision(),
-                )),
-                Record::Mask(value) => archive_targets.push(ArchiveTargetRecord::new(
-                    ArchiveTargetRef::Mask(value.id()),
-                    value.created_revision(),
-                )),
-                Record::ReplacementBoundary(value) => {
-                    archive_targets.push(ArchiveTargetRecord::new(
-                        ArchiveTargetRef::ReplacementBoundary(value.id()),
-                        value.created_revision(),
-                    ))
-                }
-                Record::Event(value) => archive_targets.push(ArchiveTargetRecord::new(
-                    ArchiveTargetRef::Event(value.id()),
-                    value.created_revision(),
-                )),
-                Record::ArchiveTransition(value)
-                    if archive_target_record_ref(value.target()).is_some() =>
-                {
-                    transitions.push(*value);
-                }
-                _ => {}
-            }
-        }
+        let (archive_targets, transitions) = archive_history_records(&records);
         let history =
             ArchiveHistoryReferenceModel::new(archive_targets.clone(), transitions.clone())
                 .map_err(|error| FactManagementError::Validation(error.to_string()))?;
@@ -1711,6 +2185,8 @@ impl<'a> FileFactManager<'a> {
         let mut masks = Vec::new();
         let mut replacement_boundaries = Vec::new();
         let mut events = Vec::new();
+        let mut event_masks = Vec::new();
+        let mut event_relations = Vec::new();
         for record in &records {
             match record {
                 Record::Assertion(value) => {
@@ -1769,6 +2245,48 @@ impl<'a> FileFactManager<'a> {
                 _ => {}
             }
         }
+        let visible_event_ids = events
+            .iter()
+            .map(|event| event.event_id())
+            .collect::<BTreeSet<_>>();
+        for record in &records {
+            match record {
+                Record::EventMask(mask)
+                    if visible_event_ids.contains(&mask.target_event())
+                        && self.may_read(Capability::EventMaskRead, event_mask_target(mask))?
+                        && self.may_read(
+                            Capability::HistorySpaceRead,
+                            context_target_parts(mask.history_space_id(), mask.layer_id()),
+                        )?
+                        && self.may_read(
+                            Capability::LayerRead,
+                            context_target_parts(mask.history_space_id(), mask.layer_id()),
+                        )?
+                        && self.may_read(
+                            Capability::FieldRead,
+                            record_field_target(
+                                mask.history_space_id(),
+                                mask.layer_id(),
+                                RecordRef::EventMask(mask.id()),
+                                FieldSelector::EventMaskTarget,
+                            ),
+                        )? =>
+                {
+                    event_masks.push(*mask);
+                }
+                Record::EventRelation(relation)
+                    if visible_event_ids.contains(&relation.from_event())
+                        && visible_event_ids.contains(&relation.to_event())
+                        && self.may_read(
+                            Capability::RelationshipRead,
+                            event_relation_target(relation),
+                        )? =>
+                {
+                    event_relations.push(*relation);
+                }
+                _ => {}
+            }
+        }
         let visible_refs = assertions
             .iter()
             .map(|value| RecordRef::Assertion(value.id()))
@@ -1783,6 +2301,16 @@ impl<'a> FileFactManager<'a> {
                     .iter()
                     .map(|value| RecordRef::Event(value.event_id())),
             )
+            .chain(
+                event_masks
+                    .iter()
+                    .map(|value| RecordRef::EventMask(value.id())),
+            )
+            .chain(
+                event_relations
+                    .iter()
+                    .map(|value| RecordRef::EventRelation(value.id())),
+            )
             .collect::<BTreeSet<_>>();
         let may_read_lifecycle =
             self.may_read(Capability::LifecycleRead, PolicyTarget::default())?;
@@ -1790,6 +2318,9 @@ impl<'a> FileFactManager<'a> {
         let mut mask_retractions = Vec::new();
         let mut replacement_boundary_retractions = Vec::new();
         let mut event_retractions = Vec::new();
+        let mut event_span_closures = Vec::new();
+        let mut event_mask_retractions = Vec::new();
+        let mut event_relation_retractions = Vec::new();
         let mut archive_transitions = Vec::new();
         if may_read_lifecycle {
             for record in &records {
@@ -1816,6 +2347,22 @@ impl<'a> FileFactManager<'a> {
                     {
                         event_retractions.push(value.clone());
                     }
+                    Record::EventSpanClosure(value)
+                        if visible_refs.contains(&RecordRef::Event(value.event_id())) =>
+                    {
+                        event_span_closures.push(*value);
+                    }
+                    Record::EventMaskRetraction(value)
+                        if visible_refs.contains(&RecordRef::EventMask(value.event_mask_id())) =>
+                    {
+                        event_mask_retractions.push(value.clone());
+                    }
+                    Record::EventRelationRetraction(value)
+                        if visible_refs
+                            .contains(&RecordRef::EventRelation(value.event_relation_id())) =>
+                    {
+                        event_relation_retractions.push(value.clone());
+                    }
                     Record::ArchiveTransition(value)
                         if archive_target_record_ref(value.target())
                             .is_some_and(|target| visible_refs.contains(&target)) =>
@@ -1836,6 +2383,11 @@ impl<'a> FileFactManager<'a> {
             replacement_boundary_retractions,
             events,
             event_retractions,
+            event_span_closures,
+            event_masks,
+            event_mask_retractions,
+            event_relations,
+            event_relation_retractions,
             archive_transitions,
             lifecycle_visible: may_read_lifecycle,
         })
@@ -2479,6 +3031,140 @@ fn event_target(event: &Event) -> PolicyTarget {
     )
 }
 
+fn event_mask_target(mask: &EventMask) -> PolicyTarget {
+    PolicyTarget::new(
+        Some(mask.history_space_id()),
+        Some(mask.layer_id()),
+        Some(RecordRef::EventMask(mask.id())),
+        None,
+        None,
+    )
+}
+
+fn event_relation_target(relation: &EventRelation) -> PolicyTarget {
+    PolicyTarget::new(
+        None,
+        None,
+        Some(RecordRef::EventRelation(relation.id())),
+        None,
+        Some(RelationshipSelector::EventRelation(
+            policy_event_relation_kind(relation.kind()),
+        )),
+    )
+}
+
+fn policy_event_relation_kind(kind: EventRelationKind) -> PolicyEventRelationKind {
+    match kind {
+        EventRelationKind::Before => PolicyEventRelationKind::Before,
+        EventRelationKind::SameTime => PolicyEventRelationKind::SameTime,
+        EventRelationKind::Causes => PolicyEventRelationKind::Causes,
+    }
+}
+
+fn validate_event_relation_transaction(
+    records: &[Record],
+    base_revision: Revision,
+    commit_revision: Revision,
+    candidate_retractions: &[EventRelationRetraction],
+    additions: &EventRelationBatch,
+) -> Result<(), FactManagementError> {
+    let events = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Event(event) => Some(event.id()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let relations = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::EventRelation(relation) => Some(*relation),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let retractions = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::EventRelationRetraction(retraction) => Some(retraction.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    validate_event_graph_transaction(
+        &events,
+        EventRelationHistory::new(&relations, &retractions),
+        RecordedAsOf::from_published_revision(base_revision),
+        commit_revision,
+        candidate_retractions,
+        additions,
+    )
+    .map(|_| ())
+    .map_err(|error| FactManagementError::EventGraphConflict(event_graph_error_message(&error)))
+}
+
+fn event_graph_error_message(error: &worlddb_core::EventGraphError) -> String {
+    use worlddb_core::EventGraphError;
+
+    match error {
+        EventGraphError::BeforeWithinSameTimeComponent { .. } => {
+            "Before/After widerspricht einer ausdrücklich gespeicherten SameTime-Gruppe. Entferne eine der Relationen oder nimm sie zuerst ausdrücklich zurück.".to_owned()
+        }
+        EventGraphError::BeforeCycle { .. } => {
+            "Before/After würde einen Zyklus in der zeitlichen Reihenfolge erzeugen.".to_owned()
+        }
+        EventGraphError::CausesCycle { .. } => {
+            "Causes würde einen Zyklus im Kausalgraphen erzeugen.".to_owned()
+        }
+        EventGraphError::MissingEventEndpoint { .. } => {
+            "Beide Endpunkte der Relation müssen vorhandene Events bezeichnen.".to_owned()
+        }
+        EventGraphError::DuplicateActiveRelationKey { .. }
+        | EventGraphError::Relation(worlddb_core::EventRelationError::DuplicateRelation { .. }) => {
+            "Diese kanonische Relation ist bereits aktiv. After wird als umgekehrtes Before behandelt; bei SameTime spielt die Endpunktreihenfolge keine Rolle.".to_owned()
+        }
+        EventGraphError::Relation(worlddb_core::EventRelationError::SelfRelation { .. }) => {
+            "Ein Event kann nicht mit sich selbst verknüpft werden.".to_owned()
+        }
+        EventGraphError::RetractionTargetNotActive { .. } => {
+            "Die ausgewählte Eventrelation fehlt oder wurde bereits zurückgenommen.".to_owned()
+        }
+        EventGraphError::Relation(worlddb_core::EventRelationError::DuplicateRelationId { .. })
+        | EventGraphError::DuplicateRelationId { .. } => {
+            "Die Identität dieser Eventrelation ist bereits vergeben.".to_owned()
+        }
+        EventGraphError::Relation(worlddb_core::EventRelationError::DuplicateRetractionId { .. })
+        | EventGraphError::DuplicateRetractionId { .. } => {
+            "Die Identität dieser Rücknahme ist bereits vergeben.".to_owned()
+        }
+        EventGraphError::Relation(worlddb_core::EventRelationError::MissingRetractionTarget { .. }) => {
+            "Die Zielrelation der Rücknahme ist nicht vorhanden.".to_owned()
+        }
+        EventGraphError::Relation(worlddb_core::EventRelationError::LifecycleRevisionNotAfterTarget { .. })
+        | EventGraphError::CommitRevisionNotAfterSnapshot { .. }
+        | EventGraphError::CandidateRetractionRevisionMismatch { .. }
+        | EventGraphError::AdditionRevisionMismatch { .. } => {
+            "Die Relation oder Rücknahme liegt nicht nach dem zugrunde liegenden Datenstand.".to_owned()
+        }
+        EventGraphError::DuplicateEventId => {
+            "Der Ereignisbestand enthält eine doppelte Event-Identität.".to_owned()
+        }
+        EventGraphError::InternalEmptyComponent => {
+            "Der Ereignisgraph ist intern inkonsistent; die Relation wurde nicht gespeichert.".to_owned()
+        }
+    }
+}
+
+fn event_relation_error_message(error: &worlddb_core::EventRelationError) -> String {
+    match error {
+        worlddb_core::EventRelationError::SelfRelation { .. } => {
+            "Ein Event kann nicht mit sich selbst verknüpft werden. Es wurde nichts gespeichert.".to_owned()
+        }
+        worlddb_core::EventRelationError::DuplicateRelation { .. } => {
+            "Diese kanonische Relation ist bereits aktiv. After wird als umgekehrtes Before behandelt; bei SameTime spielt die Endpunktreihenfolge keine Rolle. Es wurde nichts gespeichert.".to_owned()
+        }
+        _ => format!("Die Eventrelation ist ungültig ({error}). Es wurde nichts gespeichert."),
+    }
+}
+
 fn field_target_parts(
     history_space: HistorySpaceId,
     layer: worlddb_core::LayerId,
@@ -2814,6 +3500,11 @@ fn record_created_revision(record: &Record) -> Option<Revision> {
         Record::ReplacementBoundaryRetraction(value) => Some(value.created_revision()),
         Record::Event(value) => Some(value.created_revision()),
         Record::EventRetraction(value) => Some(value.created_revision()),
+        Record::EventSpanClosure(value) => Some(value.created_revision()),
+        Record::EventMask(value) => Some(value.created_revision()),
+        Record::EventMaskRetraction(value) => Some(value.created_revision()),
+        Record::EventRelation(value) => Some(value.created_revision()),
+        Record::EventRelationRetraction(value) => Some(value.created_revision()),
         Record::Provenance(value) => Some(value.created_revision()),
         Record::ArchiveTransition(value) => Some(value.created_revision()),
         _ => None,
@@ -2832,6 +3523,11 @@ fn fact_record_ref(record: &Record) -> Option<RecordRef> {
         }
         Record::Event(value) => RecordRef::Event(value.id()),
         Record::EventRetraction(value) => RecordRef::EventRetraction(value.id()),
+        Record::EventSpanClosure(value) => RecordRef::EventSpanClosure(value.id()),
+        Record::EventMask(value) => RecordRef::EventMask(value.id()),
+        Record::EventMaskRetraction(value) => RecordRef::EventMaskRetraction(value.id()),
+        Record::EventRelation(value) => RecordRef::EventRelation(value.id()),
+        Record::EventRelationRetraction(value) => RecordRef::EventRelationRetraction(value.id()),
         Record::Provenance(value) => RecordRef::Provenance(value.id()),
         Record::ArchiveTransition(value) => RecordRef::ArchiveTransition(value.id()),
         _ => return None,
@@ -2844,8 +3540,47 @@ fn archive_target_record_ref(target: ArchiveTargetRef) -> Option<RecordRef> {
         ArchiveTargetRef::Mask(id) => RecordRef::Mask(id),
         ArchiveTargetRef::ReplacementBoundary(id) => RecordRef::ReplacementBoundary(id),
         ArchiveTargetRef::Event(id) => RecordRef::Event(id),
+        ArchiveTargetRef::EventMask(id) => RecordRef::EventMask(id),
         _ => return None,
     })
+}
+
+fn archive_history_records(
+    records: &[Record],
+) -> (Vec<ArchiveTargetRecord>, Vec<ArchiveTransition>) {
+    let mut targets = Vec::new();
+    let mut transitions = Vec::new();
+    for record in records {
+        match record {
+            Record::Assertion(value) => targets.push(ArchiveTargetRecord::new(
+                ArchiveTargetRef::Assertion(value.id()),
+                value.created_revision(),
+            )),
+            Record::Mask(value) => targets.push(ArchiveTargetRecord::new(
+                ArchiveTargetRef::Mask(value.id()),
+                value.created_revision(),
+            )),
+            Record::ReplacementBoundary(value) => targets.push(ArchiveTargetRecord::new(
+                ArchiveTargetRef::ReplacementBoundary(value.id()),
+                value.created_revision(),
+            )),
+            Record::Event(value) => targets.push(ArchiveTargetRecord::new(
+                ArchiveTargetRef::Event(value.id()),
+                value.created_revision(),
+            )),
+            Record::EventMask(value) => targets.push(ArchiveTargetRecord::new(
+                ArchiveTargetRef::EventMask(value.id()),
+                value.created_revision(),
+            )),
+            Record::ArchiveTransition(value)
+                if archive_target_record_ref(value.target()).is_some() =>
+            {
+                transitions.push(*value);
+            }
+            _ => {}
+        }
+    }
+    (targets, transitions)
 }
 
 fn map_schema_error(error: SchemaManagementError) -> FactManagementError {
@@ -2880,6 +3615,8 @@ pub enum FactManagementError {
     RevisionNotPublished,
     /// A typed input or reference violates the selected schema/catalog.
     Validation(String),
+    /// A proposed EventRelation conflicts with the complete active Event graph.
+    EventGraphConflict(String),
     /// The pinned resolution preview could not be completed safely.
     Query(String),
     /// A selected typed record, context, or schema definition is unavailable.
@@ -2915,6 +3652,7 @@ impl fmt::Display for FactManagementError {
             Self::Validation(reason) => {
                 write!(formatter, "factual record validation failed: {reason}")
             }
+            Self::EventGraphConflict(reason) => formatter.write_str(reason),
             Self::Query(reason) => write!(formatter, "resolution preview failed: {reason}"),
             Self::InvalidCandidate(reason) => formatter.write_str(reason),
             Self::DuplicateIdentity => {
@@ -2951,18 +3689,20 @@ mod tests {
         AuditCommitContext, AuditObjectClass, AuditPolicyFingerprint, AuditRecord,
         AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, Capability, Cardinality,
         ConstraintSet, ContextKey, EntityTypeConstraint, EntityTypeDefinition, EntityTypeId,
-        EventDraft, EventKindDefinition, EventKindId, EventTime, EventTimeConstraint,
-        EventTimeForm, LayerDefinition, LayerId, LayerSchemaSnapshot, Lifecycle, MaskSelector,
-        OperationId, Polarity, PredicateDefinition, PredicateDefinitionSpec, PredicateId, Record,
-        RecordRef, ResolutionPolicy, Revision, SchemaMode, SchemaRevision, SecurityPolicyVersion,
-        Subject, Symbol, TimeInterval, Timeline, TimelineCalendarProfile, TimelineDefinition,
-        TimelineId, Value, ValueKind, WorldTime,
+        EventAttributeDefinition, EventAttributeId, EventAttributeValue, EventDraft,
+        EventKindDefinition, EventKindId, EventParticipant, EventRelationInputKind,
+        EventRoleDefinition, EventRoleId, EventTime, EventTimeConstraint, EventTimeForm,
+        LayerDefinition, LayerId, LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId,
+        Polarity, PredicateDefinition, PredicateDefinitionSpec, PredicateId, Record, RecordRef,
+        ResolutionPolicy, Revision, RoleCardinality, SchemaMode, SchemaRevision,
+        SecurityPolicyVersion, Subject, Symbol, TimeInterval, Timeline, TimelineCalendarProfile,
+        TimelineDefinition, TimelineId, Value, ValueKind, WorldTime,
     };
 
     use crate::{
-        DatabaseLayout, FileEntityManager, FileSchemaManager, HistorySegmentStore,
-        ManifestSegmentKind, ManifestSegmentReference, ManifestStore, RecoveryManager,
-        SecurityPolicyHistoryStore, StorageVerifier, WalPrepareLog, WriterLock,
+        DatabaseLayout, FileEntityManager, FileProjectMetadataManager, FileSchemaManager,
+        HistorySegmentStore, ManifestSegmentKind, ManifestSegmentReference, ManifestStore,
+        RecoveryManager, SecurityPolicyHistoryStore, StorageVerifier, WalPrepareLog, WriterLock,
     };
 
     use super::super::tests::{TempArea, create_project, id};
@@ -2978,6 +3718,8 @@ mod tests {
         predicate_id: PredicateId,
         timeline_id: TimelineId,
         event_kind_id: EventKindId,
+        event_role_id: EventRoleId,
+        event_attribute_id: EventAttributeId,
         entity_id: worlddb_core::EntityId,
     }
 
@@ -3019,6 +3761,10 @@ mod tests {
                 Capability::EventCreate,
                 Capability::EventCorrect,
                 Capability::EventRetract,
+                Capability::EventSpanClose,
+                Capability::EventMaskCreate,
+                Capability::EventMaskRead,
+                Capability::EventMaskRetract,
                 Capability::MaskRetract,
                 Capability::ReplacementBoundaryRetract,
                 Capability::ProvenanceCreate,
@@ -3026,6 +3772,9 @@ mod tests {
                 Capability::Archive,
                 Capability::Unarchive,
                 Capability::RelationshipCreate,
+                Capability::RelationshipRead,
+                Capability::RelationshipRetract,
+                Capability::HistorySpaceCreate,
             ]);
         }
         values
@@ -3063,6 +3812,8 @@ mod tests {
         let predicate_id = id::<PredicateId>(102)?;
         let timeline_id = id::<TimelineId>(103)?;
         let event_kind_id = id::<EventKindId>(112)?;
+        let event_role_id = id::<EventRoleId>(113)?;
+        let event_attribute_id = id::<EventAttributeId>(114)?;
         let mut schema = FileSchemaManager::open(layout.clone(), &lock, principal)
             .map_err(|error| error.to_string())?;
         let entity_type = EntityTypeDefinition::new(
@@ -3096,9 +3847,25 @@ mod tests {
         let event_kind = EventKindDefinition::new(
             event_kind_id,
             Symbol::new("happening").map_err(|error| error.to_string())?,
-            vec![],
-            vec![],
-            EventTimeConstraint::new(EventTimeForm::InstantOrSpan, None)
+            vec![EventRoleDefinition::new(
+                event_role_id,
+                Symbol::new("actor").map_err(|error| error.to_string())?,
+                EntityTypeConstraint::Exact(entity_type_id),
+                RoleCardinality::new(0, Some(4)).map_err(|error| error.to_string())?,
+            )],
+            vec![
+                EventAttributeDefinition::new(
+                    event_attribute_id,
+                    Symbol::new("title").map_err(|error| error.to_string())?,
+                    ValueKind::String,
+                    None,
+                    ConstraintSet::new(vec![]).map_err(|error| error.to_string())?,
+                    None,
+                    false,
+                )
+                .map_err(|error| error.to_string())?,
+            ],
+            EventTimeConstraint::new(EventTimeForm::OpenSpanAllowed, None)
                 .map_err(|error| error.to_string())?,
             Lifecycle::Active,
             Revision::GENESIS,
@@ -3138,6 +3905,8 @@ mod tests {
             predicate_id,
             timeline_id,
             event_kind_id,
+            event_role_id,
+            event_attribute_id,
             entity_id,
         })
     }
@@ -3313,6 +4082,46 @@ mod tests {
                 Timeline::new(fixture.timeline_id),
                 nanoseconds,
             )),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn detailed_event_draft(
+        fixture: &Fixture,
+        manager: &Manager<'_>,
+        event_time: EventTime,
+    ) -> Result<EventDraft, String> {
+        let schema_manager =
+            FileSchemaManager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+                .map_err(|error| error.to_string())?;
+        let schema = schema_manager
+            .schema_at(SchemaMode::Current, manager.revision())
+            .map_err(|error| error.to_string())?;
+        let kind = schema
+            .definitions()
+            .iter()
+            .find_map(|definition| match definition {
+                worlddb_core::SchemaDefinition::EventKind(value)
+                    if value.event_kind_id() == fixture.event_kind_id =>
+                {
+                    Some(value)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| "test EventKind disappeared".to_owned())?;
+        EventDraft::new(
+            fixture.history_space_id,
+            fixture.layer_id,
+            kind,
+            vec![EventParticipant::new(
+                fixture.event_role_id,
+                fixture.entity_id,
+            )],
+            vec![EventAttributeValue::new(
+                fixture.event_attribute_id,
+                Value::String("test event".to_owned()),
+            )],
+            event_time,
         )
         .map_err(|error| error.to_string())
     }
@@ -3686,6 +4495,271 @@ mod tests {
                 })
         {
             return Err("Event archive did not create a separate target transition".into());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn event_writes_validate_roles_masks_spans_and_relation_graphs() -> Result<(), String> {
+        let fixture = build_fixture_with_correction_rights(true, true, true)?;
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let instant_a = EventTime::Instant(WorldTime::from_nanoseconds(
+            Timeline::new(fixture.timeline_id),
+            10,
+        ));
+        let event_a_id = id::<worlddb_core::EventId>(170)?;
+        manager
+            .create_event(
+                manager.revision(),
+                id::<OperationId>(171)?,
+                event_a_id,
+                detailed_event_draft(&fixture, &manager, instant_a)?,
+            )
+            .map_err(|error| error.to_string())?;
+        let event_b_id = id::<worlddb_core::EventId>(172)?;
+        manager
+            .create_event(
+                manager.revision(),
+                id::<OperationId>(173)?,
+                event_b_id,
+                detailed_event_draft(
+                    &fixture,
+                    &manager,
+                    EventTime::Instant(WorldTime::from_nanoseconds(
+                        Timeline::new(fixture.timeline_id),
+                        20,
+                    )),
+                )?,
+            )
+            .map_err(|error| error.to_string())?;
+        let open_span_id = id::<worlddb_core::EventId>(174)?;
+        manager
+            .create_event(
+                manager.revision(),
+                id::<OperationId>(175)?,
+                open_span_id,
+                detailed_event_draft(
+                    &fixture,
+                    &manager,
+                    EventTime::span(
+                        WorldTime::from_nanoseconds(Timeline::new(fixture.timeline_id), 30),
+                        None,
+                    )
+                    .map_err(|error| error.to_string())?,
+                )?,
+            )
+            .map_err(|error| error.to_string())?;
+
+        let closed_span = manager
+            .close_event_span(
+                manager.revision(),
+                id::<OperationId>(176)?,
+                id::<worlddb_core::EventSpanClosureId>(177)?,
+                open_span_id,
+                WorldTime::from_nanoseconds(Timeline::new(fixture.timeline_id), 50),
+            )
+            .map_err(|error| error.to_string())?;
+        let before_duplicate_closure = manager.revision();
+        if !matches!(
+            manager.close_event_span(
+                before_duplicate_closure,
+                id::<OperationId>(178)?,
+                id::<worlddb_core::EventSpanClosureId>(179)?,
+                open_span_id,
+                WorldTime::from_nanoseconds(Timeline::new(fixture.timeline_id), 60),
+            ),
+            Err(FactManagementError::InvalidCandidate(_))
+        ) || manager.revision() != before_duplicate_closure
+        {
+            return Err("a closed Event span accepted a second closure".into());
+        }
+
+        let before_id = id::<worlddb_core::EventRelationId>(180)?;
+        manager
+            .create_event_relation(
+                closed_span.revision(),
+                id::<OperationId>(181)?,
+                before_id,
+                event_a_id,
+                event_b_id,
+                EventRelationInputKind::Before,
+            )
+            .map_err(|error| error.to_string())?;
+        let relation_conflict_revision = manager.revision();
+        if !matches!(
+            manager.create_event_relation(
+                relation_conflict_revision,
+                id::<OperationId>(182)?,
+                id::<worlddb_core::EventRelationId>(183)?,
+                event_b_id,
+                event_a_id,
+                EventRelationInputKind::After,
+            ),
+            Err(FactManagementError::EventGraphConflict(_))
+        ) || manager.revision() != relation_conflict_revision
+        {
+            return Err("inverse After input duplicated an active Before relation".into());
+        }
+        if !matches!(
+            manager.create_event_relation(
+                relation_conflict_revision,
+                id::<OperationId>(184)?,
+                id::<worlddb_core::EventRelationId>(185)?,
+                event_a_id,
+                event_b_id,
+                EventRelationInputKind::SameTime,
+            ),
+            Err(FactManagementError::EventGraphConflict(_))
+        ) || manager.revision() != relation_conflict_revision
+        {
+            return Err("SameTime contradicted an active Before path without rejection".into());
+        }
+
+        let causes = manager
+            .create_event_relation(
+                relation_conflict_revision,
+                id::<OperationId>(186)?,
+                id::<worlddb_core::EventRelationId>(187)?,
+                event_a_id,
+                event_b_id,
+                EventRelationInputKind::Causes,
+            )
+            .map_err(|error| error.to_string())?;
+        let before_causes_cycle = manager.revision();
+        if !matches!(
+            manager.create_event_relation(
+                before_causes_cycle,
+                id::<OperationId>(188)?,
+                id::<worlddb_core::EventRelationId>(189)?,
+                event_b_id,
+                event_a_id,
+                EventRelationInputKind::Causes,
+            ),
+            Err(FactManagementError::EventGraphConflict(_))
+        ) || manager.revision() != before_causes_cycle
+        {
+            return Err("a cycle in the separate Causes graph was accepted".into());
+        }
+
+        let retract_before = manager
+            .retract_event_relation(
+                causes.revision(),
+                id::<OperationId>(190)?,
+                id::<worlddb_core::EventRelationRetractionId>(191)?,
+                before_id,
+                "replace temporal direction".to_owned(),
+            )
+            .map_err(|error| error.to_string())?;
+        let inverse = manager
+            .create_event_relation(
+                retract_before.revision(),
+                id::<OperationId>(192)?,
+                id::<worlddb_core::EventRelationId>(193)?,
+                event_a_id,
+                event_b_id,
+                EventRelationInputKind::After,
+            )
+            .map_err(|error| error.to_string())?;
+        let relation_snapshot = manager
+            .snapshot_at(inverse.revision())
+            .map_err(|error| error.to_string())?;
+        if relation_snapshot.event_relations().len() != 3
+            || relation_snapshot.event_relation_retractions().len() != 1
+            || !relation_snapshot.event_relations().iter().any(|relation| {
+                relation.created_revision() == inverse.revision()
+                    && relation.kind() == worlddb_core::EventRelationKind::Before
+                    && relation.from_event() == event_b_id
+                    && relation.to_event() == event_a_id
+            })
+        {
+            return Err("After was not persisted as the canonical reversed Before relation".into());
+        }
+
+        let assertion_id = id::<worlddb_core::AssertionId>(200)?;
+        let assertion_context = make_context(&fixture)?;
+        let assertion = manager
+            .create_assertion(
+                manager.revision(),
+                id::<OperationId>(201)?,
+                assertion_id,
+                AssertionDraft::new(
+                    assertion_context,
+                    Subject::new(fixture.entity_id),
+                    fixture.predicate_id,
+                    Value::String("archived assertion before EventMask".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+        let archived_assertion = manager
+            .transition_archive(
+                assertion.revision(),
+                id::<OperationId>(202)?,
+                id::<worlddb_core::ArchiveTransitionId>(203)?,
+                ArchiveTargetRef::Assertion(assertion_id),
+                ArchiveAction::Archive,
+            )
+            .map_err(|error| error.to_string())?;
+
+        drop(manager);
+        let mut metadata = FileProjectMetadataManager::open(
+            fixture.layout.clone(),
+            &fixture.lock,
+            fixture.principal,
+        )
+        .map_err(|error| error.to_string())?;
+        let child_id = id::<worlddb_core::HistorySpaceId>(194)?;
+        let child = metadata
+            .create_child(
+                metadata.revision(),
+                id::<OperationId>(195)?,
+                child_id,
+                fixture.history_space_id,
+                archived_assertion.revision(),
+            )
+            .map_err(|error| error.to_string())?;
+        drop(metadata);
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let mask = manager
+            .create_event_mask(
+                child.revision(),
+                id::<OperationId>(196)?,
+                id::<worlddb_core::EventMaskId>(197)?,
+                child_id,
+                fixture.layer_id,
+                event_a_id,
+            )
+            .map_err(|error| error.to_string())?;
+        let mask_retraction = manager
+            .retract_event_mask(
+                mask.revision(),
+                id::<OperationId>(198)?,
+                id::<worlddb_core::EventMaskRetractionId>(199)?,
+                id::<worlddb_core::EventMaskId>(197)?,
+                "the event is visible again".to_owned(),
+            )
+            .map_err(|error| error.to_string())?;
+        let snapshot = manager
+            .snapshot_at(mask_retraction.revision())
+            .map_err(|error| error.to_string())?;
+        if snapshot.event_masks().len() != 1
+            || snapshot.event_mask_retractions().len() != 1
+            || snapshot
+                .event_retractions()
+                .iter()
+                .any(|retraction| retraction.event_id() == event_a_id)
+        {
+            return Err("EventMask retraction changed the target Event lifecycle".into());
+        }
+        let report = StorageVerifier::new(fixture.layout.clone())
+            .verify(&fixture.lock)
+            .map_err(|error| error.to_string())?;
+        if !report.is_clean() {
+            return Err("event writes did not leave a clean verified database".into());
         }
         Ok(())
     }

@@ -40,9 +40,9 @@ mod facts;
 pub use facts::{
     AssertionCorrectionView, AssertionDraftInput, EventAttributeInput, EventCorrectionView,
     EventDraftInput, EventParticipantInput, EventTimeInput, FactCatalogRecordView, FactCatalogView,
-    FactCommand, FactContextInput, FactLifecycleActionInput, FactLifecycleView,
+    FactCommand, FactContextInput, FactLifecycleActionInput, FactLifecycleView, EventGraphConflictView,
     FactOperationStatusKind, FactOperationStatusView, FactPublicationView, FactResponse,
-    FactTargetInput, FactValueInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
+    FactTargetInput, FactValueInput, EventRelationKindInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
     ResolutionOutcomeView, ResolutionPreviewView, ResolutionResultView, ResolutionSliceView,
     ResolutionValueView, ValidityInput, WorldTimeSelectorInput,
 };

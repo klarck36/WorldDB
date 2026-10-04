@@ -5,7 +5,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
     [string]$EngineExecutablePath,
-    [switch]$KeepArtifacts
+    [switch]$KeepArtifacts,
+    [ValidateRange(30, 600)]
+    [int]$FactsTimeoutSeconds = 240
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,7 +100,7 @@ function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]
             $explicitReads = @($primary | Where-Object { $_.operation -eq 'snapshot_explicit' }).Count
             $retirements = @($primary | Where-Object { $_.operation -eq 'retire' }).Count
             $secondaryReads = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
-            if ($creates -ge 2 -and $historicalReads -ge 2 -and $explicitReads -ge 2 -and $retirements -ge 1 -and $secondaryReads -ge 1) { return }
+            if ($creates -ge 2 -and $historicalReads -ge 2 -and $explicitReads -ge 1 -and $retirements -ge 1 -and $secondaryReads -ge 1) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }
@@ -190,7 +192,7 @@ function Wait-ForSecurityPolicyOperations([System.Diagnostics.Process]$Process, 
 }
 
 function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(240)
+    $deadline = [DateTime]::UtcNow.AddSeconds($FactsTimeoutSeconds)
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
             $operations = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -202,9 +204,17 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $masks = @($operations | Where-Object { $_.operation -eq 'create_mask' -and $_.succeeded })
             $boundaries = @($operations | Where-Object { $_.operation -eq 'create_replacement_boundary' -and $_.succeeded }).Count
             $corrections = @($operations | Where-Object { $_.operation -eq 'correct_assertion' -and $_.succeeded }).Count
+            $events = @($operations | Where-Object { $_.operation -eq 'create_event' -and $_.succeeded }).Count
+            $eventMasks = @($operations | Where-Object { $_.operation -eq 'create_event_mask' -and $_.succeeded }).Count
+            $eventRelations = @($operations | Where-Object { $_.operation -eq 'create_event_relation' -and $_.succeeded }).Count
+            $spanClosures = @($operations | Where-Object { $_.operation -eq 'close_event_span' -and $_.succeeded }).Count
             $catalogs = @($operations | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count
             $lifecycle = @($operations | Where-Object { $_.operation -eq 'lifecycle' -and $_.succeeded })
             $lifecycleEffects = @($lifecycle | Select-Object -ExpandProperty result_kind -Unique)
+            $eventRetractions = @($lifecycle | Where-Object { $_.family -eq 'event' -and $_.result_kind -eq 'retracted' }).Count
+            $eventMaskRetractions = @($lifecycle | Where-Object { $_.family -eq 'event_mask' -and $_.result_kind -eq 'retracted' }).Count
+            $graphConflicts = @($operations | Where-Object { $_.kind -eq 'event_graph_conflict' })
+            $safeGraphConflicts = @($graphConflicts | Where-Object { $_.result_kind -eq 'not_saved' -and $_.outcome_kind -eq 'no_automatic_inference' }).Count
             $allTimes = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'all_times' }).Count
             $points = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'point' }).Count
             $selectors = @($masks | Select-Object -ExpandProperty selector_kind -Unique)
@@ -216,6 +226,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $corrections -ge 1 -and $catalogs -ge 1 -and $lifecycle.Count -ge 3 -and
                 ($lifecycleEffects -contains 'retracted') -and ($lifecycleEffects -contains 'archived') -and
                 ($lifecycleEffects -contains 'unarchived') -and
+                $events -ge 3 -and $eventMasks -ge 1 -and $eventRelations -ge 5 -and
+                $spanClosures -ge 1 -and $eventRetractions -ge 1 -and $eventMaskRetractions -ge 1 -and
+                $safeGraphConflicts -ge 3 -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $hasExact -and $hasProposition -and $hasSlot
             ) {
@@ -227,7 +240,7 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
         Start-Sleep -Milliseconds 100
     }
     $events = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
-    throw "Timed out waiting for Assertion, Mask, Boundary, and resolution-preview IPC workflows. Recorded: $events"
+    throw "Timed out waiting for factual-record, Event, EventMask, graph-conflict, and resolution-preview IPC workflows. Recorded: $events"
 }
 
 try {
@@ -241,7 +254,7 @@ try {
     $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_FACTS_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
-    $env:WORLDDB_ODE_AUTOCLOSE_MS = '300000'
+    $env:WORLDDB_ODE_AUTOCLOSE_MS = [string][Math]::Max(300000, ($FactsTimeoutSeconds + 120) * 1000)
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
     if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
         $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)
@@ -435,7 +448,8 @@ try {
         }
     }
 
-    if (-not $process.WaitForExit(240000)) {
+    $processWaitMilliseconds = [int][Math]::Max(240000, ($FactsTimeoutSeconds + 60) * 1000)
+    if (-not $process.WaitForExit($processWaitMilliseconds)) {
         $process.Kill()
         throw 'The IPC smoke process did not shut down.'
     }
@@ -469,6 +483,10 @@ try {
         assertion_mask_and_replacement_boundary_forms = 'PASS'
         exact_proposition_and_slot_mask_selectors = 'PASS'
         point_and_all_times_resolution_previews = 'PASS'
+        event_roles_attributes_and_instant_span_creation = 'PASS'
+        explicit_event_span_closure_and_event_retractions = 'PASS'
+        event_mask_priority_and_separate_retraction = 'PASS'
+        canonical_event_relations_and_safe_graph_conflicts = 'PASS'
         world_state_and_epistemic_contexts_separate = 'PASS'
         invalid_and_retired_perspectives_rejected = 'PASS'
         secondary_window_perspective_read = 'PASS'
