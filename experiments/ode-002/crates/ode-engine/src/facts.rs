@@ -158,7 +158,11 @@ pub enum FactCommand {
         replacement: EventDraftInput,
     },
     /// Returns the durable status for one logical write identity.
-    CommitStatus { operation_id: String },
+    CommitStatus {
+        operation_id: String,
+        #[serde(default)]
+        expected_base_revision: Option<u64>,
+    },
     /// Performs exactly one explicit retraction or archive-state transition.
     Lifecycle {
         expected_base_revision: u64,
@@ -555,6 +559,22 @@ pub struct FactOperationStatusView {
     pub operation_id: String,
     pub status: FactOperationStatusKind,
     pub revision: Option<u64>,
+    pub expected_base_revision: Option<u64>,
+    pub current_revision: u64,
+    pub conflict_report: Option<FactConflictReportView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FactConflictReportView {
+    pub facts: Vec<FactConflictFactView>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FactConflictFactView {
+    ReadDependencyChanged,
+    WriteTargetChanged,
+    BaseRevisionAdvanced,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1363,7 +1383,14 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 replacement.polarity.into(),
                 parse_validity(replacement.validity)?,
             );
-            let operation_id = parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
+            let command_operation_id =
+                parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
+            let operation_id = crate::requested_operation_id().unwrap_or(command_operation_id);
+            if operation_id != command_operation_id {
+                return Err(EngineError::Fact(
+                    "operation identity does not match the request".to_owned(),
+                ));
+            }
             let receipt = manager
                 .correct_assertion(
                     revision(expected_base_revision)?,
@@ -1399,10 +1426,18 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 .schema_at(SchemaMode::Current, base_revision)
                 .map_err(|error| EngineError::Fact(error.to_string()))?;
             let replacement = parse_event_draft(replacement, &schema)?;
+            let command_operation_id =
+                parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
+            let operation_id = crate::requested_operation_id().unwrap_or(command_operation_id);
+            if operation_id != command_operation_id {
+                return Err(EngineError::Fact(
+                    "operation identity does not match the request".to_owned(),
+                ));
+            }
             let receipt = manager
                 .correct_event(
                     base_revision,
-                    parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?,
+                    operation_id,
                     parse_id::<EventId>(&target_event_id, "Event")?,
                     revision(expected_target_created_revision)?,
                     parse_id::<EventId>(&replacement_event_id, "replacement Event")?,
@@ -1412,9 +1447,37 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 .map_err(fact_error)?;
             Ok(FactResponse::EventCorrected(event_correction_view(receipt)))
         }
-        FactCommand::CommitStatus { operation_id } => {
+        FactCommand::CommitStatus {
+            operation_id,
+            expected_base_revision,
+        } => {
             let operation_id = parse_id::<worlddb_core::OperationId>(&operation_id, "Operation")?;
             let status = manager.operation_status(operation_id).map_err(fact_error)?;
+            let current_revision = manager.revision().value();
+            let conflict_report = expected_base_revision
+                .filter(|expected| current_revision > *expected)
+                .map(|_| {
+                    worlddb_core::ConflictReport::new(vec![
+                        worlddb_core::ConflictFact::BaseRevisionAdvanced,
+                    ])
+                })
+                .map(|report| FactConflictReportView {
+                    facts: report
+                        .facts()
+                        .iter()
+                        .map(|fact| match fact {
+                            worlddb_core::ConflictFact::ReadDependencyChanged => {
+                                FactConflictFactView::ReadDependencyChanged
+                            }
+                            worlddb_core::ConflictFact::WriteTargetChanged => {
+                                FactConflictFactView::WriteTargetChanged
+                            }
+                            worlddb_core::ConflictFact::BaseRevisionAdvanced => {
+                                FactConflictFactView::BaseRevisionAdvanced
+                            }
+                        })
+                        .collect(),
+                });
             let (status, revision) = match status {
                 worlddb_storage_file::FactOperationStatus::NotCommitted => {
                     (FactOperationStatusKind::NotCommitted, None)
@@ -1430,6 +1493,9 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
                 operation_id: operation_id.to_string(),
                 status,
                 revision,
+                expected_base_revision,
+                current_revision,
+                conflict_report,
             }))
         }
         FactCommand::Lifecycle {
@@ -2847,8 +2913,10 @@ fn query_revision(value: &str) -> Result<Revision, EngineError> {
 }
 
 fn operation_id() -> Result<worlddb_core::OperationId, EngineError> {
-    worlddb_core::storage_internal::generate_schema_management_operation_id()
-        .map_err(|_| EngineError::Fact("operation identity unavailable".to_owned()))
+    crate::requested_operation_id_or(
+        worlddb_core::storage_internal::generate_schema_management_operation_id,
+    )
+    .map_err(|_| EngineError::Fact("operation identity unavailable".to_owned()))
 }
 
 fn identity<T: DomainId>(label: &str) -> Result<T, EngineError> {
@@ -3584,8 +3652,9 @@ fn fact_error(error: impl fmt::Display) -> EngineError {
 #[cfg(test)]
 mod tests {
     use super::{
-        FactCommand, FactQueryModeInput, FactQuerySchemaModeInput, FactValueInput,
-        MaskSelectorInput, bytes_hex, parse_hex, parse_value, query_revision, query_schema_mode,
+        FactCommand, FactConflictFactView, FactConflictReportView, FactQueryModeInput,
+        FactQuerySchemaModeInput, FactValueInput, MaskSelectorInput, bytes_hex, parse_hex,
+        parse_value, query_revision, query_schema_mode,
     };
     use worlddb_core::{Revision, SchemaMode, SchemaRevision};
 
@@ -3604,6 +3673,24 @@ mod tests {
             serde_json::from_str::<MaskSelectorInput>(r#"{"kind":"arbitrary","anything":true}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn operation_status_wire_exposes_only_safe_revision_conflict_facts() {
+        let command = FactCommand::CommitStatus {
+            operation_id: "00000000-0000-7000-8000-000000000001".to_owned(),
+            expected_base_revision: Some(7),
+        };
+        let encoded = serde_json::to_value(command).expect("status request serializes");
+        assert_eq!(encoded["command"], "commit_status");
+        assert_eq!(encoded["expected_base_revision"], 7);
+
+        let report = FactConflictReportView {
+            facts: vec![FactConflictFactView::BaseRevisionAdvanced],
+        };
+        let encoded = serde_json::to_value(report).expect("safe report serializes");
+        assert_eq!(encoded["facts"][0], "base_revision_advanced");
+        assert!(encoded.get("record_id").is_none());
     }
 
     #[test]

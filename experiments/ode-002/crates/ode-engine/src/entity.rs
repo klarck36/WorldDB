@@ -147,9 +147,10 @@ impl EngineHost {
                 let entity_id =
                     worlddb_core::storage_internal::generate_entity_management_entity_id()
                         .map_err(|error| EngineError::Entity(error.to_string()))?;
-                let operation_id =
-                    worlddb_core::storage_internal::generate_entity_management_operation_id()
-                        .map_err(|error| EngineError::Entity(error.to_string()))?;
+                let operation_id = crate::requested_operation_id_or(
+                    worlddb_core::storage_internal::generate_entity_management_operation_id,
+                )
+                .map_err(|error| EngineError::Entity(error.to_string()))?;
                 let receipt = manager
                     .create(
                         expected_base,
@@ -186,9 +187,10 @@ impl EngineHost {
                 let retirement_id =
                     worlddb_core::storage_internal::generate_entity_management_retirement_id()
                         .map_err(|error| EngineError::Entity(error.to_string()))?;
-                let operation_id =
-                    worlddb_core::storage_internal::generate_entity_management_operation_id()
-                        .map_err(|error| EngineError::Entity(error.to_string()))?;
+                let operation_id = crate::requested_operation_id_or(
+                    worlddb_core::storage_internal::generate_entity_management_operation_id,
+                )
+                .map_err(|error| EngineError::Entity(error.to_string()))?;
                 let receipt = manager
                     .retire(expected_base, operation_id, retirement_id, entity_id)
                     .map_err(|error| EngineError::Entity(error.to_string()))?;

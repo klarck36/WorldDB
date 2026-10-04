@@ -1,11 +1,13 @@
 use std::ffi::OsStr;
 use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use worlddb_core::OperationId;
 #[cfg(windows)]
 use worlddb_core::PrincipalId;
 use worlddb_ode_engine::{
-    EngineHost, Request, Response, StreamConsumer, StreamPlan, stream_response,
+    EngineHost, Request, Response, StreamConsumer, StreamPlan, stream_response, with_operation_id,
 };
 
 const FRAME_DATA: u8 = 1;
@@ -155,102 +157,159 @@ fn main() {
                     std::process::exit(74);
                 }
             }
-            Request::Schema { command } => {
-                let response = match engine.schema(command) {
-                    Ok(result) => Response::Schema { result },
-                    Err(worlddb_ode_engine::EngineError::Schema(_)) => Response::Error {
-                        code: "schema_rejected".to_owned(),
-                    },
-                    Err(_) => Response::Error {
-                        code: "engine_failed".to_owned(),
-                    },
-                };
+            Request::Schema {
+                operation_id,
+                command,
+            } => {
+                let response =
+                    match with_request_operation_id(operation_id, || engine.schema(command)) {
+                        Ok(Ok(result)) => Response::Schema { result },
+                        Ok(Err(worlddb_ode_engine::EngineError::Schema(_))) => Response::Error {
+                            code: "schema_rejected".to_owned(),
+                        },
+                        Ok(Err(_)) => Response::Error {
+                            code: "engine_failed".to_owned(),
+                        },
+                        Err(()) => Response::Error {
+                            code: "invalid_operation_id".to_owned(),
+                        },
+                    };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::Entities { command } => {
-                let response = match engine.entities(command) {
-                    Ok(result) => Response::Entities { result },
-                    Err(worlddb_ode_engine::EngineError::Entity(_)) => Response::Error {
-                        code: "entity_rejected".to_owned(),
-                    },
-                    Err(_) => Response::Error {
-                        code: "engine_failed".to_owned(),
-                    },
-                };
+            Request::Entities {
+                operation_id,
+                command,
+            } => {
+                let response =
+                    match with_request_operation_id(operation_id, || engine.entities(command)) {
+                        Ok(Ok(result)) => Response::Entities { result },
+                        Ok(Err(worlddb_ode_engine::EngineError::Entity(_))) => Response::Error {
+                            code: "entity_rejected".to_owned(),
+                        },
+                        Ok(Err(_)) => Response::Error {
+                            code: "engine_failed".to_owned(),
+                        },
+                        Err(()) => Response::Error {
+                            code: "invalid_operation_id".to_owned(),
+                        },
+                    };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::BranchLayers { command } => {
-                let response = match engine.branch_layers(command) {
-                    Ok(result) => Response::BranchLayers { result },
-                    Err(worlddb_ode_engine::EngineError::BranchLayer(_)) => Response::Error {
-                        code: "branch_layer_rejected".to_owned(),
-                    },
-                    Err(_) => Response::Error {
-                        code: "engine_failed".to_owned(),
-                    },
-                };
+            Request::BranchLayers {
+                operation_id,
+                command,
+            } => {
+                let response =
+                    match with_request_operation_id(operation_id, || engine.branch_layers(command))
+                    {
+                        Ok(Ok(result)) => Response::BranchLayers { result },
+                        Ok(Err(worlddb_ode_engine::EngineError::BranchLayer(_))) => {
+                            Response::Error {
+                                code: "branch_layer_rejected".to_owned(),
+                            }
+                        }
+                        Ok(Err(_)) => Response::Error {
+                            code: "engine_failed".to_owned(),
+                        },
+                        Err(()) => Response::Error {
+                            code: "invalid_operation_id".to_owned(),
+                        },
+                    };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::HistorySpaceTransfer { command } => {
-                let response = match engine.history_space_transfer(command) {
-                    Ok(result) => Response::HistorySpaceTransfer { result },
-                    Err(worlddb_ode_engine::EngineError::HistorySpaceTransfer(_)) => {
+            Request::HistorySpaceTransfer {
+                operation_id,
+                command,
+            } => {
+                let response = match with_request_operation_id(operation_id, || {
+                    engine.history_space_transfer(command)
+                }) {
+                    Ok(Ok(result)) => Response::HistorySpaceTransfer { result },
+                    Ok(Err(worlddb_ode_engine::EngineError::HistorySpaceTransfer(_))) => {
                         Response::Error {
                             code: "history_space_transfer_rejected".to_owned(),
                         }
                     }
-                    Err(_) => Response::Error {
+                    Ok(Err(_)) => Response::Error {
                         code: "engine_failed".to_owned(),
+                    },
+                    Err(()) => Response::Error {
+                        code: "invalid_operation_id".to_owned(),
                     },
                 };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::Facts { command } => {
-                let response = match engine.facts(*command) {
-                    Ok(result) => Response::Facts {
-                        result: Box::new(result),
-                    },
-                    Err(worlddb_ode_engine::EngineError::Fact(_)) => Response::Error {
-                        code: "facts_rejected".to_owned(),
-                    },
-                    Err(_) => Response::Error {
-                        code: "engine_failed".to_owned(),
-                    },
-                };
+            Request::Facts {
+                operation_id,
+                command,
+            } => {
+                let response =
+                    match with_request_operation_id(operation_id, || engine.facts(*command)) {
+                        Ok(Ok(result)) => Response::Facts {
+                            result: Box::new(result),
+                        },
+                        Ok(Err(worlddb_ode_engine::EngineError::Fact(_))) => Response::Error {
+                            code: "facts_rejected".to_owned(),
+                        },
+                        Ok(Err(_)) => Response::Error {
+                            code: "engine_failed".to_owned(),
+                        },
+                        Err(()) => Response::Error {
+                            code: "invalid_operation_id".to_owned(),
+                        },
+                    };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::Perspectives { command } => {
-                let response = match engine.perspectives(command) {
-                    Ok(result) => Response::Perspectives { result },
-                    Err(worlddb_ode_engine::EngineError::Perspective(_)) => Response::Error {
+            Request::Perspectives {
+                operation_id,
+                command,
+            } => {
+                let response = match with_request_operation_id(operation_id, || {
+                    engine.perspectives(command)
+                }) {
+                    Ok(Ok(result)) => Response::Perspectives { result },
+                    Ok(Err(worlddb_ode_engine::EngineError::Perspective(_))) => Response::Error {
                         code: "perspective_rejected".to_owned(),
                     },
-                    Err(_) => Response::Error {
+                    Ok(Err(_)) => Response::Error {
                         code: "engine_failed".to_owned(),
+                    },
+                    Err(()) => Response::Error {
+                        code: "invalid_operation_id".to_owned(),
                     },
                 };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
             }
-            Request::SecurityPolicy { command } => {
-                let response = match engine.security_policy(command) {
-                    Ok(result) => Response::SecurityPolicy { result },
-                    Err(worlddb_ode_engine::EngineError::SecurityPolicy(_)) => Response::Error {
-                        code: "security_policy_rejected".to_owned(),
-                    },
-                    Err(_) => Response::Error {
+            Request::SecurityPolicy {
+                operation_id,
+                command,
+            } => {
+                let response = match with_request_operation_id(operation_id, || {
+                    engine.security_policy(command)
+                }) {
+                    Ok(Ok(result)) => Response::SecurityPolicy { result },
+                    Ok(Err(worlddb_ode_engine::EngineError::SecurityPolicy(_))) => {
+                        Response::Error {
+                            code: "security_policy_rejected".to_owned(),
+                        }
+                    }
+                    Ok(Err(_)) => Response::Error {
                         code: "engine_failed".to_owned(),
+                    },
+                    Err(()) => Response::Error {
+                        code: "invalid_operation_id".to_owned(),
                     },
                 };
                 if write_response(&response).is_err() {
@@ -263,6 +322,19 @@ fn main() {
                 return;
             }
         }
+    }
+}
+
+fn with_request_operation_id<T>(
+    operation_id: Option<String>,
+    operation: impl FnOnce() -> T,
+) -> Result<T, ()> {
+    match operation_id {
+        Some(value) => {
+            let operation_id = OperationId::from_str(&value).map_err(|_| ())?;
+            Ok(with_operation_id(operation_id, operation))
+        }
+        None => Ok(operation()),
     }
 }
 

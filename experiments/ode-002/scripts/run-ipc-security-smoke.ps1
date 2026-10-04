@@ -208,8 +208,16 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
         if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
             $operations = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $rejected = @($operations | Where-Object { -not $_.succeeded })
-            if ($rejected.Count -gt 0) {
-                throw "A factual-record or resolution-preview IPC call was rejected: $($rejected | ConvertTo-Json -Compress -Depth 5)"
+            $failedAssertions = @($rejected | Where-Object { $_.operation -eq 'create_assertion' })
+            $nonAssertionRejections = @($rejected | Where-Object { $_.operation -ne 'create_assertion' })
+            $expectedCommitConflict = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:commit-conflict:confirmed'
+            }).Count -gt 0
+            $unknownCommitResolved = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:unknown-commit:resolved'
+            }).Count -gt 0
+            if ($nonAssertionRejections.Count -gt 0 -or $failedAssertions.Count -gt 1) {
+                throw "An unexpected factual-record or resolution-preview IPC call was rejected: $($rejected | ConvertTo-Json -Compress -Depth 5)"
             }
             $assertions = @($operations | Where-Object { $_.operation -eq 'create_assertion' -and $_.succeeded }).Count
             $masks = @($operations | Where-Object { $_.operation -eq 'create_mask' -and $_.succeeded })
@@ -283,7 +291,8 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $existsQueries -ge 1 -and $groupedCountQueries -ge 1 -and
                 $historicalSchemaQueries -ge 1 -and $currentSchemaQueries -ge 1 -and
                 $explicitSchemaQueries -ge 1 -and $olderRecordedAsOfQueries -ge 1 -and
-                $hasExact -and $hasProposition -and $hasSlot
+                $hasExact -and $hasProposition -and $hasSlot -and
+                $failedAssertions.Count -eq 1 -and $expectedCommitConflict -and $unknownCommitResolved
             ) {
                 return
             }
@@ -306,6 +315,7 @@ try {
     $env:WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_FACTS_SMOKE_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_UNKNOWN_COMMIT_OPERATION_ID = '00000000-0000-7000-8000-000000000041'
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
     $env:WORLDDB_ODE_AUTOCLOSE_MS = [string][Math]::Max(300000, ($FactsTimeoutSeconds + 120) * 1000)
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
@@ -536,6 +546,8 @@ try {
         transactional_branch_layer_creation_and_base_switch = 'PASS'
         current_and_historical_branch_layer_reads = 'PASS'
         stale_branch_write_rejected_without_publication = 'PASS'
+        stale_commit_conflict_rejected_without_publication = 'PASS'
+        unknown_commit_outcome_reconciled_by_operation_id = 'PASS'
         secondary_window_branch_layer_read = 'PASS'
         authenticated_history_space_transfer_catalog = 'PASS'
         authenticated_perspective_catalog_and_contexts = 'PASS'
@@ -569,7 +581,7 @@ try {
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT', 'WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT', 'WORLDDB_ODE_FACTS_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT', 'WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT', 'WORLDDB_ODE_FACTS_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID', 'WORLDDB_ODE_UNKNOWN_COMMIT_OPERATION_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {

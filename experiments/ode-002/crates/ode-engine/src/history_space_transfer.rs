@@ -117,6 +117,7 @@ pub struct TransferPreviewView {
 /// Receipt for a durable, audited transfer publication.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TransferPublishedView {
+    pub operation_id: String,
     pub revision: u64,
     pub copied_record_count: usize,
     pub copied_relation_count: usize,
@@ -350,17 +351,20 @@ pub(super) fn execute(
             let receipt = manager
                 .commit(
                     &pending.plan,
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|_| {
-                            EngineError::HistorySpaceTransfer(
-                                "operation identity is unavailable".to_owned(),
-                            )
-                        })?,
+                    crate::requested_operation_id_or(
+                        worlddb_core::storage_internal::generate_schema_management_operation_id,
+                    )
+                    .map_err(|_| {
+                        EngineError::HistorySpaceTransfer(
+                            "operation identity is unavailable".to_owned(),
+                        )
+                    })?,
                     acknowledge_lifecycle_omissions,
                 )
                 .map_err(transfer_error)?;
             Ok(HistorySpaceTransferResponse::Published(
                 TransferPublishedView {
+                    operation_id: receipt.operation_id().to_string(),
                     revision: receipt.revision().value(),
                     copied_record_count: record_count,
                     copied_relation_count: relation_count,
@@ -558,12 +562,16 @@ mod tests {
             return Err("transfer preview command wire shape changed".to_owned());
         }
         let response = HistorySpaceTransferResponse::Published(super::TransferPublishedView {
+            operation_id: "00000000-0000-7000-8000-000000000001".to_owned(),
             revision: 9,
             copied_record_count: 2,
             copied_relation_count: 0,
         });
         let encoded = serde_json::to_value(response).map_err(|error| error.to_string())?;
-        if encoded["kind"] != "published" || encoded["revision"] != 9 {
+        if encoded["kind"] != "published"
+            || encoded["operation_id"] != "00000000-0000-7000-8000-000000000001"
+            || encoded["revision"] != 9
+        {
             return Err("transfer publication response wire shape changed".to_owned());
         }
         Ok(())

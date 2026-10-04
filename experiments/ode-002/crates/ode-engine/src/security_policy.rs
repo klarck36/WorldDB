@@ -480,9 +480,10 @@ fn publication_view(
 }
 
 fn operation_id() -> Result<worlddb_core::OperationId, crate::EngineError> {
-    worlddb_core::storage_internal::generate_security_policy_operation_id().map_err(|_| {
-        crate::EngineError::SecurityPolicy("operation identity is unavailable".to_owned())
-    })
+    crate::requested_operation_id_or(
+        worlddb_core::storage_internal::generate_security_policy_operation_id,
+    )
+    .map_err(|_| crate::EngineError::SecurityPolicy("operation identity is unavailable".to_owned()))
 }
 
 fn parse_id<T: worlddb_core::DomainId + FromStr>(value: &str) -> Result<T, crate::EngineError> {

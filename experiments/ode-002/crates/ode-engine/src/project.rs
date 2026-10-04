@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use worlddb_core::{
     AuditAction, AuditCommitContext, AuditObjectClass, AuditOutcome, AuditPolicyFingerprint,
     AuditRecord, AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, Capability,
-    HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId, LayerSchemaSnapshot,
-    Lifecycle, PolicyBundle, PolicyScope, PolicyTarget, Principal, PrincipalId, Record, Revision,
-    RoleAssignment, RoleDefinition, SchemaRevision, SecurityEpoch, SecurityPolicyChange,
-    SecurityPolicyRecord, SecurityPolicySnapshot, SecurityPolicyVersion, Symbol,
+    DatabaseId, HistorySpaceDefinition, HistorySpaceId, LayerDefinition, LayerId,
+    LayerSchemaSnapshot, Lifecycle, OperationId, PolicyBundle, PolicyScope, PolicyTarget,
+    Principal, PrincipalId, Record, Revision, RoleAssignment, RoleDefinition, SchemaRevision,
+    SecurityEpoch, SecurityPolicyChange, SecurityPolicyRecord, SecurityPolicySnapshot,
+    SecurityPolicyVersion, Symbol,
 };
 use worlddb_storage_file::{
     DatabaseLayout, HistorySegmentStore, ManifestSegmentKind, ManifestSegmentReference,
@@ -26,7 +27,10 @@ pub enum ProjectError {
     RecoveryRequired,
     UnsupportedIdentity,
     HostUnavailable,
-    UnknownCommitOutcome,
+    UnknownCommitOutcome {
+        operation_id: OperationId,
+        database_id: Option<DatabaseId>,
+    },
 }
 
 impl fmt::Display for ProjectError {
@@ -39,7 +43,7 @@ impl fmt::Display for ProjectError {
             Self::RecoveryRequired => "project needs recovery and was not opened",
             Self::UnsupportedIdentity => "host account identity is unavailable",
             Self::HostUnavailable => "project storage is unavailable",
-            Self::UnknownCommitOutcome => "project creation outcome needs recovery",
+            Self::UnknownCommitOutcome { .. } => "project creation outcome needs recovery",
         })
     }
 }
@@ -90,7 +94,23 @@ pub fn create_project(
     root: impl AsRef<Path>,
     creator: PrincipalId,
 ) -> Result<ProjectAccess, ProjectError> {
-    let requested_root = root.as_ref();
+    create_project_inner(root.as_ref(), creator, None)
+}
+
+/// Creates a project using the caller's retry-stable bootstrap OperationId.
+pub fn create_project_with_operation_id(
+    root: impl AsRef<Path>,
+    creator: PrincipalId,
+    operation_id: OperationId,
+) -> Result<ProjectAccess, ProjectError> {
+    create_project_inner(root.as_ref(), creator, Some(operation_id))
+}
+
+fn create_project_inner(
+    requested_root: &Path,
+    creator: PrincipalId,
+    requested_operation_id: Option<OperationId>,
+) -> Result<ProjectAccess, ProjectError> {
     if requested_root.exists() {
         return Err(ProjectError::AlreadyExists);
     }
@@ -122,7 +142,8 @@ pub fn create_project(
         return Err(ProjectError::RecoveryRequired);
     }
 
-    let bootstrap = build_bootstrap(creator)?;
+    let bootstrap = build_bootstrap(creator, requested_operation_id)?;
+    let database_id = layout.database_id();
     let policy_store = SecurityPolicyHistoryStore::new(layout.clone());
     let genesis = SecurityPolicyVersion::new(
         Revision::GENESIS,
@@ -181,16 +202,25 @@ pub fn create_project(
             }
             Ok(WalOperationStatus::Committed(_)) => {}
             Ok(WalOperationStatus::Indeterminate) | Err(_) => {
-                return Err(ProjectError::UnknownCommitOutcome);
+                return Err(ProjectError::UnknownCommitOutcome {
+                    operation_id: bootstrap.operation_id,
+                    database_id,
+                });
             }
         }
     }
 
     let recovered = RecoveryManager::new(layout.clone())
         .recover(&lock)
-        .map_err(|_| ProjectError::UnknownCommitOutcome)?;
+        .map_err(|_| ProjectError::UnknownCommitOutcome {
+            operation_id: bootstrap.operation_id,
+            database_id,
+        })?;
     if !recovered.report().is_clean() {
-        return Err(ProjectError::RecoveryRequired);
+        return Err(ProjectError::UnknownCommitOutcome {
+            operation_id: bootstrap.operation_id,
+            database_id,
+        });
     }
     drop(lock);
     open_project(layout.root(), creator)
@@ -274,7 +304,10 @@ struct ProjectBootstrap {
     metadata_records: Vec<Record>,
 }
 
-fn build_bootstrap(creator: PrincipalId) -> Result<ProjectBootstrap, ProjectError> {
+fn build_bootstrap(
+    creator: PrincipalId,
+    requested_operation_id: Option<OperationId>,
+) -> Result<ProjectBootstrap, ProjectError> {
     use worlddb_core::storage_internal::generate_project_bootstrap_id as generate;
 
     let gm_id = generate::<worlddb_core::RoleId>().map_err(|_| ProjectError::HostUnavailable)?;
@@ -356,8 +389,12 @@ fn build_bootstrap(creator: PrincipalId) -> Result<ProjectBootstrap, ProjectErro
     )
     .map_err(|_| ProjectError::HostUnavailable)?;
     let version = SecurityPolicyVersion::new(revision, epoch, candidate);
-    let operation_id =
-        generate::<worlddb_core::OperationId>().map_err(|_| ProjectError::HostUnavailable)?;
+    let operation_id = match requested_operation_id {
+        Some(operation_id) => operation_id,
+        None => {
+            generate::<worlddb_core::OperationId>().map_err(|_| ProjectError::HostUnavailable)?
+        }
+    };
     let audit_record = AuditRecord::new(
         AuditRecordIdentity {
             record_id: generate::<worlddb_core::AuditRecordId>()
@@ -441,10 +478,11 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use worlddb_core::{
-        Capability, PolicyTarget, PrincipalId, Revision, SchemaMode, SchemaRevision,
+        Capability, OperationId, PolicyTarget, PrincipalId, Revision, SchemaMode, SchemaRevision,
     };
+    use worlddb_storage_file::{DatabaseLayout, WalOperationStatus, WalPrepareLog};
 
-    use super::{ProjectError, create_project, open_project};
+    use super::{ProjectError, create_project, create_project_with_operation_id, open_project};
     use crate::EngineHost;
 
     static NEXT_PROJECT: AtomicU64 = AtomicU64::new(0);
@@ -502,6 +540,29 @@ mod tests {
         ));
         drop(verified);
         let _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_uses_the_callers_operation_id_for_its_durable_commit() -> Result<(), String> {
+        let root = root();
+        let creator = principal(31)?;
+        let operation_id =
+            worlddb_core::storage_internal::generate_project_bootstrap_id::<OperationId>()
+                .map_err(|error| error.to_string())?;
+        create_project_with_operation_id(&root, creator, operation_id)
+            .map_err(|error| error.to_string())?;
+
+        let layout = DatabaseLayout::open(&root).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let status = WalPrepareLog::new(&layout)
+            .operation_status(&lock, operation_id)
+            .map_err(|error| error.to_string())?;
+        assert!(matches!(status, WalOperationStatus::Committed(_)));
+        drop(lock);
+        std::fs::remove_dir_all(root).map_err(|error| error.to_string())?;
         Ok(())
     }
 

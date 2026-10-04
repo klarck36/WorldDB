@@ -1,14 +1,17 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use worlddb_core::{CursorStateStore, CursorStoreLimits, PrincipalId, QueryHash};
+use worlddb_core::{CursorStateStore, CursorStoreLimits, OperationId, PrincipalId, QueryHash};
 use worlddb_storage_file::{DatabaseLayout, FactTokenSearchSession, WriterLock};
 
 mod project;
-pub use project::{ProjectAccess, ProjectError, create_project, open_project};
+pub use project::{
+    ProjectAccess, ProjectError, create_project, create_project_with_operation_id, open_project,
+};
 mod entity;
 pub use entity::{
     EntityCommand, EntityModeInput, EntityPublicationView, EntityResponse, EntitySnapshotView,
@@ -40,18 +43,19 @@ mod facts;
 pub use facts::{
     AssertionCorrectionView, AssertionDraftInput, EventAttributeInput, EventCorrectionView,
     EventDraftInput, EventGraphConflictView, EventParticipantInput, EventRelationKindInput,
-    EventTimeInput, FactCatalogRecordView, FactCatalogView, FactCommand, FactContextInput,
-    FactGraphCyclePolicyInput, FactGraphDirectionInput, FactGraphInput, FactGraphRelationshipInput,
-    FactGraphRootFamilyInput, FactLifecycleActionInput, FactLifecycleView, FactOperationStatusKind,
-    FactOperationStatusView, FactPublicationView, FactQueryAggregateResultView,
-    FactQueryBudgetView, FactQueryExplainStageView, FactQueryGraphEdgeView,
-    FactQueryHistoryDetailView, FactQueryHistoryRecordView, FactQueryMaskSelectorView,
-    FactQueryModeInput, FactQueryPolarityGroupView, FactQueryRecordContextView,
-    FactQueryRecordRefView, FactQueryResultView, FactQuerySchemaModeInput, FactQuerySearchHitView,
-    FactQueryValidityView, FactQueryView, FactResponse, FactSearchMatchInput, FactTargetInput,
-    FactValueInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
-    ResolutionOutcomeView, ResolutionPreviewView, ResolutionResultView, ResolutionSliceView,
-    ResolutionValueView, ValidityInput, WorldTimeSelectorInput,
+    EventTimeInput, FactCatalogRecordView, FactCatalogView, FactCommand, FactConflictFactView,
+    FactConflictReportView, FactContextInput, FactGraphCyclePolicyInput, FactGraphDirectionInput,
+    FactGraphInput, FactGraphRelationshipInput, FactGraphRootFamilyInput, FactLifecycleActionInput,
+    FactLifecycleView, FactOperationStatusKind, FactOperationStatusView, FactPublicationView,
+    FactQueryAggregateResultView, FactQueryBudgetView, FactQueryExplainStageView,
+    FactQueryGraphEdgeView, FactQueryHistoryDetailView, FactQueryHistoryRecordView,
+    FactQueryMaskSelectorView, FactQueryModeInput, FactQueryPolarityGroupView,
+    FactQueryRecordContextView, FactQueryRecordRefView, FactQueryResultView,
+    FactQuerySchemaModeInput, FactQuerySearchHitView, FactQueryValidityView, FactQueryView,
+    FactResponse, FactSearchMatchInput, FactTargetInput, FactValueInput, MaskSelectorInput,
+    PolarityInput, ResolutionConflictView, ResolutionOutcomeView, ResolutionPreviewView,
+    ResolutionResultView, ResolutionSliceView, ResolutionValueView, ValidityInput,
+    WorldTimeSelectorInput,
 };
 mod schema;
 pub use schema::{
@@ -67,6 +71,36 @@ pub const MAX_STREAM_CHUNK_BYTES: u32 = 1024 * 1024;
 const MAX_ACTIVE_STREAMS: usize = 16;
 const STREAM_LIFETIME: Duration = Duration::from_secs(5 * 60);
 pub const ENGINE_BUILD_ID: &str = env!("WORLDDB_ODE_ENGINE_BUILD_ID");
+
+thread_local! {
+    static REQUESTED_OPERATION_ID: Cell<Option<OperationId>> = const { Cell::new(None) };
+}
+
+/// Runs one synchronous engine operation with the caller's durable OperationId.
+/// The scope is thread-local so concurrent windows cannot exchange identities.
+pub fn with_operation_id<T>(operation_id: OperationId, operation: impl FnOnce() -> T) -> T {
+    struct RestoreOperationId(Option<OperationId>);
+
+    impl Drop for RestoreOperationId {
+        fn drop(&mut self) {
+            REQUESTED_OPERATION_ID.with(|current| current.set(self.0));
+        }
+    }
+
+    let previous = REQUESTED_OPERATION_ID.with(|current| current.replace(Some(operation_id)));
+    let _restore = RestoreOperationId(previous);
+    operation()
+}
+
+pub(crate) fn requested_operation_id_or<E>(
+    generate: impl FnOnce() -> Result<OperationId, E>,
+) -> Result<OperationId, E> {
+    requested_operation_id().map_or_else(generate, Ok)
+}
+
+pub(crate) fn requested_operation_id() -> Option<OperationId> {
+    REQUESTED_OPERATION_ID.with(Cell::get)
+}
 
 /// Derives the project Principal from authenticated host-account identity bytes.
 /// Callers must obtain these bytes from the operating-system process token.
@@ -126,24 +160,38 @@ pub enum Request {
         cancelled: bool,
     },
     Schema {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: SchemaCommand,
     },
     BranchLayers {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: BranchLayerCommand,
     },
     Entities {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: EntityCommand,
     },
     Perspectives {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: PerspectiveCommand,
     },
     SecurityPolicy {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: SecurityPolicyCommand,
     },
     HistorySpaceTransfer {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: HistorySpaceTransferCommand,
     },
     Facts {
+        #[serde(default)]
+        operation_id: Option<String>,
         command: Box<FactCommand>,
     },
     Panic,
@@ -547,9 +595,33 @@ pub fn stream_response(report: StreamReport) -> Response {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{StreamConsumer, StreamPlan, fill_deterministic_chunk};
+    use super::{
+        OperationId, StreamConsumer, StreamPlan, fill_deterministic_chunk,
+        requested_operation_id_or, with_operation_id,
+    };
 
     static NEXT_TEST_DATABASE: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn client_operation_id_is_scoped_to_one_synchronous_engine_call() {
+        let requested = "00000000-0000-7000-8000-000000000001"
+            .parse::<OperationId>()
+            .expect("canonical OperationId");
+        let generated = "00000000-0000-7000-8000-000000000002"
+            .parse::<OperationId>()
+            .expect("canonical OperationId");
+
+        let used = with_operation_id(requested, || {
+            requested_operation_id_or(|| Ok::<_, std::convert::Infallible>(generated))
+                .expect("requested identity")
+        });
+        assert_eq!(used, requested);
+
+        let outside_scope =
+            requested_operation_id_or(|| Ok::<_, std::convert::Infallible>(generated))
+                .expect("fallback identity");
+        assert_eq!(outside_scope, generated);
+    }
 
     #[test]
     fn full_stream_digest_is_deterministic_across_chunk_boundaries() {

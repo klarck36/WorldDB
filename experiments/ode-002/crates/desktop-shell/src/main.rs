@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -33,7 +34,7 @@ use transfer::{
     FinishTransferRequestV1, IPC_PROTOCOL_VERSION, MAX_TRANSFER_CHUNK_BYTES, TransferCompletionV1,
     TransferError, TransferManager,
 };
-use worlddb_core::PrincipalId;
+use worlddb_core::{OperationId, PrincipalId};
 use worlddb_ode_engine::ProjectError;
 
 #[cfg(feature = "sidecar")]
@@ -188,6 +189,14 @@ fn env_enabled(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| value == "1")
 }
 
+fn injected_unknown_commit_response(operation_id: Option<OperationId>) -> Option<OperationId> {
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return None;
+    }
+    let requested = std::env::var("WORLDDB_ODE_UNKNOWN_COMMIT_OPERATION_ID").ok()?;
+    operation_id.filter(|operation_id| operation_id.to_string() == requested)
+}
+
 #[tauri::command]
 fn open_host_session(
     window: tauri::WebviewWindow,
@@ -216,6 +225,10 @@ struct HealthResponseV1 {
 struct IpcErrorV1 {
     protocol_version: u16,
     code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -242,6 +255,8 @@ struct ProjectStatusV1 {
 struct CreateProjectRequestV1 {
     protocol_version: u16,
     project_name: String,
+    #[serde(default)]
+    operation_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -261,6 +276,8 @@ struct CloseProjectRequestV1 {
 struct SchemaRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: SchemaCommand,
 }
 
@@ -275,6 +292,8 @@ struct SchemaResponseV1 {
 struct EntityRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: EntityCommand,
 }
 
@@ -283,6 +302,8 @@ struct EntityRequestV1 {
 struct BranchLayerRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: BranchLayerCommand,
 }
 
@@ -291,6 +312,8 @@ struct BranchLayerRequestV1 {
 struct HistorySpaceTransferRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: HistorySpaceTransferCommand,
 }
 
@@ -299,6 +322,8 @@ struct HistorySpaceTransferRequestV1 {
 struct FactRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: FactCommand,
 }
 
@@ -307,6 +332,8 @@ struct FactRequestV1 {
 struct PerspectiveRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: PerspectiveCommand,
 }
 
@@ -315,6 +342,8 @@ struct PerspectiveRequestV1 {
 struct SecurityPolicyRequestV1 {
     protocol_version: u16,
     session_id: String,
+    #[serde(default)]
+    operation_id: Option<String>,
     command: SecurityPolicyCommand,
 }
 
@@ -365,8 +394,26 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code,
+            operation_id: None,
+            database_id: None,
         }
     }
+
+    fn unknown_commit(operation_id: OperationId, database_id: Option<String>) -> Self {
+        Self {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            code: "unknown_commit_outcome",
+            operation_id: Some(operation_id.to_string()),
+            database_id,
+        }
+    }
+}
+
+fn parse_client_operation_id(value: Option<&str>) -> Result<Option<OperationId>, IpcErrorV1> {
+    value
+        .map(OperationId::from_str)
+        .transpose()
+        .map_err(|_| IpcErrorV1::new("invalid_operation_id"))
 }
 
 #[tauri::command]
@@ -444,6 +491,8 @@ async fn create_project(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?
+        .ok_or_else(|| IpcErrorV1::new("invalid_operation_id"))?;
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectCreate)
         .map_err(map_session_error)?;
@@ -457,7 +506,7 @@ async fn create_project(
         parent.join(format!("{name}.worlddb"))
     };
     let status = backend
-        .create_project(window.label(), &root, principal_id)
+        .create_project(window.label(), &root, principal_id, operation_id)
         .map_err(map_project_error)?;
     let engine = backend
         .health()
@@ -541,8 +590,9 @@ fn manage_schema(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
-    match backend.schema(request.command) {
+    match backend.schema_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_schema_smoke(window.label(), operation, true, Some(&result))?;
             Ok(SchemaResponseV1 {
@@ -575,8 +625,9 @@ fn manage_entities(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = entity_smoke_operation(&request.command);
-    match backend.entities(request.command) {
+    match backend.entities_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_entity_smoke(window.label(), operation, true, Some(&result))?;
             if matches!(result, EntityResponse::Published(_)) {
@@ -612,8 +663,9 @@ fn manage_branch_layers(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = branch_layer_smoke_operation(&request.command);
-    match backend.branch_layers(request.command) {
+    match backend.branch_layers_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_branch_layer_smoke(window.label(), operation, true, Some(&result))?;
             if matches!(result, BranchLayerResponse::Published(_)) {
@@ -649,8 +701,9 @@ fn manage_history_space_transfer(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = history_space_transfer_smoke_operation(&request.command);
-    match backend.history_space_transfer(request.command) {
+    match backend.history_space_transfer_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_history_space_transfer_smoke(window.label(), operation, true, Some(&result))?;
             if matches!(result, HistorySpaceTransferResponse::Published(_)) {
@@ -686,6 +739,7 @@ fn manage_facts(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let is_write = !matches!(
         &request.command,
         FactCommand::Snapshot
@@ -695,7 +749,7 @@ fn manage_facts(
     );
     let operation = facts_smoke_operation(&request.command);
     let selector_kind = facts_smoke_selector_kind(&request.command);
-    match backend.facts(request.command) {
+    match backend.facts_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_facts_smoke(
                 window.label(),
@@ -706,6 +760,9 @@ fn manage_facts(
             )?;
             if is_write {
                 let _ = app.emit("project-state-changed", ());
+            }
+            if let Some(operation_id) = injected_unknown_commit_response(operation_id) {
+                return Err(IpcErrorV1::unknown_commit(operation_id, None));
             }
             Ok(FactResponseV1 {
                 protocol_version: IPC_PROTOCOL_VERSION,
@@ -791,8 +848,9 @@ fn manage_perspectives(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = perspective_smoke_operation(&request.command);
-    match backend.perspectives(request.command) {
+    match backend.perspectives_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_perspective_smoke(window.label(), operation, true, Some(&result))?;
             if matches!(result, PerspectiveResponse::Published(_)) {
@@ -828,9 +886,10 @@ fn manage_security_policy(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let is_write = !matches!(&request.command, SecurityPolicyCommand::Snapshot);
     let operation = security_policy_smoke_operation(&request.command);
-    let result = match backend.security_policy(request.command) {
+    let result = match backend.security_policy_with_operation_id(request.command, operation_id) {
         Ok(result) => {
             record_security_policy_smoke(window.label(), operation, true, Some(&result))?;
             result
@@ -1836,10 +1895,12 @@ fn chunk_metadata(headers: &tauri::http::HeaderMap) -> Result<ChunkMetadata<'_>,
 #[cfg(test)]
 mod ipc_security_tests {
     use super::{
-        CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, OpenProjectRequestV1,
-        chunk_metadata, validate_project_name,
+        CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, IpcErrorV1,
+        OpenProjectRequestV1, chunk_metadata, validate_project_name,
     };
+    use std::str::FromStr;
     use tauri::http::{HeaderMap, HeaderValue};
+    use worlddb_core::{DatabaseId, OperationId};
 
     fn valid_headers() -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -1913,6 +1974,19 @@ mod ipc_security_tests {
                 "accepted {invalid:?}"
             );
         }
+    }
+
+    #[test]
+    fn unknown_project_commit_returns_operation_and_database_identity() {
+        let operation_id = OperationId::from_str("00000000-0000-7000-8000-000000000031")
+            .expect("valid operation ID");
+        let database_id = DatabaseId::from_str("00000000-0000-7000-8000-000000000032")
+            .expect("valid database ID");
+        let error = IpcErrorV1::unknown_commit(operation_id, Some(database_id.to_string()));
+        let value = serde_json::to_value(error).expect("serializable project failure");
+        assert_eq!(value["code"], "unknown_commit_outcome");
+        assert_eq!(value["operation_id"], operation_id.to_string());
+        assert_eq!(value["database_id"], database_id.to_string());
     }
 }
 
@@ -2096,6 +2170,7 @@ impl Backend {
         window_label: &str,
         root: &Path,
         principal_id: PrincipalId,
+        operation_id: OperationId,
     ) -> Result<ProjectStatusV1, ProjectError> {
         let mut state = self
             .state
@@ -2104,26 +2179,48 @@ impl Backend {
         if state.project.is_some() || state.engine.is_some() {
             return Err(ProjectError::AlreadyOpen);
         }
-        let access = worlddb_ode_engine::create_project(root, principal_id)?;
+        let access =
+            worlddb_ode_engine::create_project_with_operation_id(root, principal_id, operation_id)?;
+        let database_id = access.database_id();
         let canonical_root = access.canonical_root().to_owned();
         #[cfg(feature = "in-process")]
         let engine = {
-            let (engine, opened) = EngineHost::open_authorized(&canonical_root, principal_id)?;
+            let (engine, opened) = EngineHost::open_authorized(&canonical_root, principal_id)
+                .map_err(|_| ProjectError::UnknownCommitOutcome {
+                    operation_id,
+                    database_id: Some(database_id),
+                })?;
             if opened.database_id() != access.database_id() {
-                return Err(ProjectError::InvalidProject);
+                return Err(ProjectError::UnknownCommitOutcome {
+                    operation_id,
+                    database_id: Some(database_id),
+                });
             }
             EngineBackend::InProcess(engine)
         };
         #[cfg(feature = "sidecar")]
         let engine = EngineBackend::Sidecar(Mutex::new(
-            Sidecar::start_for_project(&canonical_root)
-                .map_err(|_| ProjectError::HostUnavailable)?,
+            Sidecar::start_for_project(&canonical_root).map_err(|_| {
+                ProjectError::UnknownCommitOutcome {
+                    operation_id,
+                    database_id: Some(database_id),
+                }
+            })?,
         ));
         state.engine = Some(engine);
         state.project = Some(access);
         state.windows.clear();
-        attach_window_snapshot(&mut state, window_label)?;
+        attach_window_snapshot(&mut state, window_label).map_err(|_| {
+            ProjectError::UnknownCommitOutcome {
+                operation_id,
+                database_id: Some(database_id),
+            }
+        })?;
         self.project_status_locked(&mut state, window_label)
+            .map_err(|_| ProjectError::UnknownCommitOutcome {
+                operation_id,
+                database_id: Some(database_id),
+            })
     }
 
     fn open_project(
@@ -2185,38 +2282,60 @@ impl Backend {
         Ok(())
     }
 
-    fn schema(&self, command: SchemaCommand) -> Result<SchemaResponse, String> {
-        self.with_engine(|engine| engine.schema(command))
+    fn schema_with_operation_id(
+        &self,
+        command: SchemaCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<SchemaResponse, String> {
+        self.with_engine(|engine| engine.schema(command, operation_id))
     }
 
-    fn entities(&self, command: EntityCommand) -> Result<EntityResponse, String> {
-        self.with_engine(|engine| engine.entities(command))
+    fn entities_with_operation_id(
+        &self,
+        command: EntityCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<EntityResponse, String> {
+        self.with_engine(|engine| engine.entities(command, operation_id))
     }
 
-    fn branch_layers(&self, command: BranchLayerCommand) -> Result<BranchLayerResponse, String> {
-        self.with_engine(|engine| engine.branch_layers(command))
+    fn branch_layers_with_operation_id(
+        &self,
+        command: BranchLayerCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<BranchLayerResponse, String> {
+        self.with_engine(|engine| engine.branch_layers(command, operation_id))
     }
 
-    fn history_space_transfer(
+    fn history_space_transfer_with_operation_id(
         &self,
         command: HistorySpaceTransferCommand,
+        operation_id: Option<OperationId>,
     ) -> Result<HistorySpaceTransferResponse, String> {
-        self.with_engine(|engine| engine.history_space_transfer(command))
+        self.with_engine(|engine| engine.history_space_transfer(command, operation_id))
     }
 
-    fn facts(&self, command: FactCommand) -> Result<FactResponse, String> {
-        self.with_engine(|engine| engine.facts(command))
+    fn facts_with_operation_id(
+        &self,
+        command: FactCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<FactResponse, String> {
+        self.with_engine(|engine| engine.facts(command, operation_id))
     }
 
-    fn perspectives(&self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
-        self.with_engine(|engine| engine.perspectives(command))
+    fn perspectives_with_operation_id(
+        &self,
+        command: PerspectiveCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<PerspectiveResponse, String> {
+        self.with_engine(|engine| engine.perspectives(command, operation_id))
     }
 
-    fn security_policy(
+    fn security_policy_with_operation_id(
         &self,
         command: SecurityPolicyCommand,
+        operation_id: Option<OperationId>,
     ) -> Result<SecurityPolicyResponse, String> {
-        self.with_engine(|engine| engine.security_policy(command))
+        self.with_engine(|engine| engine.security_policy(command, operation_id))
     }
 
     fn project_status_locked(
@@ -2372,7 +2491,10 @@ fn map_project_error(error: worlddb_ode_engine::ProjectError) -> IpcErrorV1 {
         ProjectError::UnsupportedIdentity | ProjectError::HostUnavailable => {
             IpcErrorV1::new("host_unavailable")
         }
-        ProjectError::UnknownCommitOutcome => IpcErrorV1::new("unknown_commit_outcome"),
+        ProjectError::UnknownCommitOutcome {
+            operation_id,
+            database_id,
+        } => IpcErrorV1::unknown_commit(operation_id, database_id.map(|id| id.to_string())),
     }
 }
 
@@ -2387,107 +2509,185 @@ enum EngineBackend {
 }
 
 impl EngineBackend {
-    fn schema(&self, command: SchemaCommand) -> Result<SchemaResponse, String> {
+    fn schema(
+        &self,
+        command: SchemaCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<SchemaResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .schema(command)
-                .map_err(|_| "engine rejected schema operation".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.schema(command)
+                        })
+                    }
+                    None => engine.schema(command),
+                };
+                result.map_err(|_| "engine rejected schema operation".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .schema(command),
+                .schema(command, operation_id.map(|id| id.to_string())),
         }
     }
 
-    fn entities(&self, command: EntityCommand) -> Result<EntityResponse, String> {
+    fn entities(
+        &self,
+        command: EntityCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<EntityResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .entities(command)
-                .map_err(|_| "engine rejected Entity operation".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.entities(command)
+                        })
+                    }
+                    None => engine.entities(command),
+                };
+                result.map_err(|_| "engine rejected Entity operation".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .entities(command),
+                .entities(command, operation_id.map(|id| id.to_string())),
         }
     }
 
-    fn branch_layers(&self, command: BranchLayerCommand) -> Result<BranchLayerResponse, String> {
+    fn branch_layers(
+        &self,
+        command: BranchLayerCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<BranchLayerResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .branch_layers(command)
-                .map_err(|_| "engine rejected branch or Layer operation".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.branch_layers(command)
+                        })
+                    }
+                    None => engine.branch_layers(command),
+                };
+                result.map_err(|_| "engine rejected branch or Layer operation".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .branch_layers(command),
+                .branch_layers(command, operation_id.map(|id| id.to_string())),
         }
     }
 
     fn history_space_transfer(
         &self,
         command: HistorySpaceTransferCommand,
+        operation_id: Option<OperationId>,
     ) -> Result<HistorySpaceTransferResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .history_space_transfer(command)
-                .map_err(|_| "engine rejected HistorySpace transfer".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.history_space_transfer(command)
+                        })
+                    }
+                    None => engine.history_space_transfer(command),
+                };
+                result.map_err(|_| "engine rejected HistorySpace transfer".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .history_space_transfer(command),
+                .history_space_transfer(command, operation_id.map(|id| id.to_string())),
         }
     }
 
-    fn facts(&self, command: FactCommand) -> Result<FactResponse, String> {
+    fn facts(
+        &self,
+        command: FactCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<FactResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .facts(command)
-                .map_err(|error| format!("engine rejected factual-record operation: {error}")),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.facts(command)
+                        })
+                    }
+                    None => engine.facts(command),
+                };
+                result.map_err(|error| format!("engine rejected factual-record operation: {error}"))
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .facts(command),
+                .facts(command, operation_id.map(|id| id.to_string())),
         }
     }
 
-    fn perspectives(&self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
+    fn perspectives(
+        &self,
+        command: PerspectiveCommand,
+        operation_id: Option<OperationId>,
+    ) -> Result<PerspectiveResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .perspectives(command)
-                .map_err(|_| "engine rejected Perspective operation".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.perspectives(command)
+                        })
+                    }
+                    None => engine.perspectives(command),
+                };
+                result.map_err(|_| "engine rejected Perspective operation".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .perspectives(command),
+                .perspectives(command, operation_id.map(|id| id.to_string())),
         }
     }
 
     fn security_policy(
         &self,
         command: SecurityPolicyCommand,
+        operation_id: Option<OperationId>,
     ) -> Result<SecurityPolicyResponse, String> {
         match self {
             #[cfg(feature = "in-process")]
-            Self::InProcess(engine) => engine
-                .security_policy(command)
-                .map_err(|_| "engine rejected security policy operation".to_owned()),
+            Self::InProcess(engine) => {
+                let result = match operation_id {
+                    Some(operation_id) => {
+                        worlddb_ode_engine::with_operation_id(operation_id, || {
+                            engine.security_policy(command)
+                        })
+                    }
+                    None => engine.security_policy(command),
+                };
+                result.map_err(|_| "engine rejected security policy operation".to_owned())
+            }
             #[cfg(feature = "sidecar")]
             Self::Sidecar(engine) => engine
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
-                .security_policy(command),
+                .security_policy(command, operation_id.map(|id| id.to_string())),
         }
     }
 
@@ -2766,16 +2966,30 @@ impl Sidecar {
         self.request(Request::Health)
     }
 
-    fn schema(&mut self, command: SchemaCommand) -> Result<SchemaResponse, String> {
-        match self.request(Request::Schema { command })? {
+    fn schema(
+        &mut self,
+        command: SchemaCommand,
+        operation_id: Option<String>,
+    ) -> Result<SchemaResponse, String> {
+        match self.request(Request::Schema {
+            operation_id,
+            command,
+        })? {
             Response::Schema { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected schema operation".to_owned()),
             _ => Err("sidecar returned an unexpected schema response".to_owned()),
         }
     }
 
-    fn entities(&mut self, command: EntityCommand) -> Result<EntityResponse, String> {
-        match self.request(Request::Entities { command })? {
+    fn entities(
+        &mut self,
+        command: EntityCommand,
+        operation_id: Option<String>,
+    ) -> Result<EntityResponse, String> {
+        match self.request(Request::Entities {
+            operation_id,
+            command,
+        })? {
             Response::Entities { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected Entity operation".to_owned()),
             _ => Err("sidecar returned an unexpected Entity response".to_owned()),
@@ -2785,8 +2999,12 @@ impl Sidecar {
     fn branch_layers(
         &mut self,
         command: BranchLayerCommand,
+        operation_id: Option<String>,
     ) -> Result<BranchLayerResponse, String> {
-        match self.request(Request::BranchLayers { command })? {
+        match self.request(Request::BranchLayers {
+            operation_id,
+            command,
+        })? {
             Response::BranchLayers { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected branch or Layer operation".to_owned()),
             _ => Err("sidecar returned an unexpected branch/Layer response".to_owned()),
@@ -2796,16 +3014,25 @@ impl Sidecar {
     fn history_space_transfer(
         &mut self,
         command: HistorySpaceTransferCommand,
+        operation_id: Option<String>,
     ) -> Result<HistorySpaceTransferResponse, String> {
-        match self.request(Request::HistorySpaceTransfer { command })? {
+        match self.request(Request::HistorySpaceTransfer {
+            operation_id,
+            command,
+        })? {
             Response::HistorySpaceTransfer { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected HistorySpace transfer".to_owned()),
             _ => Err("sidecar returned an unexpected transfer response".to_owned()),
         }
     }
 
-    fn facts(&mut self, command: FactCommand) -> Result<FactResponse, String> {
+    fn facts(
+        &mut self,
+        command: FactCommand,
+        operation_id: Option<String>,
+    ) -> Result<FactResponse, String> {
         match self.request(Request::Facts {
+            operation_id,
             command: Box::new(command),
         })? {
             Response::Facts { result } => Ok(*result),
@@ -2814,8 +3041,15 @@ impl Sidecar {
         }
     }
 
-    fn perspectives(&mut self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
-        match self.request(Request::Perspectives { command })? {
+    fn perspectives(
+        &mut self,
+        command: PerspectiveCommand,
+        operation_id: Option<String>,
+    ) -> Result<PerspectiveResponse, String> {
+        match self.request(Request::Perspectives {
+            operation_id,
+            command,
+        })? {
             Response::Perspectives { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected Perspective operation".to_owned()),
             _ => Err("sidecar returned an unexpected Perspective response".to_owned()),
@@ -2825,8 +3059,12 @@ impl Sidecar {
     fn security_policy(
         &mut self,
         command: SecurityPolicyCommand,
+        operation_id: Option<String>,
     ) -> Result<SecurityPolicyResponse, String> {
-        match self.request(Request::SecurityPolicy { command })? {
+        match self.request(Request::SecurityPolicy {
+            operation_id,
+            command,
+        })? {
             Response::SecurityPolicy { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected security policy operation".to_owned()),
             _ => Err("sidecar returned an unexpected security policy response".to_owned()),

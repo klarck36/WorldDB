@@ -409,9 +409,10 @@ impl EngineHost {
                     .next_revision()
                     .map_err(|error| EngineError::Schema(error.to_string()))?;
                 let record = build_schema_record(definition, target)?;
-                let operation_id =
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|error| EngineError::Schema(error.to_string()))?;
+                let operation_id = crate::requested_operation_id_or(
+                    worlddb_core::storage_internal::generate_schema_management_operation_id,
+                )
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
                 let receipt = manager
                     .publish(base, operation_id, vec![record])
                     .map_err(|error| EngineError::Schema(error.to_string()))?;
@@ -442,9 +443,10 @@ impl EngineHost {
                     .map_err(|error| EngineError::Schema(error.to_string()))?;
                 let record =
                     revise_schema_lifecycle(&snapshot, family, &identity, lifecycle, target)?;
-                let operation_id =
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|error| EngineError::Schema(error.to_string()))?;
+                let operation_id = crate::requested_operation_id_or(
+                    worlddb_core::storage_internal::generate_schema_management_operation_id,
+                )
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
                 let receipt = manager
                     .publish(base, operation_id, vec![record])
                     .map_err(|error| EngineError::Schema(error.to_string()))?;
@@ -497,9 +499,10 @@ impl EngineHost {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let operation_id =
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|error| EngineError::Schema(error.to_string()))?;
+                let operation_id = crate::requested_operation_id_or(
+                    worlddb_core::storage_internal::generate_schema_management_operation_id,
+                )
+                .map_err(|error| EngineError::Schema(error.to_string()))?;
                 let receipt = manager
                     .publish(base, operation_id, records)
                     .map_err(|error| EngineError::Schema(error.to_string()))?;
@@ -1380,9 +1383,16 @@ mod tests {
         assert_eq!(encoded["updates"][0]["family"], "entity_type");
         assert_eq!(encoded["updates"][0]["lifecycle"], "retired");
 
-        let request = Request::Schema { command: batch };
+        let request = Request::Schema {
+            operation_id: Some("00000000-0000-7000-8000-000000000001".to_owned()),
+            command: batch,
+        };
         let request_wire = serde_json::to_value(&request).expect("serialize sidecar request");
         assert_eq!(request_wire["operation"], "schema");
+        assert_eq!(
+            request_wire["operation_id"],
+            "00000000-0000-7000-8000-000000000001"
+        );
         let decoded_request: Request =
             serde_json::from_value(request_wire).expect("decode sidecar request");
         assert!(matches!(decoded_request, Request::Schema { .. }));

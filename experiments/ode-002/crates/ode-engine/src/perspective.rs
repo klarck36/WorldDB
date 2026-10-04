@@ -149,8 +149,10 @@ impl EngineHost {
                 let receipt = manager
                     .create_perspective(
                         revision_from_u64(expected_base_revision)?,
-                        worlddb_core::storage_internal::generate_schema_management_operation_id()
-                            .map_err(|_| {
+                        crate::requested_operation_id_or(
+                            worlddb_core::storage_internal::generate_schema_management_operation_id,
+                        )
+                        .map_err(|_| {
                             EngineError::Perspective("operation identity is unavailable".to_owned())
                         })?,
                         worlddb_core::storage_internal::generate_project_bootstrap_id::<
@@ -182,8 +184,10 @@ impl EngineHost {
                 let receipt = manager
                     .update_perspective(
                         revision_from_u64(expected_base_revision)?,
-                        worlddb_core::storage_internal::generate_schema_management_operation_id()
-                            .map_err(|_| {
+                        crate::requested_operation_id_or(
+                            worlddb_core::storage_internal::generate_schema_management_operation_id,
+                        )
+                        .map_err(|_| {
                             EngineError::Perspective("operation identity is unavailable".to_owned())
                         })?,
                         perspective_id,
@@ -206,8 +210,10 @@ impl EngineHost {
                 let receipt = manager
                     .retire_perspective(
                         revision_from_u64(expected_base_revision)?,
-                        worlddb_core::storage_internal::generate_schema_management_operation_id()
-                            .map_err(|_| {
+                        crate::requested_operation_id_or(
+                            worlddb_core::storage_internal::generate_schema_management_operation_id,
+                        )
+                        .map_err(|_| {
                             EngineError::Perspective("operation identity is unavailable".to_owned())
                         })?,
                         worlddb_core::storage_internal::generate_project_bootstrap_id::<

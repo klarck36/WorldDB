@@ -4,6 +4,7 @@ const windowStatus = document.querySelector("#window-role");
 const projectStatus = document.querySelector("#project-status");
 const projectDetails = document.querySelector("#project-details");
 const operationStatus = document.querySelector("#operation-status");
+const reconcileOperationsButton = document.querySelector("#reconcile-operations");
 const projectName = document.querySelector("#project-name");
 const createButton = document.querySelector("#create-project");
 const openButton = document.querySelector("#open-project");
@@ -311,6 +312,12 @@ const userMessages = {
 let sessionId;
 let projectOpen = false;
 let projectRevision = null;
+let currentDatabaseId = null;
+let pendingOperations = [];
+let operationReconciliationRunning = false;
+let operationJournalUnavailable = false;
+let projectCreationJournalUnavailable = false;
+const pendingProjectCreationPrefix = "worlddb.pending_project_creations.v1:";
 let projectBusy = false;
 let schemaBusy = false;
 let entityBusy = false;
@@ -333,6 +340,7 @@ let selectedBranchLayers = null;
 let branchLayerCurrentMode = true;
 let transferCatalog = null;
 let transferPreviewTicket = null;
+let transferPreviewBaseRevision = null;
 let factCatalog = null;
 let factCatalogRefreshPromise = null;
 let factCatalogRefreshQueued = false;
@@ -353,6 +361,27 @@ function errorCode(error) {
 
 function showError(error) {
   const code = errorCode(error);
+  if (code === "commit_conflict") {
+    const expected = error.expected_base_revision ?? "unbekannt";
+    const current = error.current_revision ?? "unbekannt";
+    return `Konfliktbericht: Die Projektbasis ist von Revision ${expected} auf ${current} fortgeschritten. Es wurde nichts gespeichert. Lade die aktuellen Daten und prüfe die Aktion erneut.`;
+  }
+  if (code === "commit_confirmed") {
+    return `Commit bestätigt · Operation ${error.operation_id} · Revision ${error.revision}. Lade die aktuellen Daten, um den gespeicherten Stand zu sehen.`;
+  }
+  if (code === "not_committed") {
+    return `WAL-Status bestätigt: Es wurde nichts gespeichert. ${error.detail ?? "Prüfe die Eingabe und versuche es erneut."}`;
+  }
+  if (code === "unresolved_operation") {
+    return "Eine vorherige Schreibaktion ist noch nicht geklärt. Prüfe zuerst ihren Status; neue Schreibaktionen bleiben bis dahin gesperrt.";
+  }
+  if (code === "pending_storage_unavailable") {
+    return "Der Schreibstatus kann auf diesem Gerät nicht dauerhaft vorgemerkt werden. Es wurde nichts gesendet.";
+  }
+  if (code === "unknown_commit_outcome") {
+    const operationId = error.operation_id ?? "(Operation-ID nicht zurückgegeben)";
+    return `Der Schreibstatus bleibt unklar. Operation ${operationId} bleibt vorgemerkt; öffne das betroffene Projekt, damit der WAL-Status abgeglichen wird.`;
+  }
   if (/cursor/i.test(code) && /(invalid|expir|session)/i.test(code)) {
     invalidateFactsSearch();
     return "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.";
@@ -360,13 +389,413 @@ function showError(error) {
   return userMessages[code] ?? userMessages[code.split(":").at(-1)] ?? "Die Aktion konnte nicht abgeschlossen werden.";
 }
 
+function operationStoragePrefix(databaseId = currentDatabaseId) {
+  return databaseId ? `worlddb.pending_operations.v1:${databaseId}:` : null;
+}
+
+function operationStorageKey(operationId, databaseId = currentDatabaseId) {
+  const prefix = operationStoragePrefix(databaseId);
+  return prefix && operationId ? `${prefix}${operationId}` : null;
+}
+
+function pendingProjectCreationKey(operationId) {
+  return operationId ? `${pendingProjectCreationPrefix}${operationId}` : null;
+}
+
+function loadPendingProjectCreations() {
+  const operations = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(pendingProjectCreationPrefix)) continue;
+      const operationId = key.slice(pendingProjectCreationPrefix.length);
+      const operation = JSON.parse(localStorage.getItem(key));
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)
+        || operation?.operation_id !== operationId
+        || operation.command !== "create_project"
+        || (operation.database_id !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operation.database_id))
+        || typeof operation.started_at !== "string") {
+        projectCreationJournalUnavailable = true;
+        return [];
+      }
+      operations.push(operation);
+    }
+  } catch {
+    projectCreationJournalUnavailable = true;
+    return [];
+  }
+  return operations.sort((left, right) => left.started_at.localeCompare(right.started_at));
+}
+
+function rememberPendingProjectCreation(operation) {
+  if (projectCreationJournalUnavailable) throw new Error("pending_storage_unavailable");
+  const key = pendingProjectCreationKey(operation.operation_id);
+  if (!key) throw new Error("pending_storage_unavailable");
+  try {
+    localStorage.setItem(key, JSON.stringify(operation));
+  } catch {
+    throw new Error("pending_storage_unavailable");
+  }
+}
+
+function forgetPendingProjectCreation(operationId) {
+  const key = pendingProjectCreationKey(operationId);
+  if (!key) throw new Error("pending_storage_unavailable");
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    projectCreationJournalUnavailable = true;
+    throw new Error("pending_storage_unavailable");
+  }
+}
+
+function loadPendingOperations(databaseId) {
+  const prefix = operationStoragePrefix(databaseId);
+  if (!prefix) return [];
+  try {
+    const operations = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(prefix)) continue;
+      const operationId = key.slice(prefix.length);
+      const operation = JSON.parse(localStorage.getItem(key));
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)
+        || operation?.operation_id !== operationId
+        || typeof operation.command !== "string"
+        || (operation.expected_base_revision !== null && !Number.isSafeInteger(operation.expected_base_revision))
+        || typeof operation.started_at !== "string") {
+        operationJournalUnavailable = true;
+        return [];
+      }
+      operations.push(operation);
+    }
+    return operations.sort((left, right) => left.started_at.localeCompare(right.started_at));
+  } catch {
+    operationJournalUnavailable = true;
+    return [];
+  }
+}
+
+function savePendingOperation(operation) {
+  const key = operationStorageKey(operation.operation_id);
+  if (!key) throw new Error("pending_storage_unavailable");
+  try {
+    localStorage.setItem(key, JSON.stringify(operation));
+  } catch {
+    throw new Error("pending_storage_unavailable");
+  }
+}
+
+function refreshPendingOperationsFromStorage() {
+  if (!currentDatabaseId) return;
+  pendingOperations = loadPendingOperations(currentDatabaseId);
+  reconcileOperationsButton.hidden = !hasUnresolvedOperation();
+  reconcileOperationsButton.disabled = operationReconciliationRunning || !projectOpen || operationJournalUnavailable;
+  updateSchemaControls();
+}
+
+function hasUnresolvedOperation() {
+  return operationJournalUnavailable || pendingOperations.length > 0;
+}
+
+function rememberPendingOperation(operation) {
+  if (operationJournalUnavailable) throw new Error("pending_storage_unavailable");
+  refreshPendingOperationsFromStorage();
+  if (hasUnresolvedOperation()) throw new Error("unresolved_operation");
+  savePendingOperation(operation);
+  refreshPendingOperationsFromStorage();
+}
+
+function forgetPendingOperation(operationId) {
+  const key = operationStorageKey(operationId);
+  if (!key) throw new Error("pending_storage_unavailable");
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    operationJournalUnavailable = true;
+    refreshPendingOperationsFromStorage();
+    throw new Error("pending_storage_unavailable");
+  }
+  refreshPendingOperationsFromStorage();
+}
+
+window.addEventListener("storage", (event) => {
+  if (event.key === null) {
+    operationJournalUnavailable = true;
+    projectCreationJournalUnavailable = true;
+    reconcileOperationsButton.hidden = false;
+    reconcileOperationsButton.disabled = true;
+    operationStatus.textContent = "Der lokale Schreibstatusspeicher wurde in einem anderen Fenster geleert. Schreibaktionen und neue Projektanlagen bleiben gesperrt.";
+    updateSchemaControls();
+    return;
+  }
+  if (event.key.startsWith(pendingProjectCreationPrefix)) {
+    loadPendingProjectCreations();
+    updateProjectControls();
+    if (projectOpen) {
+      void reconcilePendingProjectCreations().catch((error) => {
+        operationStatus.textContent = showError(error);
+      });
+    }
+    return;
+  }
+  const prefix = operationStoragePrefix();
+  if (!prefix) return;
+  if (!event.key.startsWith(prefix)) return;
+  const hadPendingOperations = pendingOperations.length > 0;
+  refreshPendingOperationsFromStorage();
+  if (operationJournalUnavailable) {
+    operationStatus.textContent = "Der vorgemerkte Schreibstatus kann nicht sicher gelesen werden. Schreibaktionen bleiben gesperrt.";
+  } else if (hadPendingOperations && pendingOperations.length === 0) {
+    operationStatus.textContent = "Der Status der ausstehenden Schreibaktion wurde in einem anderen Fenster geklärt.";
+  }
+});
+
+function expectedBaseRevision(command) {
+  return Number.isSafeInteger(command?.expected_base_revision) ? command.expected_base_revision : null;
+}
+
+function mutationCommand(ipcCommand, command) {
+  if (!command || typeof command.command !== "string") return false;
+  const writes = {
+    manage_schema: new Set(["create", "set_lifecycle", "set_lifecycle_batch"]),
+    manage_entities: new Set(["create", "retire"]),
+    manage_branch_layers: new Set(["create_child", "create_layer", "revise_layer"]),
+    manage_history_space_transfer: new Set(["commit"]),
+    manage_perspectives: new Set(["create", "update", "retire"]),
+    manage_security_policy: new Set([
+      "set_principal_state", "register_role", "assign_role", "revoke_role_assignment",
+      "add_capability_rule", "revoke_capability_rule",
+    ]),
+  };
+  if (ipcCommand === "manage_facts") {
+    return !["snapshot", "preview", "query", "commit_status"].includes(command.command);
+  }
+  return writes[ipcCommand]?.has(command.command) ?? false;
+}
+
+async function readOperationStatus(operation) {
+  const response = await invoke("manage_facts", {
+    request: {
+      protocol_version: 1,
+      session_id: sessionId,
+      command: {
+        command: "commit_status",
+        operation_id: operation.operation_id,
+        expected_base_revision: operation.expected_base_revision,
+      },
+    },
+  });
+  if (response.protocol_version !== 1 || response.result?.kind !== "operation_status") {
+    throw new Error("unsupported_protocol");
+  }
+  if (response.result.operation_id !== operation.operation_id
+    || !Number.isSafeInteger(response.result.current_revision)
+    || (response.result.status === "committed" && !Number.isSafeInteger(response.result.revision))) {
+    throw new Error("unsupported_protocol");
+  }
+  return response.result;
+}
+
+async function createProjectTracked(activeSessionId, projectName) {
+  const operation = {
+    operation_id: crypto.randomUUID(),
+    command: "create_project",
+    database_id: null,
+    expected_base_revision: null,
+    started_at: new Date().toISOString(),
+  };
+  rememberPendingProjectCreation(operation);
+  try {
+    const result = await invoke("create_project", {
+      sessionId: activeSessionId,
+      request: {
+        protocol_version: 1,
+        project_name: projectName,
+        operation_id: operation.operation_id,
+      },
+    });
+    forgetPendingProjectCreation(operation.operation_id);
+    return result;
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "unknown_commit_outcome") {
+      if (error?.operation_id && error.operation_id !== operation.operation_id) {
+        throw new Error("unsupported_protocol");
+      }
+      if (typeof error?.database_id === "string") {
+        rememberPendingProjectCreation({ ...operation, database_id: error.database_id });
+      }
+    } else if ([
+      "access_denied", "invalid_operation_id", "invalid_project", "invalid_request",
+      "project_already_exists", "project_already_open", "project_unavailable",
+      "selection_cancelled", "unsupported_protocol", "user_cancelled",
+    ].includes(code)) {
+      forgetPendingProjectCreation(operation.operation_id);
+    }
+    throw error;
+  }
+}
+
+async function reconcilePendingProjectCreations() {
+  if (!projectOpen || !currentDatabaseId || !sessionId) return;
+  const operations = loadPendingProjectCreations();
+  if (projectCreationJournalUnavailable) {
+    operationStatus.textContent = "Der Status einer möglichen Projektanlage kann nicht sicher gelesen werden. Neue Projektanlagen bleiben gesperrt.";
+    updateProjectControls();
+    return;
+  }
+  for (const operation of operations) {
+    if (operation.database_id && operation.database_id !== currentDatabaseId) continue;
+    let status;
+    try {
+      status = await readOperationStatus(operation);
+    } catch {
+      operationStatus.textContent = `Der Bootstrap-Status für Operation ${operation.operation_id} konnte in diesem Projekt nicht gelesen werden; der Eintrag bleibt vorgemerkt.`;
+      continue;
+    }
+    if (status.status === "committed") {
+      forgetPendingProjectCreation(operation.operation_id);
+      operationStatus.textContent = `Projektinitialisierung bestätigt · Operation ${operation.operation_id} · Revision ${status.revision}.`;
+    } else if (status.status === "indeterminate") {
+      savePendingOperation({
+        ...operation,
+        database_id: currentDatabaseId,
+      });
+      refreshPendingOperationsFromStorage();
+      forgetPendingProjectCreation(operation.operation_id);
+      operationStatus.textContent = `Bootstrap-Operation ${operation.operation_id} ist weiterhin ungeklärt. Schreibaktionen bleiben gesperrt.`;
+    } else if (operation.database_id === currentDatabaseId) {
+      forgetPendingProjectCreation(operation.operation_id);
+      operationStatus.textContent = `Bootstrap-Status bestätigt: Operation ${operation.operation_id} wurde nicht committed.`;
+    } else {
+      operationStatus.textContent = `Operation ${operation.operation_id} gehört nicht zu diesem Projekt; der Abgleich bleibt beim Öffnen des betroffenen Projekts vorgemerkt.`;
+    }
+  }
+  updateProjectControls();
+}
+
+function conflictError(status) {
+  const error = new Error("commit_conflict");
+  error.code = "commit_conflict";
+  error.expected_base_revision = status.expected_base_revision;
+  error.current_revision = status.current_revision;
+  return error;
+}
+
+async function reconcilePendingOperations() {
+  if (!projectOpen || !currentDatabaseId || !sessionId || operationReconciliationRunning) return;
+  if (!pendingOperations.length) {
+    reconcileOperationsButton.hidden = true;
+    return;
+  }
+  operationReconciliationRunning = true;
+  reconcileOperationsButton.disabled = true;
+  try {
+    for (const operation of [...pendingOperations]) {
+      const status = await readOperationStatus(operation);
+      if (status.status === "committed") {
+        forgetPendingOperation(operation.operation_id);
+        operationStatus.textContent = `Commit nach Projektöffnung bestätigt · Operation ${operation.operation_id} · Revision ${status.revision}.`;
+      } else if (status.status === "not_committed") {
+        forgetPendingOperation(operation.operation_id);
+        operationStatus.textContent = status.conflict_report?.facts?.includes("base_revision_advanced")
+          ? showError(conflictError(status))
+          : `WAL-Status nach Projektöffnung: Operation ${operation.operation_id} wurde nicht committed. Eine neue Aktion ist jetzt möglich.`;
+      } else {
+        operationStatus.textContent = `Operation ${operation.operation_id} ist weiterhin ungeklärt. Schreibaktionen bleiben gesperrt.`;
+      }
+    }
+  } catch (error) {
+    operationStatus.textContent = `Der WAL-Status konnte nicht gelesen werden. Vorgemerkte Schreibaktionen bleiben gesperrt. ${showError(error)}`;
+  } finally {
+    operationReconciliationRunning = false;
+    reconcileOperationsButton.hidden = pendingOperations.length === 0;
+    reconcileOperationsButton.disabled = pendingOperations.length === 0 || !projectOpen;
+    updateSchemaControls();
+  }
+}
+
+async function invokeManagedCommand(ipcCommand, command, activeSessionId, validateResponse, operationIdOverride = command?.operation_id) {
+  const write = mutationCommand(ipcCommand, command);
+  const send = async (operationId) => {
+    const response = await invoke(ipcCommand, {
+      request: {
+        protocol_version: 1,
+        session_id: activeSessionId,
+        ...(operationId ? { operation_id: operationId } : {}),
+        command,
+      },
+    });
+    if (!validateResponse(response)) throw new Error("unsupported_protocol");
+    return response.result;
+  };
+  if (!write) return send(null);
+  if (!projectOpen || !currentDatabaseId) throw new Error("project_unavailable");
+  if (hasUnresolvedOperation()) throw new Error("unresolved_operation");
+  const operationId = operationIdOverride ?? crypto.randomUUID();
+  const operation = {
+    operation_id: operationId,
+    command: command.command,
+    expected_base_revision: expectedBaseRevision(command)
+      ?? (ipcCommand === "manage_history_space_transfer" && command.command === "commit"
+        ? transferPreviewBaseRevision
+        : null),
+    started_at: new Date().toISOString(),
+  };
+  rememberPendingOperation(operation);
+  try {
+    const result = await send(operationId);
+    const receiptOperationId = result?.operation_id;
+    const noWriteConflict = ipcCommand === "manage_facts" && result?.kind === "event_graph_conflict";
+    if (write && !noWriteConflict && receiptOperationId !== operationId) {
+      throw new Error("unsupported_protocol");
+    }
+    if (receiptOperationId && receiptOperationId !== operationId) throw new Error("unsupported_protocol");
+    forgetPendingOperation(operationId);
+    return result;
+  } catch (writeError) {
+    let status;
+    try {
+      status = await readOperationStatus(operation);
+    } catch {
+      operationStatus.textContent = showError(Object.assign(new Error("unknown_commit_outcome"), { operation_id: operationId }));
+      throw Object.assign(new Error("unknown_commit_outcome"), { operation_id: operationId });
+    }
+    if (status.status === "committed") {
+      forgetPendingOperation(operationId);
+      const confirmed = Object.assign(new Error("commit_confirmed"), {
+        operation_id: operationId,
+        revision: status.revision,
+      });
+      operationStatus.textContent = showError(confirmed);
+      throw confirmed;
+    }
+    if (status.status === "not_committed") {
+      forgetPendingOperation(operationId);
+      if (status.conflict_report?.facts?.includes("base_revision_advanced")) {
+        const conflict = conflictError(status);
+        operationStatus.textContent = showError(conflict);
+        throw conflict;
+      }
+      const rejected = Object.assign(new Error("not_committed"), {
+        detail: showError(writeError),
+        write_error_code: errorCode(writeError),
+      });
+      throw rejected;
+    }
+    operationStatus.textContent = showError(Object.assign(new Error("unknown_commit_outcome"), { operation_id: operationId }));
+    throw Object.assign(new Error("unknown_commit_outcome"), { operation_id: operationId });
+  }
+}
+
 function updateSchemaControls() {
   const canRead = projectOpen && !schemaBusy && !projectBusy && !entityBusy && !perspectiveBusy && !securityPolicyBusy && !branchLayerBusy && !transferBusy && !factBusy;
-  const canMutate = canRead && schemaCurrentMode;
+  const canMutate = canRead && schemaCurrentMode && !hasUnresolvedOperation();
   schemaRefreshButton.disabled = !canRead;
   schemaCreateButton.disabled = !canMutate;
   for (const control of schemaEditor.querySelectorAll("input, select, textarea, button")) {
-    control.disabled = schemaBusy || projectBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
+    control.disabled = schemaBusy || projectBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || hasUnresolvedOperation();
   }
   schemaCreateButton.disabled = !canMutate;
   schemaLifecyclePublish.disabled = !canMutate || stagedLifecycleChanges.length === 0;
@@ -374,7 +803,7 @@ function updateSchemaControls() {
     button.disabled = !canMutate;
   }
   for (const button of schemaLifecyclePending.querySelectorAll("button")) {
-    button.disabled = schemaBusy || projectBusy;
+    button.disabled = schemaBusy || projectBusy || hasUnresolvedOperation();
   }
   updateEntityControls();
   updatePerspectiveControls();
@@ -388,10 +817,10 @@ function updateSchemaControls() {
 function updateEntityControls() {
   if (!entityPanel) return;
   const canRead = projectOpen && !entityBusy && !projectBusy && !schemaBusy && !perspectiveBusy && !securityPolicyBusy && !branchLayerBusy && !transferBusy && !factBusy;
-  const canMutate = canRead && entityCurrentMode;
+  const canMutate = canRead && entityCurrentMode && !hasUnresolvedOperation();
   entityRefreshButton.disabled = !canRead;
   for (const control of entityEditor.querySelectorAll("input, select, button")) {
-    control.disabled = entityBusy || projectBusy || schemaBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
+    control.disabled = entityBusy || projectBusy || schemaBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || hasUnresolvedOperation();
   }
   entityCreateButton.disabled = !canMutate || !entityTypeSelect.value
     || (selectedEntityType()?.lifecycle === "deprecated" && !entityAcceptDeprecated.checked);
@@ -402,7 +831,7 @@ function updateEntityControls() {
 
 function updatePerspectiveControls() {
   if (!perspectivePanel) return;
-  const blocked = perspectiveBusy || securityPolicyBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || factBusy;
+  const blocked = perspectiveBusy || securityPolicyBusy || projectBusy || schemaBusy || entityBusy || branchLayerBusy || transferBusy || factBusy || hasUnresolvedOperation();
   const canRead = projectOpen && !blocked;
   const canMutate = canRead && perspectiveViewMode.value === "current";
   perspectiveRefreshButton.disabled = !canRead;
@@ -429,27 +858,28 @@ function updateSecurityPolicyControls() {
   if (!securityPolicyPanel) return;
   const blocked = securityPolicyBusy || projectBusy || schemaBusy || entityBusy || perspectiveBusy || branchLayerBusy || transferBusy || factBusy;
   const canRead = projectOpen && !blocked && !securityPolicyUnavailable;
+  const canWrite = canRead && !hasUnresolvedOperation();
   securityPolicyRefresh.disabled = !canRead;
   for (const editor of [
     securityPolicyPanel.querySelector("#security-policy-principal-editor"),
     securityPolicyPanel.querySelector("#security-policy-role-editor"),
     securityPolicyPanel.querySelector("#security-policy-rule-editor"),
   ]) {
-    for (const control of editor.querySelectorAll("input, select, button")) control.disabled = !canRead;
+    for (const control of editor.querySelectorAll("input, select, button")) control.disabled = !canWrite;
   }
-  policyPrincipalSave.disabled = !canRead || !policyPrincipalSelect.value;
-  policyRoleAssign.disabled = !canRead || !policyAssignmentPrincipal.value || !policyAssignmentRole.value;
-  policyRoleCreate.disabled = !canRead || !/^[a-z][a-z0-9_]*$/.test(policyNewRoleSymbol.value);
-  policyRuleAdd.disabled = !canRead || !policyRuleSubject.value || !policyRuleCapability.value;
+  policyPrincipalSave.disabled = !canWrite || !policyPrincipalSelect.value;
+  policyRoleAssign.disabled = !canWrite || !policyAssignmentPrincipal.value || !policyAssignmentRole.value;
+  policyRoleCreate.disabled = !canWrite || !/^[a-z][a-z0-9_]*$/.test(policyNewRoleSymbol.value);
+  policyRuleAdd.disabled = !canWrite || !policyRuleSubject.value || !policyRuleCapability.value;
   for (const button of securityPolicyPanel.querySelectorAll("button[data-policy-revoke]")) {
-    button.disabled = !canRead;
+    button.disabled = !canWrite;
   }
 }
 
 function updateBranchLayerControls() {
   if (!branchLayerPanel) return;
   const canRead = projectOpen && !branchLayerBusy && !projectBusy && !schemaBusy && !entityBusy && !perspectiveBusy && !securityPolicyBusy && !transferBusy && !factBusy;
-  const canMutate = canRead && branchLayerCurrentMode;
+  const canMutate = canRead && branchLayerCurrentMode && !hasUnresolvedOperation();
   branchLayerRefreshButton.disabled = !canRead;
   for (const editor of [branchCreateEditor, layerCreateEditor, layerEditEditor]) {
     for (const control of editor.querySelectorAll("input, select, button")) {
@@ -479,11 +909,13 @@ function updateTransferControls() {
   transferPicker.disabled = !canRead || !transferCatalog;
   transferPreviewButton.disabled = !canRead || !transferCatalog
     || transferContentList.querySelectorAll('input[type="checkbox"]:checked').length === 0;
-  transferCommitButton.disabled = !canRead || !transferPreviewTicket || !transferAcknowledge.checked;
+  transferCommitButton.disabled = !canRead || hasUnresolvedOperation() || !transferPreviewTicket || !transferAcknowledge.checked;
 }
 
 function updateProjectControls() {
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen;
+  const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
+    || loadPendingProjectCreations().length > 0;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation;
   openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen;
   closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
 }
@@ -495,6 +927,23 @@ function setBusy(busy) {
 
 function renderProject(project) {
   projectOpen = Boolean(project.project_open);
+  const databaseId = projectOpen ? project.database_id ?? null : null;
+  if (databaseId !== currentDatabaseId) {
+    currentDatabaseId = databaseId;
+    operationJournalUnavailable = false;
+    pendingOperations = databaseId ? loadPendingOperations(databaseId) : [];
+    if (operationJournalUnavailable) {
+      operationStatus.textContent = "Der vorgemerkte Schreibstatus kann nicht sicher gelesen werden. Schreibaktionen bleiben gesperrt.";
+    }
+    reconcileOperationsButton.hidden = !hasUnresolvedOperation();
+    reconcileOperationsButton.disabled = !databaseId || operationJournalUnavailable;
+  }
+  const pendingProjectCreations = loadPendingProjectCreations();
+  if (projectCreationJournalUnavailable) {
+    operationStatus.textContent = "Der Status einer möglichen Projektanlage kann nicht sicher gelesen werden. Neue Projektanlagen bleiben gesperrt.";
+  } else if (!projectOpen && pendingProjectCreations.length > 0) {
+    operationStatus.textContent = `Eine Projektanlage mit Operation ${pendingProjectCreations[0].operation_id} wartet auf den Abgleich. Öffne das betroffene Projekt, um seinen WAL-Status zu prüfen.`;
+  }
   schemaPanel.hidden = !projectOpen;
   entityPanel.hidden = !projectOpen;
   securityPolicyPanel.hidden = !projectOpen;
@@ -529,7 +978,12 @@ async function refreshProject(activeSessionId) {
       projectRefreshQueued = false;
       const wasOpen = projectOpen;
       const previousRevision = projectRevision;
+      const previousDatabaseId = currentDatabaseId;
       renderProject(await getProject(activeSessionId));
+      if (projectOpen && currentDatabaseId && currentDatabaseId !== previousDatabaseId) {
+        await reconcilePendingOperations();
+        await reconcilePendingProjectCreations();
+      }
       if ((!wasOpen && projectOpen) || (wasOpen && projectOpen && projectRevision !== previousRevision && !schemaBusy)) {
         await refreshSchema(activeSessionId).catch((error) => {
           schemaStatus.textContent = showError(error);
@@ -638,10 +1092,7 @@ async function runSecurityProbes(activeSessionId) {
 
 async function runProjectSmoke(activeSessionId) {
   if (role === "primary") {
-    await invoke("create_project", {
-      sessionId: activeSessionId,
-      request: { protocol_version: 1, project_name: "IPC-Smoke" },
-    });
+    await createProjectTracked(activeSessionId, "IPC-Smoke");
     return;
   }
   const deadline = Date.now() + 20000;
@@ -671,11 +1122,8 @@ function schemaModeInput() {
 }
 
 async function manageSchema(command, activeSessionId = sessionId) {
-  const response = await invoke("manage_schema", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_schema", command, activeSessionId,
+    (response) => response.protocol_version === 1);
 }
 
 function entityModeInput() {
@@ -689,11 +1137,8 @@ function entityModeInput() {
 }
 
 async function manageEntities(command, activeSessionId = sessionId) {
-  const response = await invoke("manage_entities", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_entities", command, activeSessionId,
+    (response) => response.protocol_version === 1);
 }
 
 function branchLayerModeInput() {
@@ -707,27 +1152,18 @@ function branchLayerModeInput() {
 }
 
 async function manageBranchLayers(command, activeSessionId = sessionId) {
-  const response = await invoke("manage_branch_layers", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_branch_layers", command, activeSessionId,
+    (response) => response.protocol_version === 1);
 }
 
 async function manageHistorySpaceTransfer(command, activeSessionId = sessionId) {
-  const response = await invoke("manage_history_space_transfer", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_history_space_transfer", command, activeSessionId,
+    (response) => response.protocol_version === 1);
 }
 
-async function manageFacts(command, activeSessionId = sessionId) {
-  const response = await invoke("manage_facts", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1 || !response.result?.kind) throw new Error("unsupported_protocol");
-  return response.result;
+async function manageFacts(command, activeSessionId = sessionId, operationIdOverride) {
+  return invokeManagedCommand("manage_facts", command, activeSessionId,
+    (response) => response.protocol_version === 1 && Boolean(response.result?.kind), operationIdOverride);
 }
 
 async function refreshFactsCatalog(activeSessionId = sessionId) {
@@ -1547,31 +1983,9 @@ async function publishFact(command, successLabel, expectedKind = "published") {
         details: JSON.stringify({ operation: command.command, error: String(error?.stack ?? error) }),
       }).catch(() => {});
     }
-    if (command.operation_id && ["correct_assertion", "correct_event"].includes(command.command)) {
-      try {
-        const status = await manageFacts({ command: "commit_status", operation_id: command.operation_id });
-        if (status.kind !== "operation_status") throw new Error("unsupported_protocol");
-        if (status.status === "committed") {
-          publication = await manageFacts(command);
-          if (publication.kind !== expectedKind) throw new Error("unsupported_protocol");
-        } else {
-          const statusLabel = status.status === "indeterminate"
-            ? "Der Commit ist noch unklar. Dieselbe Operation bleibt für die erneute Prüfung vorgemerkt."
-            : "Die Operation ist nicht committed. Du kannst dieselbe geprüfte Aktion erneut absenden.";
-          factsWriteStatus.textContent = `${showError(error)} ${statusLabel} Operation ${command.operation_id}.`;
-          setFactsBusy(false);
-          return;
-        }
-      } catch (statusError) {
-        factsWriteStatus.textContent = `${showError(error)} Statusprüfung fehlgeschlagen; Operation ${command.operation_id} bleibt unverändert vorgemerkt. ${showError(statusError)}`;
-        setFactsBusy(false);
-        return;
-      }
-    } else {
-      factsWriteStatus.textContent = showError(error);
-      setFactsBusy(false);
-      return;
-    }
+    factsWriteStatus.textContent = showError(error);
+    setFactsBusy(false);
+    return;
   }
   if (!publication) {
     factsWriteStatus.textContent = showError(new Error("unknown_commit_outcome"));
@@ -1600,6 +2014,7 @@ function updateFactControls() {
   if (!factsPanel) return;
   const current = projectOpen && factCatalog;
   const canRead = current && !factBusy && !projectBusy;
+  const canWrite = canRead && !hasUnresolvedOperation();
   const contextValid = Boolean(factsHistorySpace.value && factsLayer.value
     && (factsEpistemicMode.value === "world_state" || factsPerspective.value));
   const slotValid = Boolean(factsSubject.value && factsPredicate.value);
@@ -1660,32 +2075,32 @@ function updateFactControls() {
   factsContextNote.textContent = current
     ? `Katalogstand Revision ${factCatalog.revision}. Die Auflösung fragt nur den ausgewählten Layer ab.`
     : "Aktueller Katalog wird geladen; bis dahin sind Schreibvorgänge gesperrt.";
-  factsCreateAssertion.disabled = !canRead || !contextValid || !slotValid || !validityValid || !valueValid;
-  factsCreateMask.disabled = !canRead || !contextValid || !slotValid || !maskSelectorValid
+  factsCreateAssertion.disabled = !canWrite || !contextValid || !slotValid || !validityValid || !valueValid;
+  factsCreateMask.disabled = !canWrite || !contextValid || !slotValid || !maskSelectorValid
     || (factsValidityEnabled.checked && !validityValid);
-  factsCreateBoundary.disabled = !canRead || !contextValid || !slotValid
+  factsCreateBoundary.disabled = !canWrite || !contextValid || !slotValid
     || predicate?.details?.resolution_policy !== "multi_value_replace"
     || (factsValidityEnabled.checked && !validityValid);
-  factsEventCreate.disabled = !canRead || !eventCreateValid;
-  factsEventMaskCreate.disabled = !canRead || !eventMaskValid;
-  factsEventRelationCreate.disabled = !canRead || !eventRelationValid;
-  factsEventSpanClose.disabled = !canRead || !eventSpanCloseValid;
+  factsEventCreate.disabled = !canWrite || !eventCreateValid;
+  factsEventMaskCreate.disabled = !canWrite || !eventMaskValid;
+  factsEventRelationCreate.disabled = !canWrite || !eventRelationValid;
+  factsEventSpanClose.disabled = !canWrite || !eventSpanCloseValid;
   const evidenceValid = Boolean(factsEvidenceSource.value && factsEvidenceTarget.value && factsEvidenceRelation.value);
   const provenanceValid = Boolean(factsProvenanceFrom.value && factsProvenanceTo.value
     && factsProvenanceFrom.value !== factsProvenanceTo.value && factsProvenanceRelation.value);
-  factsSourceCreate.disabled = !canRead || !sourceFieldsValid;
-  factsSourceSupersede.disabled = !canRead || !sourceFieldsValid || !factsSourceSupersedeTarget.value;
-  factsEvidenceCreate.disabled = !canRead || !evidenceValid;
-  factsEvidenceRetract.disabled = !canRead || !factsEvidenceRetractTarget.value || !factsEvidenceRetractReason.value.trim();
-  factsProvenanceCreate.disabled = !canRead || !provenanceValid;
-  factsProvenanceRetract.disabled = !canRead || !factsProvenanceRetractTarget.value || !factsProvenanceRetractReason.value.trim();
+  factsSourceCreate.disabled = !canWrite || !sourceFieldsValid;
+  factsSourceSupersede.disabled = !canWrite || !sourceFieldsValid || !factsSourceSupersedeTarget.value;
+  factsEvidenceCreate.disabled = !canWrite || !evidenceValid;
+  factsEvidenceRetract.disabled = !canWrite || !factsEvidenceRetractTarget.value || !factsEvidenceRetractReason.value.trim();
+  factsProvenanceCreate.disabled = !canWrite || !provenanceValid;
+  factsProvenanceRetract.disabled = !canWrite || !factsProvenanceRetractTarget.value || !factsProvenanceRetractReason.value.trim();
   factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid || !queryValid;
   factsQueryContinueButton.disabled = !canRead || !slotValid
     || factsQueryOperation.value !== "token_search" || !factSearchCursor;
   factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
-  factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
+  factsCorrectionCommitButton.disabled = !canWrite || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
   factsEventCorrectionPreviewButton.disabled = !canRead || !eventCorrectionValid;
-  factsEventCorrectionCommitButton.disabled = !canRead || !eventCorrectionValid || !pendingFactActionPreviews.event;
+  factsEventCorrectionCommitButton.disabled = !canWrite || !eventCorrectionValid || !pendingFactActionPreviews.event;
   const lifecycleRecord = selectedFactRecord(factsLifecycleTarget, true);
   const lifecycleAction = factsLifecycleAction.value;
   const lifecycleStateAllowsAction = Boolean(lifecycleRecord && factCatalog?.lifecycleVisible
@@ -1693,7 +2108,7 @@ function updateFactControls() {
       || (lifecycleAction === "archive" && lifecycleRecord.archived === false)
       || (lifecycleAction === "unarchive" && lifecycleRecord.archived === true)));
   factsLifecyclePreviewButton.disabled = !canRead || !lifecycleValid || !lifecycleStateAllowsAction;
-  factsLifecycleCommitButton.disabled = !canRead || !lifecycleValid || !lifecycleStateAllowsAction
+  factsLifecycleCommitButton.disabled = !canWrite || !lifecycleValid || !lifecycleStateAllowsAction
     || !pendingFactActionPreviews.lifecycle;
   factsWriteStatus.setAttribute("aria-busy", String(factBusy));
 }
@@ -1882,6 +2297,7 @@ function renderResolutionOutcome(parent, outcome) {
 
 function clearTransferPreview() {
   transferPreviewTicket = null;
+  transferPreviewBaseRevision = null;
   transferPreviewPanel.hidden = true;
   transferPreviewSummary.replaceChildren();
   transferAcknowledge.checked = false;
@@ -2033,6 +2449,7 @@ async function previewTransfer() {
     });
     if (result.kind !== "preview") throw new Error("unsupported_protocol");
     transferPreviewTicket = result.preview_ticket;
+    transferPreviewBaseRevision = result.target_head;
     const lines = [
       `Quellrevision ${result.source_revision} · Zielstand ${result.target_head}`,
       `${result.copied_record_count} Datensatz/Datensätze und ${result.copied_relation_count} Ereignisverknüpfung(en) werden kopiert.`,
@@ -2080,6 +2497,7 @@ async function commitTransfer() {
     });
     if (result.kind !== "published") throw new Error("unsupported_protocol");
     transferPreviewTicket = null;
+    transferPreviewBaseRevision = null;
     transferStatus.textContent = `Übertragung veröffentlicht · Datenrevision ${result.revision} · ${result.copied_record_count} Datensatz/Datensätze kopiert.`;
     await refreshProject(sessionId);
     await loadTransferContents(sessionId);
@@ -2387,11 +2805,8 @@ function renderEntities(snapshot) {
 }
 
 async function invokeSecurityPolicyFor(activeSessionId, command) {
-  const response = await invoke("manage_security_policy", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1 || !response.result?.kind) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_security_policy", command, activeSessionId,
+    (response) => response.protocol_version === 1 && Boolean(response.result?.kind));
 }
 
 async function refreshSecurityPolicy(activeSessionId = sessionId) {
@@ -2645,11 +3060,8 @@ function perspectiveModeInput() {
 }
 
 async function invokePerspectivesFor(activeSessionId, command) {
-  const response = await invoke("manage_perspectives", {
-    request: { protocol_version: 1, session_id: activeSessionId, command },
-  });
-  if (response.protocol_version !== 1 || !response.result?.kind) throw new Error("unsupported_protocol");
-  return response.result;
+  return invokeManagedCommand("manage_perspectives", command, activeSessionId,
+    (response) => response.protocol_version === 1 && Boolean(response.result?.kind));
 }
 
 async function invokePerspectiveSnapshot(activeSessionId, mode) {
@@ -3598,12 +4010,57 @@ async function runFactsSmoke(activeSessionId) {
   }
 
   factsValueText.value = "Exact-Mask-Target";
+  const staleCommitBaseRevision = factCatalog.revision;
   const assertion = await clickFactWrite(factsCreateAssertion, "Assertion");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Known")
     || !factsPreviewResults.textContent.includes("Exact-Mask-Target")) {
     throw new Error("the all-times form preview did not show the persisted Assertion as Known");
   }
+
+  const staleCommit = await manageFacts({
+    command: "create_assertion",
+    expected_base_revision: staleCommitBaseRevision,
+    context: factsContextInput(),
+    subject_id: factsSubject.value,
+    predicate_id: factsPredicate.value,
+    value: factsValueInput(),
+    polarity: factsPolarity.value,
+    validity: factsValidityInput(),
+  }, activeSessionId).then(() => null, (error) => error);
+  if (errorCode(staleCommit) !== "commit_conflict"
+    || !operationStatus.textContent.includes(`Revision ${staleCommitBaseRevision}`)
+    || !operationStatus.textContent.includes("Es wurde nichts gespeichert.")) {
+    throw new Error("the stale write did not return the safe ConflictReport through OperationId status");
+  }
+  await recordFactsSmokeStage("commit-conflict:confirmed");
+
+  const unknownCommitOperationId = "00000000-0000-7000-8000-000000000041";
+  await refreshFactsCatalog(activeSessionId);
+  const unknownCommitBaseRevision = factCatalog.revision;
+  factsValueText.value = "Unknown-Commit-Response";
+  const unknownCommit = await manageFacts({
+    command: "create_assertion",
+    expected_base_revision: unknownCommitBaseRevision,
+    context: factsContextInput(),
+    subject_id: factsSubject.value,
+    predicate_id: factsPredicate.value,
+    value: factsValueInput(),
+    polarity: factsPolarity.value,
+    validity: factsValidityInput(),
+  }, activeSessionId, unknownCommitOperationId).then(() => null, (error) => error);
+  if (errorCode(unknownCommit) !== "commit_confirmed"
+    || unknownCommit.operation_id !== unknownCommitOperationId
+    || !operationStatus.textContent.includes(unknownCommitOperationId)
+    || !operationStatus.textContent.includes(`Revision ${unknownCommit.revision}`)) {
+    throw new Error(`the lost commit reply was not reconciled as committed under its original OperationId (code=${errorCode(unknownCommit)}, writeError=${unknownCommit?.write_error_code ?? "none"}, detail=${unknownCommit?.detail ?? "none"}, id=${unknownCommit?.operation_id ?? "missing"}, expectedBase=${unknownCommitBaseRevision}, current=${projectRevision}, pending=${pendingOperations.length}, status=${operationStatus.textContent})`);
+  }
+  await refreshFactsCatalog(activeSessionId);
+  if (factCatalog.revision !== unknownCommit.revision) {
+    throw new Error("the reconciled commit receipt revision did not match the refreshed database head");
+  }
+  factsValueText.value = "Exact-Mask-Target";
+  await recordFactsSmokeStage("unknown-commit:resolved");
 
   factsQueryTimeMode.value = "at";
   factsQueryTimeline.value = timeline.identity;
@@ -4797,10 +5254,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     setBusy(true);
     operationStatus.textContent = "Projekt wird angelegt …";
     try {
-      await invoke("create_project", {
-        sessionId,
-        request: { protocol_version: 1, project_name: projectName.value },
-      });
+      await createProjectTracked(sessionId, projectName.value);
       operationStatus.textContent = "Projekt wurde angelegt.";
       await refreshProject(sessionId);
     } catch (error) {
@@ -4809,6 +5263,10 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       setBusy(false);
       await refreshProject(sessionId).catch(() => {});
     }
+  });
+
+  reconcileOperationsButton.addEventListener("click", () => {
+    void reconcilePendingOperations();
   });
 
   openButton.addEventListener("click", async () => {

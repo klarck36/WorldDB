@@ -82,6 +82,7 @@ pub struct LayerView {
 /// Safe result of a single committed catalog update.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BranchLayerPublicationView {
+    pub operation_id: String,
     pub revision: u64,
     pub branch_created: bool,
     pub layer_changed: bool,
@@ -161,8 +162,10 @@ pub(super) fn execute(
                 manager
                     .create_child(
                         revision_from_u64(expected_base_revision)?,
-                        worlddb_core::storage_internal::generate_schema_management_operation_id()
-                            .map_err(|_| {
+                        crate::requested_operation_id_or(
+                            worlddb_core::storage_internal::generate_schema_management_operation_id,
+                        )
+                        .map_err(|_| {
                             EngineError::BranchLayer("operation identity is unavailable".to_owned())
                         })?,
                         worlddb_core::storage_internal::generate_project_bootstrap_id::<
@@ -176,6 +179,7 @@ pub(super) fn execute(
                     )
                     .map_err(|error| EngineError::BranchLayer(error.to_string()))?;
             Ok(BranchLayerResponse::Published(BranchLayerPublicationView {
+                operation_id: receipt.operation_id().to_string(),
                 revision: receipt.revision().value(),
                 branch_created: true,
                 layer_changed: false,
@@ -192,10 +196,12 @@ pub(super) fn execute(
             let receipt = manager
                 .create_layer(
                     revision_from_u64(expected_base_revision)?,
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|_| {
-                            EngineError::BranchLayer("operation identity is unavailable".to_owned())
-                        })?,
+                    crate::requested_operation_id_or(
+                        worlddb_core::storage_internal::generate_schema_management_operation_id,
+                    )
+                    .map_err(|_| {
+                        EngineError::BranchLayer("operation identity is unavailable".to_owned())
+                    })?,
                     worlddb_core::storage_internal::generate_project_bootstrap_id::<LayerId>()
                         .map_err(|_| {
                             EngineError::BranchLayer("Layer identity is unavailable".to_owned())
@@ -206,6 +212,7 @@ pub(super) fn execute(
                 )
                 .map_err(|error| EngineError::BranchLayer(error.to_string()))?;
             Ok(BranchLayerResponse::Published(BranchLayerPublicationView {
+                operation_id: receipt.operation_id().to_string(),
                 revision: receipt.revision().value(),
                 branch_created: false,
                 layer_changed: true,
@@ -226,10 +233,12 @@ pub(super) fn execute(
             let receipt = manager
                 .revise_layer(
                     revision_from_u64(expected_base_revision)?,
-                    worlddb_core::storage_internal::generate_schema_management_operation_id()
-                        .map_err(|_| {
-                            EngineError::BranchLayer("operation identity is unavailable".to_owned())
-                        })?,
+                    crate::requested_operation_id_or(
+                        worlddb_core::storage_internal::generate_schema_management_operation_id,
+                    )
+                    .map_err(|_| {
+                        EngineError::BranchLayer("operation identity is unavailable".to_owned())
+                    })?,
                     layer_id,
                     description,
                     precedence_rank,
@@ -238,6 +247,7 @@ pub(super) fn execute(
                 )
                 .map_err(|error| EngineError::BranchLayer(error.to_string()))?;
             Ok(BranchLayerResponse::Published(BranchLayerPublicationView {
+                operation_id: receipt.operation_id().to_string(),
                 revision: receipt.revision().value(),
                 branch_created: false,
                 layer_changed: true,
@@ -313,6 +323,7 @@ mod tests {
             return Err("explicit branch/layer selector wire shape changed".to_owned());
         }
         let response = BranchLayerResponse::Published(crate::BranchLayerPublicationView {
+            operation_id: "00000000-0000-7000-8000-000000000001".to_owned(),
             revision: 3,
             branch_created: false,
             layer_changed: true,
@@ -321,6 +332,7 @@ mod tests {
         if encoded
             != serde_json::json!({
                 "kind": "published",
+                "operation_id": "00000000-0000-7000-8000-000000000001",
                 "revision": 3,
                 "branch_created": false,
                 "layer_changed": true
