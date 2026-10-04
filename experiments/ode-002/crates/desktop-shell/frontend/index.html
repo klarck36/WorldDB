@@ -90,6 +90,22 @@
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
         <button id="reconcile-operations" type="button" hidden>Schreibstatus erneut prüfen</button>
       </section>
+      <section id="migration-panel" class="card" aria-labelledby="migration-heading">
+        <h2 id="migration-heading">Schema-Migration prüfen</h2>
+        <p class="muted">Migrationen laufen nur bei geschlossenem Projekt. Zuerst werden Plan, Quelldatensätze, Dry Run und Ressourcenbedarf geprüft. Der Plan wird erst nach einer ausdrücklichen Aktion ausgeführt.</p>
+        <div class="actions">
+          <button id="migration-select-plan" type="button" disabled>Quellprojekt und Plan auswählen</button>
+          <button id="migration-preview" type="button" disabled>Dry Run ausführen</button>
+          <button id="migration-cancel" type="button" hidden>Migration verwerfen</button>
+        </div>
+        <p id="migration-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="migration-plan-summary" hidden></div>
+        <div id="migration-preview-summary" hidden></div>
+        <div class="actions">
+          <button id="migration-run" type="button" hidden disabled>Migration ausdrücklich starten</button>
+          <button id="migration-resume" type="button" hidden disabled>Lauf sicher fortsetzen</button>
+        </div>
+      </section>
       <section id="recovery-panel" class="card" aria-labelledby="recovery-heading">
         <h2 id="recovery-heading">Projekt prüfen und wiederherstellen</h2>
         <p class="muted">Die Prüfung liest den verifizierten WAL-Präfix und die referenzierten Inventare. Sie repariert nichts. Bei Schäden bleiben Verify, read-only, journalisierte Recovery, Restore und Salvage getrennte Entscheidungen.</p>

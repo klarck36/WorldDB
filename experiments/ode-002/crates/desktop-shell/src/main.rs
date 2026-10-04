@@ -25,6 +25,7 @@ use worlddb_ode_engine::{
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
 mod host_session;
+mod migration;
 mod transfer;
 use host_session::{
     HostCapability, HostIdentity, HostSessionManager, HostSessionTicket, SessionError,
@@ -176,6 +177,13 @@ fn run() -> Result<(), String> {
             inspect_recovery,
             run_journaled_recovery,
             salvage_recovery,
+            select_migration_plan,
+            migration_status,
+            preview_migration,
+            resolve_migration_items,
+            run_migration,
+            resume_migration,
+            cancel_migration,
             create_project,
             open_project,
             close_project,
@@ -232,6 +240,8 @@ struct HealthResponseV1 {
 struct IpcErrorV1 {
     protocol_version: u16,
     code: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,6 +317,26 @@ struct RecoverySalvageRequestV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MigrationRequestV1 {
+    protocol_version: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationRunRequestV1 {
+    protocol_version: u16,
+    confirmed_breaking: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationResolutionRequestV1 {
+    protocol_version: u16,
+    omitted_record_indexes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CancelJobRequestV1 {
     protocol_version: u16,
     session_id: String,
@@ -337,6 +367,30 @@ struct RecoveryApplyResponseV1 {
 struct RecoverySalvageResponseV1 {
     protocol_version: u16,
     result: RecoverySalvageView,
+}
+
+#[derive(Serialize)]
+struct MigrationPlanResponseV1 {
+    protocol_version: u16,
+    plan: migration::MigrationPlanView,
+}
+
+#[derive(Serialize)]
+struct MigrationPanelResponseV1 {
+    protocol_version: u16,
+    state: Option<migration::MigrationPanelState>,
+}
+
+#[derive(Serialize)]
+struct MigrationPreviewResponseV1 {
+    protocol_version: u16,
+    result: migration::MigrationDryRunView,
+}
+
+#[derive(Serialize)]
+struct MigrationRunResponseV1 {
+    protocol_version: u16,
+    result: migration::MigrationRunView,
 }
 
 #[derive(Serialize)]
@@ -470,6 +524,17 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code,
+            detail: None,
+            operation_id: None,
+            database_id: None,
+        }
+    }
+
+    fn migration_rejected(detail: String) -> Self {
+        Self {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            code: "migration_rejected",
+            detail: Some(detail),
             operation_id: None,
             database_id: None,
         }
@@ -479,6 +544,7 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code: "unknown_commit_outcome",
+            detail: None,
             operation_id: Some(operation_id.to_string()),
             database_id,
         }
@@ -707,6 +773,288 @@ async fn salvage_recovery(
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
     })
+}
+
+#[tauri::command]
+async fn select_migration_plan(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationPlanResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .begin_migration_plan_selection()
+        .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+    let selection = async {
+        let source = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Quellprojekt für die Migration",
+        )
+        .await?;
+        let plan = pick_migration_plan_file(app.clone(), window).await?;
+        Ok::<_, IpcErrorV1>((source, plan))
+    }
+    .await;
+    let plan = match selection {
+        Ok((source, plan_path)) => backend.finish_migration_plan_selection(&source, &plan_path),
+        Err(error) => {
+            backend.cancel_migration_dialog();
+            return Err(error);
+        }
+    }
+    .map_err(IpcErrorV1::migration_rejected)?;
+    let _ = app.emit("migration-state-changed", ());
+    Ok(MigrationPlanResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        plan,
+    })
+}
+
+#[tauri::command]
+fn migration_status(
+    window: tauri::WebviewWindow,
+    session_id: String,
+    request: MigrationRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationPanelResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    Ok(MigrationPanelResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        state: backend
+            .migration_state()
+            .map_err(|_| IpcErrorV1::new("host_unavailable"))?,
+    })
+}
+
+#[tauri::command]
+async fn preview_migration(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationPreviewResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let steps = backend
+        .begin_migration_preview()
+        .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+    let selection = async {
+        let mut selected_files = Vec::new();
+        selected_files
+            .try_reserve_exact(steps.len())
+            .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+        for step_id in steps {
+            let title = format!("Quelldatensätze für Migrationsschritt {step_id}");
+            selected_files
+                .push(pick_migration_record_files(app.clone(), window.clone(), title).await?);
+        }
+        Ok::<_, IpcErrorV1>(selected_files)
+    }
+    .await;
+    let result = match selection {
+        Ok(selected_files) => backend.finish_migration_preview(selected_files),
+        Err(error) => {
+            backend.cancel_migration_dialog();
+            return Err(error);
+        }
+    }
+    .map_err(IpcErrorV1::migration_rejected)?;
+    let _ = app.emit("migration-state-changed", ());
+    Ok(MigrationPreviewResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+fn resolve_migration_items(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationResolutionRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationPanelResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let mut indexes = Vec::new();
+    indexes
+        .try_reserve_exact(request.omitted_record_indexes.len())
+        .map_err(|_| IpcErrorV1::new("invalid_request"))?;
+    for value in &request.omitted_record_indexes {
+        let index = value
+            .parse::<u64>()
+            .map_err(|_| IpcErrorV1::new("invalid_request"))?;
+        if index.to_string() != *value {
+            return Err(IpcErrorV1::new("invalid_request"));
+        }
+        indexes.push(index);
+    }
+    let state = backend
+        .set_migration_omissions(indexes)
+        .map_err(IpcErrorV1::migration_rejected)?;
+    let _ = app.emit("migration-state-changed", ());
+    Ok(MigrationPanelResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        state: Some(state),
+    })
+}
+
+#[tauri::command]
+async fn run_migration(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationRunRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationRunResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let breaking = backend
+        .begin_migration_execution(false)
+        .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+    if breaking != request.confirmed_breaking {
+        backend.cancel_migration_dialog();
+        return Err(IpcErrorV1::new("explicit_confirmation_required"));
+    }
+    let destinations = async {
+        if breaking {
+            let backup_parent = pick_project_parent(
+                app.clone(),
+                window.clone(),
+                "Elternordner für die exakte Migrationssicherung",
+            )
+            .await?;
+            let restore_parent = pick_project_parent(
+                app.clone(),
+                window,
+                "Elternordner für den geprüften Restore-Klon",
+            )
+            .await?;
+            Ok::<_, IpcErrorV1>((Some(backup_parent), Some(restore_parent)))
+        } else {
+            Ok((None, None))
+        }
+    }
+    .await;
+    let (backup_parent, restore_parent) = match destinations {
+        Ok(destinations) => destinations,
+        Err(error) => {
+            backend.cancel_migration_dialog();
+            return Err(error);
+        }
+    };
+    let completion = backend.finish_migration_execution(
+        request.confirmed_breaking,
+        backup_parent,
+        restore_parent,
+    );
+    let _ = app.emit("migration-state-changed", ());
+    let result = completion.map_err(IpcErrorV1::migration_rejected)?;
+    Ok(MigrationRunResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn resume_migration(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationRunRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<MigrationRunResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let breaking = backend
+        .begin_migration_execution(true)
+        .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+    if breaking != request.confirmed_breaking {
+        backend.cancel_migration_dialog();
+        return Err(IpcErrorV1::new("explicit_confirmation_required"));
+    }
+    let restore_parent = if breaking {
+        match pick_project_parent(
+            app.clone(),
+            window,
+            "Elternordner für den neuen Restore-Klon",
+        )
+        .await
+        {
+            Ok(parent) => Some(parent),
+            Err(error) => {
+                backend.cancel_migration_dialog();
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    let completion = backend.finish_migration_resume(request.confirmed_breaking, restore_parent);
+    let _ = app.emit("migration-state-changed", ());
+    let result = completion.map_err(IpcErrorV1::migration_rejected)?;
+    Ok(MigrationRunResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+fn cancel_migration(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: MigrationRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<(), IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .cancel_migration()
+        .map_err(|_| IpcErrorV1::new("migration_unavailable"))?;
+    let _ = app.emit("migration-state-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -1174,6 +1522,56 @@ async fn pick_project_folder(
     .await
     .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
     selected.ok_or_else(|| IpcErrorV1::new("selection_cancelled"))
+}
+
+async fn pick_migration_plan_file(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) -> Result<PathBuf, IpcErrorV1> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title("Kanonischen MigrationPlan auswählen")
+            .add_filter("WorldDB Record", &["record"])
+            .blocking_pick_file()
+            .and_then(|path| path.into_path().ok())
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    selected.ok_or_else(|| IpcErrorV1::new("selection_cancelled"))
+}
+
+async fn pick_migration_record_files(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    title: String,
+) -> Result<Vec<PathBuf>, IpcErrorV1> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .add_filter("WorldDB Record", &["record"])
+            .blocking_pick_files()
+            .map(|paths| {
+                paths
+                    .into_iter()
+                    .map(|path| path.into_path().map_err(|_| ()))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    match selected {
+        None => Ok(Vec::new()),
+        Some(Ok(paths)) => Ok(paths),
+        Some(Err(())) => Err(IpcErrorV1::new("host_unavailable")),
+    }
 }
 
 fn project_smoke_root() -> Option<PathBuf> {
@@ -2135,6 +2533,7 @@ fn chunk_metadata(headers: &tauri::http::HeaderMap) -> Result<ChunkMetadata<'_>,
 mod ipc_security_tests {
     use super::{
         CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, IpcErrorV1,
+        MigrationRequestV1, MigrationResolutionRequestV1, MigrationRunRequestV1,
         OpenProjectRequestV1, RecoveryApplyRequestV1, RecoveryRequestV1, RecoverySalvageRequestV1,
         chunk_metadata, validate_project_name,
     };
@@ -2220,6 +2619,41 @@ mod ipc_security_tests {
                 "protocol_version": 1,
                 "archive_name": "safe-name",
                 "destination": "C:/renderer/chosen/database",
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn migration_dtos_reject_renderer_paths_and_require_a_breaking_decision_field() {
+        assert!(
+            serde_json::from_value::<MigrationRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "source_path": "C:/renderer/selected/project",
+                "plan_path": "C:/renderer/selected/plan.record"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<MigrationRunRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "backup_path": "C:/renderer/selected/backup",
+                "restore_path": "C:/renderer/selected/restore"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<MigrationRunRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "confirmed_breaking": true
+            }))
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<MigrationResolutionRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "omitted_record_indexes": ["0", "2"],
+                "replacement_path": "C:/renderer/replacement.record"
             }))
             .is_err()
         );
@@ -2329,6 +2763,8 @@ struct BackendState {
     engine: Option<EngineBackend>,
     project: Option<worlddb_ode_engine::ProjectAccess>,
     recovery_root: Option<PathBuf>,
+    migration_draft: Option<migration::MigrationDraft>,
+    migration_dialog_active: bool,
     windows: HashMap<String, WindowProjectSnapshot>,
 }
 
@@ -2359,6 +2795,8 @@ impl Backend {
                 engine,
                 project: None,
                 recovery_root: None,
+                migration_draft: None,
+                migration_dialog_active: false,
                 windows: HashMap::new(),
             }),
         })
@@ -2449,6 +2887,9 @@ impl Backend {
             .state
             .lock()
             .map_err(|_| ProjectError::HostUnavailable)?;
+        if state.migration_dialog_active || state.migration_draft.is_some() {
+            return Err(ProjectError::AlreadyOpen);
+        }
         if state.project.is_some() || state.engine.is_some() {
             return Err(ProjectError::AlreadyOpen);
         }
@@ -2513,6 +2954,9 @@ impl Backend {
             .state
             .lock()
             .map_err(|_| ProjectError::HostUnavailable)?;
+        if state.migration_dialog_active || state.migration_draft.is_some() {
+            return Err(ProjectError::AlreadyOpen);
+        }
         if let Some(project) = state.project.as_ref() {
             if project.canonical_root() != canonical_root || project.principal_id() != principal_id
             {
@@ -2557,7 +3001,11 @@ impl Backend {
                 .state
                 .lock()
                 .map_err(|_| "host project state is poisoned".to_owned())?;
-            if state.project.is_some() || state.engine.is_some() {
+            if state.project.is_some()
+                || state.engine.is_some()
+                || state.migration_dialog_active
+                || state.migration_draft.is_some()
+            {
                 return Err("another project is open".to_owned());
             }
         }
@@ -2566,7 +3014,11 @@ impl Backend {
             .state
             .lock()
             .map_err(|_| "host project state is poisoned".to_owned())?;
-        if state.project.is_some() || state.engine.is_some() {
+        if state.project.is_some()
+            || state.engine.is_some()
+            || state.migration_dialog_active
+            || state.migration_draft.is_some()
+        {
             return Err("another project is open".to_owned());
         }
         state.recovery_root = Some(canonical_root);
@@ -2595,6 +3047,224 @@ impl Backend {
             .recovery_root
             .clone()
             .ok_or_else(|| "no recovery source is selected".to_owned())
+    }
+
+    fn begin_migration_plan_selection(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some()
+            || state.engine.is_some()
+            || state.migration_dialog_active
+            || state
+                .migration_draft
+                .as_ref()
+                .is_some_and(migration::MigrationDraft::run_attempted)
+        {
+            return Err("migration plan selection is unavailable".to_owned());
+        }
+        state.migration_draft = None;
+        state.migration_dialog_active = true;
+        Ok(())
+    }
+
+    fn finish_migration_plan_selection(
+        &self,
+        source: &Path,
+        plan_path: &Path,
+    ) -> Result<migration::MigrationPlanView, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if !state.migration_dialog_active {
+            return Err("migration selection is unavailable".to_owned());
+        }
+        let result = if state.project.is_some() || state.engine.is_some() {
+            Err("a project is open".to_owned())
+        } else {
+            migration::inspect_plan(source, plan_path)
+        };
+        state.migration_dialog_active = false;
+        match result {
+            Ok(draft) => {
+                let view = draft.plan_view();
+                state.migration_draft = Some(draft);
+                Ok(view)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn begin_migration_preview(&self) -> Result<Vec<String>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() || state.migration_dialog_active {
+            return Err("migration preview is unavailable".to_owned());
+        }
+        let draft = state
+            .migration_draft
+            .as_ref()
+            .ok_or_else(|| "no migration plan is selected".to_owned())?;
+        if draft.run_attempted() {
+            return Err("an attempted migration must be resumed or inspected".to_owned());
+        }
+        let steps = draft.step_ids();
+        state.migration_dialog_active = true;
+        Ok(steps)
+    }
+
+    fn finish_migration_preview(
+        &self,
+        selected_files: Vec<Vec<PathBuf>>,
+    ) -> Result<migration::MigrationDryRunView, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if !state.migration_dialog_active {
+            return Err("migration preview is unavailable".to_owned());
+        }
+        let result = if state.project.is_some() || state.engine.is_some() {
+            Err("a project is open".to_owned())
+        } else {
+            state
+                .migration_draft
+                .as_mut()
+                .ok_or_else(|| "no migration plan is selected".to_owned())?
+                .stage_inputs(selected_files)
+        };
+        state.migration_dialog_active = false;
+        result
+    }
+
+    fn begin_migration_execution(&self, resume: bool) -> Result<bool, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() || state.migration_dialog_active {
+            return Err("migration execution is unavailable".to_owned());
+        }
+        let draft = state
+            .migration_draft
+            .as_ref()
+            .ok_or_else(|| "no migration plan is selected".to_owned())?;
+        if (resume && !draft.can_resume()) || (!resume && !draft.can_execute()) {
+            return Err("migration is not ready for this action".to_owned());
+        }
+        let breaking = draft.is_breaking();
+        state.migration_dialog_active = true;
+        Ok(breaking)
+    }
+
+    fn finish_migration_execution(
+        &self,
+        confirmed_breaking: bool,
+        backup_parent: Option<PathBuf>,
+        restore_parent: Option<PathBuf>,
+    ) -> Result<migration::MigrationRunView, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if !state.migration_dialog_active {
+            return Err("migration execution is unavailable".to_owned());
+        }
+        let result = if state.project.is_some() || state.engine.is_some() {
+            Err("a project is open".to_owned())
+        } else if let Some(draft) = state.migration_draft.as_mut() {
+            draft.execute(confirmed_breaking, backup_parent, restore_parent)
+        } else {
+            Err("no migration plan is selected".to_owned())
+        };
+        state.migration_dialog_active = false;
+        if result.is_ok() {
+            state.migration_draft = None;
+        }
+        result
+    }
+
+    fn finish_migration_resume(
+        &self,
+        confirmed_breaking: bool,
+        restore_parent: Option<PathBuf>,
+    ) -> Result<migration::MigrationRunView, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if !state.migration_dialog_active {
+            return Err("migration resume is unavailable".to_owned());
+        }
+        let result = if state.project.is_some() || state.engine.is_some() {
+            Err("a project is open".to_owned())
+        } else if let Some(draft) = state.migration_draft.as_mut() {
+            draft.resume(confirmed_breaking, restore_parent)
+        } else {
+            Err("no migration plan is selected".to_owned())
+        };
+        state.migration_dialog_active = false;
+        if result.is_ok() {
+            state.migration_draft = None;
+        }
+        result
+    }
+
+    fn cancel_migration_dialog(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.migration_dialog_active = false;
+        }
+    }
+
+    fn cancel_migration(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.migration_dialog_active
+            || state
+                .migration_draft
+                .as_ref()
+                .is_some_and(migration::MigrationDraft::run_attempted)
+        {
+            return Err("migration state cannot be discarded yet".to_owned());
+        }
+        state.migration_draft = None;
+        Ok(())
+    }
+
+    fn migration_state(&self) -> Result<Option<migration::MigrationPanelState>, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        Ok(state
+            .migration_draft
+            .as_ref()
+            .map(migration::MigrationDraft::panel_state))
+    }
+
+    fn set_migration_omissions(
+        &self,
+        record_indexes: Vec<u64>,
+    ) -> Result<migration::MigrationPanelState, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() || state.migration_dialog_active {
+            return Err("migration decisions are unavailable".to_owned());
+        }
+        let draft = state
+            .migration_draft
+            .as_mut()
+            .ok_or_else(|| "no migration plan is selected".to_owned())?;
+        draft.set_omissions(record_indexes)?;
+        Ok(draft.panel_state())
     }
 
     fn close_project(&self) -> Result<Option<JobShutdownView>, ProjectError> {

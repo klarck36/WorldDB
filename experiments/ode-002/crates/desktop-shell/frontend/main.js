@@ -29,6 +29,15 @@ const recoveryRestoreButton = document.querySelector("#recovery-restore");
 const recoveryArchiveName = document.querySelector("#recovery-archive-name");
 const recoverySalvageFields = document.querySelector("#recovery-salvage-fields");
 const recoverySalvageButton = document.querySelector("#recovery-salvage");
+const migrationPanel = document.querySelector("#migration-panel");
+const migrationSelectPlanButton = document.querySelector("#migration-select-plan");
+const migrationPreviewButton = document.querySelector("#migration-preview");
+const migrationCancelButton = document.querySelector("#migration-cancel");
+const migrationRunButton = document.querySelector("#migration-run");
+const migrationResumeButton = document.querySelector("#migration-resume");
+const migrationStatus = document.querySelector("#migration-status");
+const migrationPlanSummary = document.querySelector("#migration-plan-summary");
+const migrationPreviewSummary = document.querySelector("#migration-preview-summary");
 
 const schemaPanel = document.querySelector("#schema-panel");
 const schemaStatus = document.querySelector("#schema-status");
@@ -316,7 +325,8 @@ const userMessages = {
   recovery_inspection_unavailable: "Das Projekt konnte nicht read-only geprüft werden. Es wurde nicht geöffnet oder repariert.",
   journaled_recovery_rejected: "Die journalisierte Recovery wurde abgelehnt oder ist für diesen Befund nicht sicher.",
   salvage_rejected: "Salvage wurde abgelehnt. Das Quellprojekt blieb unverändert.",
-  explicit_confirmation_required: "Eine ausdrückliche Bestätigung ist für Recovery erforderlich.",
+  explicit_confirmation_required: "Diese Aktion benötigt eine eigene ausdrückliche Bestätigung.",
+  migration_unavailable: "Die Migration kann gerade nicht geändert werden. Prüfe, ob ein anderes Fenster eine Auswahl oder Ausführung geöffnet hat.",
   host_unavailable: "Der lokale WorldDB-Host ist gerade nicht verfügbar.",
   selection_cancelled: "Die Auswahl wurde abgebrochen.",
   invalid_request: "Bitte prüfe die Eingabe.",
@@ -346,6 +356,8 @@ let projectBusy = false;
 let jobsBusy = false;
 let recoveryBusy = false;
 let currentRecoveryReport = null;
+let migrationBusy = false;
+let currentMigrationState = null;
 let schemaBusy = false;
 let entityBusy = false;
 let perspectiveBusy = false;
@@ -943,11 +955,13 @@ function updateTransferControls() {
 function updateProjectControls() {
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
-  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation;
-  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen;
+  const migrationSelected = Boolean(currentMigrationState?.plan) || migrationBusy;
+  createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
+  openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
   closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
   jobsRefreshButton.disabled = jobsBusy || !projectOpen;
   jobsCloseProjectButton.disabled = closeButton.disabled;
+  updateMigrationControls();
   updateRecoveryControls();
 }
 
@@ -961,9 +975,190 @@ function updateRecoveryControls() {
   recoveryOpenCleanButton.disabled = blocked || currentRecoveryReport?.disposition !== "clean";
 }
 
+function migrationEntry(container, label, value) {
+  const entry = document.createElement("div");
+  entry.className = "result-cell";
+  const heading = document.createElement("strong");
+  heading.textContent = label;
+  const detail = document.createElement("p");
+  detail.textContent = value;
+  entry.append(heading, detail);
+  container.append(entry);
+}
+
+function migrationCategoryText(category) {
+  return ({
+    MetadataOnly: "Metadatenänderung",
+    Additive: "Erweiterung",
+    CompatibleConstraintChange: "Kompatible Constraintänderung",
+    Restrictive: "Restriktive Migration",
+    Breaking: "Breaking-Migration",
+  })[category] ?? category ?? "–";
+}
+
+function migrationPhaseText(phase) {
+  return ({
+    preview_only_no_commit: "Vorschau; kein Commit erfolgt",
+    committed: "Migration veröffentlicht",
+  })[phase] ?? phase ?? "–";
+}
+
+function migrationRestorepointText(status) {
+  return ({
+    required_before_run_not_created: "Vor dem Start erforderlich; noch nicht erstellt",
+    created_and_verified: "Exakte Sicherung und Restore-Klon erstellt und geprüft",
+    not_required: "Für diese Kategorie nicht erforderlich",
+  })[status] ?? status ?? "–";
+}
+
+function renderMigrationPlan(plan) {
+  migrationPlanSummary.replaceChildren();
+  migrationPlanSummary.hidden = !plan;
+  if (!plan) return;
+  migrationEntry(migrationPlanSummary, "Kategorie", migrationCategoryText(plan.category));
+  migrationEntry(migrationPlanSummary, "Migration und Datenbank", `${plan.migration_id} · ${plan.database_id}`);
+  migrationEntry(migrationPlanSummary, "Schema", `Revision ${plan.source_revision} → ${plan.target_revision}`);
+  migrationEntry(migrationPlanSummary, "Schritte", plan.step_ids.join(", ") || "Keine");
+  migrationEntry(migrationPlanSummary, "Transformer und Fingerprint", `v${plan.transformer_version} · ${plan.plan_fingerprint}`);
+  migrationEntry(migrationPlanSummary, "Ressourcenlimit", `${plan.max_work_units} Arbeitseinheiten · ${plan.max_memory_bytes} Byte Speicher`);
+  migrationEntry(migrationPlanSummary, "Adminaktion", plan.breaking_confirmation_required
+    ? "Breaking erfordert eine getrennte Bestätigung."
+    : "Keine Breaking-Bestätigung erforderlich.");
+  migrationEntry(migrationPlanSummary, "Restorepoint", plan.restorepoint_required
+    ? "Vor einer Breaking-Ausführung werden exakte Sicherung und geprüfter Restore-Klon verlangt."
+    : "Für diese Kategorie nicht erforderlich.");
+}
+
+function renderMigrationPreview(preview) {
+  migrationPreviewSummary.replaceChildren();
+  migrationPreviewSummary.hidden = !preview;
+  migrationRunButton.hidden = !preview || currentMigrationState?.run_attempted;
+  if (!preview) return;
+  const hasErrors = preview.error_count !== "0" || preview.omitted_error_count !== "0" || Boolean(preview.fatal_error);
+  const hasUnlistedItems = preview.omitted_unresolved_count !== "0";
+  const hasUnresolvedItems = preview.unresolved_items.length > 0;
+  const resultText = hasErrors || hasUnlistedItems
+    ? "Dry Run hat Fehler oder wegen des Diagnosebudgets nicht vollständig angezeigte Einträge; Ausführung bleibt gesperrt."
+    : currentMigrationState?.can_execute
+      ? hasUnresolvedItems
+        ? "Alle ungelösten Einträge wurden ausdrücklich zum Auslassen markiert. Es wurde noch nichts veröffentlicht."
+        : "Dry Run vollständig; Vorschau hat keine Daten veröffentlicht."
+      : hasUnresolvedItems
+        ? "Dry Run gefunden. Entscheide ausdrücklich, welche ungelösten Quelldatensätze ausgelassen werden sollen."
+        : "Dry Run unvollständig; Ausführung bleibt gesperrt.";
+  migrationEntry(migrationPreviewSummary, "Ergebnis", resultText);
+  migrationEntry(migrationPreviewSummary, "Eingabe", `${preview.source_record_count} Records · ${preview.input_bytes} Byte`);
+  migrationEntry(migrationPreviewSummary, "Platzschätzung", `${preview.estimated_output_records ?? "–"} Records · ${preview.estimated_output_bytes ?? "–"} Byte Ausgabe · ${preview.reserved_memory_bytes ?? "–"} Byte reservierter Speicher · ${preview.diagnostic_memory_bytes} Byte Diagnosespeicher`);
+  migrationEntry(migrationPreviewSummary, "Befunde", `${preview.error_count} Fehler (${preview.omitted_error_count} weitere Details ausgelassen) · ${preview.unresolved_items.length + Number(preview.omitted_unresolved_count)} ungelöste Einträge`);
+  migrationEntry(migrationPreviewSummary, "Vorschaufingerprints", `Eingabe ${preview.input_fingerprint ?? "nicht verfügbar"} · Ausgabe ${preview.output_fingerprint ?? "nicht verfügbar"}`);
+  migrationEntry(migrationPreviewSummary, "Contractphase", migrationPhaseText(preview.contract_phase));
+  migrationEntry(migrationPreviewSummary, "Restorepointstatus", migrationRestorepointText(preview.restorepoint_status));
+  if (preview.fatal_error) migrationEntry(migrationPreviewSummary, "Vorabprüfung", `Abgebrochen: ${preview.fatal_error}`);
+  for (const item of preview.errors) {
+    migrationEntry(migrationPreviewSummary, `Fehler in Record ${item.record_index}`, item.cause);
+  }
+  for (const item of preview.unresolved_items) {
+    const entry = document.createElement("div");
+    entry.className = "result-cell";
+    const heading = document.createElement("strong");
+    heading.textContent = `Ungelöster Record ${item.record_index}`;
+    const detail = document.createElement("p");
+    detail.textContent = `${item.reason} · ${item.source_record_fingerprint}`;
+    const choice = document.createElement("label");
+    choice.className = "inline";
+    const omit = document.createElement("input");
+    omit.type = "checkbox";
+    omit.dataset.migrationOmit = "true";
+    omit.value = item.record_index;
+    omit.checked = currentMigrationState?.omitted_record_indexes?.includes(item.record_index) ?? false;
+    omit.disabled = migrationBusy || currentMigrationState?.run_attempted === true || hasUnlistedItems;
+    omit.addEventListener("change", saveMigrationOmissions);
+    const choiceText = document.createElement("span");
+    choiceText.textContent = "Diesen Quelldatensatz ausdrücklich auslassen";
+    choice.append(omit, choiceText);
+    entry.append(heading, detail, choice);
+    migrationPreviewSummary.append(entry);
+  }
+  if (preview.omitted_unresolved_count !== "0") {
+    migrationEntry(migrationPreviewSummary, "Weitere ungelöste Einträge", preview.omitted_unresolved_count);
+  }
+  for (const warning of preview.warnings) {
+    migrationEntry(migrationPreviewSummary, "Hinweis", warning);
+  }
+}
+
+function renderMigrationState(state) {
+  currentMigrationState = state;
+  renderMigrationPlan(state?.plan ?? null);
+  renderMigrationPreview(state?.dry_run ?? null);
+  updateProjectControls();
+}
+
+function updateMigrationControls() {
+  const state = currentMigrationState;
+  const blocked = migrationBusy || projectBusy || projectOpen;
+  const otherBusy = projectBusy || schemaBusy || entityBusy || perspectiveBusy
+    || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
+  const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
+    || loadPendingProjectCreations().length > 0;
+  const migrationSelected = migrationBusy || Boolean(state?.plan);
+  createButton.disabled = otherBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
+  openButton.disabled = otherBusy || projectOpen || migrationSelected;
+  migrationSelectPlanButton.disabled = blocked || state?.run_attempted === true;
+  migrationPreviewButton.disabled = blocked || !state?.plan || state.run_attempted === true;
+  migrationCancelButton.hidden = !state;
+  migrationCancelButton.disabled = blocked || state?.run_attempted === true;
+  migrationRunButton.hidden = !state?.dry_run || state.run_attempted === true;
+  migrationRunButton.disabled = blocked || state?.can_execute !== true;
+  migrationResumeButton.hidden = state?.can_resume !== true;
+  migrationResumeButton.disabled = blocked || state?.can_resume !== true;
+}
+
+async function refreshMigrationState(activeSessionId = sessionId) {
+  if (!activeSessionId) return;
+  const response = await invoke("migration_status", {
+    sessionId: activeSessionId,
+    request: { protocol_version: 1 },
+  });
+  if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+  renderMigrationState(response.state);
+}
+
+function migrationErrorText(error) {
+  if (typeof error?.detail === "string" && error.detail.length > 0) return error.detail;
+  return showError(error);
+}
+
+async function saveMigrationOmissions() {
+  if (!sessionId || migrationBusy || currentMigrationState?.run_attempted) return;
+  const omittedRecordIndexes = [...migrationPreviewSummary.querySelectorAll("input[data-migration-omit]:checked")]
+    .map((input) => input.value);
+  migrationBusy = true;
+  migrationStatus.textContent = "Die ausgewählten Adminentscheidungen werden an den unveränderten Dry Run gebunden …";
+  updateMigrationControls();
+  try {
+    const response = await invoke("resolve_migration_items", {
+      sessionId,
+      request: { protocol_version: 1, omitted_record_indexes: omittedRecordIndexes },
+    });
+    if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+    renderMigrationState(response.state);
+    migrationStatus.textContent = currentMigrationState?.can_execute
+      ? "Alle ungelösten Einträge sind ausdrücklich entschieden. Prüfe die Vorschau und starte die Migration bei Bedarf separat."
+      : "Die Entscheidungen sind gespeichert; weitere ungelöste Einträge benötigen noch eine ausdrückliche Auswahl.";
+  } catch (error) {
+    migrationStatus.textContent = migrationErrorText(error);
+    await refreshMigrationState(sessionId).catch(() => {});
+  } finally {
+    migrationBusy = false;
+    updateMigrationControls();
+  }
+}
+
 function setBusy(busy) {
   projectBusy = busy;
   updateSchemaControls();
+  updateMigrationControls();
 }
 
 function renderProject(project) {
@@ -994,6 +1189,7 @@ function renderProject(project) {
   factsPanel.hidden = !projectOpen;
   jobsPanel.hidden = !projectOpen;
   recoveryPanel.hidden = projectOpen;
+  migrationPanel.hidden = projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -5610,6 +5806,13 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
             transferStatus.textContent = showError(error);
           });
         });
+        await listen("migration-state-changed", async () => {
+          try {
+            await refreshMigrationState(sessionId);
+          } catch (error) {
+            migrationStatus.textContent = migrationErrorText(error);
+          }
+        });
       }
 
       const [securityMode, projectMode] = await Promise.all([
@@ -5625,6 +5828,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         request: { protocol_version: 1, session_id: sessionId },
       });
       await refreshProject(sessionId);
+      await refreshMigrationState(sessionId);
 
       if (projectMode.enabled) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
@@ -5789,6 +5993,143 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     } finally {
       recoveryBusy = false;
       updateRecoveryControls();
+    }
+  });
+
+  migrationSelectPlanButton.addEventListener("click", async () => {
+    if (!sessionId || projectOpen || migrationBusy || currentMigrationState?.run_attempted) return;
+    migrationBusy = true;
+    migrationStatus.textContent = "Wähle im nativen Dialog zuerst das geschlossene Quellprojekt und danach den kanonischen Migrationsplan …";
+    updateMigrationControls();
+    try {
+      const response = await invoke("select_migration_plan", {
+        sessionId,
+        request: { protocol_version: 1 },
+      });
+      if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+      renderMigrationState({
+        plan: response.plan,
+        dry_run: null,
+        run_attempted: false,
+        attempted_run_id: null,
+        omitted_record_indexes: [],
+        can_execute: false,
+        can_resume: false,
+      });
+      migrationStatus.textContent = "Plan geprüft. Wähle jetzt für jeden Schritt die zugehörigen Quelldatensatzdateien und führe den Dry Run aus.";
+    } catch (error) {
+      migrationStatus.textContent = migrationErrorText(error);
+      await refreshMigrationState(sessionId).catch(() => {});
+    } finally {
+      migrationBusy = false;
+      updateMigrationControls();
+    }
+  });
+
+  migrationPreviewButton.addEventListener("click", async () => {
+    if (!sessionId || projectOpen || migrationBusy || !currentMigrationState?.plan) return;
+    migrationBusy = true;
+    migrationStatus.textContent = "Wähle für jeden Migrationsschritt die Quelldatensätze aus; Abbrechen im Dateidialog bedeutet, dass der Schritt keine Eingabedatensätze hat …";
+    updateMigrationControls();
+    try {
+      const response = await invoke("preview_migration", {
+        sessionId,
+        request: { protocol_version: 1 },
+      });
+      if (response.protocol_version !== 1) throw new Error("unsupported_protocol");
+      await refreshMigrationState(sessionId);
+      migrationStatus.textContent = response.result.preflight_complete
+        ? "Dry Run abgeschlossen. Die angezeigte Vorschau hat keine Daten geschrieben."
+        : "Dry Run abgeschlossen. Befunde oder Budgetgrenzen sperren die Ausführung.";
+    } catch (error) {
+      migrationStatus.textContent = migrationErrorText(error);
+      await refreshMigrationState(sessionId).catch(() => {});
+    } finally {
+      migrationBusy = false;
+      updateMigrationControls();
+    }
+  });
+
+  migrationRunButton.addEventListener("click", async () => {
+    const state = currentMigrationState;
+    if (!sessionId || projectOpen || migrationBusy || !state?.can_execute) return;
+    const breaking = state.plan.category === "Breaking";
+    if (breaking && !window.confirm(
+      `Breaking-Migration ${state.plan.migration_id} ausdrücklich starten?\n\nWorldDB erstellt zuerst eine exakte Sicherung und einen unabhängig geprüften Restore-Klon in den anschließend ausgewählten Ordnern. Danach beginnt die irreversible Contract-Phase.`,
+    )) return;
+    migrationBusy = true;
+    migrationStatus.textContent = breaking
+      ? "Wähle nacheinander die Elternordner für exakte Sicherung und geprüften Restore-Klon …"
+      : "Migration wird nach erneuter Prüfung des Quellstands ausgeführt …";
+    updateMigrationControls();
+    try {
+      const response = await invoke("run_migration", {
+        sessionId,
+        request: { protocol_version: 1, confirmed_breaking: breaking },
+      });
+      if (response.protocol_version !== 1 || response.result.status !== "completed") {
+        throw new Error("unsupported_protocol");
+      }
+      renderMigrationState(null);
+      migrationStatus.textContent = `Migration veröffentlicht · ${response.result.completed_step_count} Schritte · neue Revision ${response.result.final_revision} · ${migrationRestorepointText(response.result.restorepoint_status)}.`;
+    } catch (error) {
+      migrationStatus.textContent = migrationErrorText(error);
+      await refreshMigrationState(sessionId).catch(() => {});
+    } finally {
+      migrationBusy = false;
+      updateMigrationControls();
+    }
+  });
+
+  migrationResumeButton.addEventListener("click", async () => {
+    const state = currentMigrationState;
+    if (!sessionId || projectOpen || migrationBusy || !state?.can_resume) return;
+    const breaking = state.plan.category === "Breaking";
+    if (breaking && !window.confirm(
+      `Den bereits begonnenen Breaking-Lauf ${state.attempted_run_id ?? "(Lauf-ID unbekannt)"} fortsetzen?\n\nWorldDB prüft Journal und Sicherung erneut und verlangt für Breaking einen neuen Restore-Klon.`,
+    )) return;
+    migrationBusy = true;
+    migrationStatus.textContent = breaking
+      ? "Wähle den Elternordner für den neuen Restore-Klon …"
+      : "Der bestehende Migrationslauf wird anhand seines Journals fortgesetzt …";
+    updateMigrationControls();
+    try {
+      const response = await invoke("resume_migration", {
+        sessionId,
+        request: { protocol_version: 1, confirmed_breaking: breaking },
+      });
+      if (response.protocol_version !== 1 || response.result.status !== "resumed") {
+        throw new Error("unsupported_protocol");
+      }
+      renderMigrationState(null);
+      migrationStatus.textContent = `Migration fortgesetzt und abgeschlossen · ${response.result.completed_step_count} Schritte · neue Revision ${response.result.final_revision} · ${migrationRestorepointText(response.result.restorepoint_status)}.`;
+    } catch (error) {
+      migrationStatus.textContent = migrationErrorText(error);
+      await refreshMigrationState(sessionId).catch(() => {});
+    } finally {
+      migrationBusy = false;
+      updateMigrationControls();
+    }
+  });
+
+  migrationCancelButton.addEventListener("click", async () => {
+    if (!sessionId || migrationBusy || currentMigrationState?.run_attempted) return;
+    if (!window.confirm("Den ausgewählten Migrationsplan und seine Dry-Run-Eingaben verwerfen? Es wurde noch nichts migriert.")) return;
+    migrationBusy = true;
+    updateMigrationControls();
+    try {
+      await invoke("cancel_migration", {
+        sessionId,
+        request: { protocol_version: 1 },
+      });
+      renderMigrationState(null);
+      migrationStatus.textContent = "Migrationsplan und Vorschau wurden verworfen; das Projekt blieb unverändert.";
+    } catch (error) {
+      migrationStatus.textContent = migrationErrorText(error);
+      await refreshMigrationState(sessionId).catch(() => {});
+    } finally {
+      migrationBusy = false;
+      updateMigrationControls();
     }
   });
 
