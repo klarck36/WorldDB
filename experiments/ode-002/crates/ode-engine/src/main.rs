@@ -3,11 +3,14 @@ use std::io::{self, BufRead, Read, Write};
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use worlddb_core::OperationId;
+use std::time::{Duration, Instant};
+
 #[cfg(windows)]
 use worlddb_core::PrincipalId;
+use worlddb_core::{CancellationRequestDisposition, JobId, OperationId};
 use worlddb_ode_engine::{
-    EngineHost, Request, Response, StreamConsumer, StreamPlan, stream_response, with_operation_id,
+    EngineHost, JobJournalViewStatus, JobListView, JobShutdownView, Request, Response,
+    StreamConsumer, StreamPlan, stream_response, with_operation_id,
 };
 
 const FRAME_DATA: u8 = 1;
@@ -28,7 +31,7 @@ fn main() {
         }
         Some(_) => std::process::exit(64),
     };
-    let engine = if host_authenticated {
+    let mut engine = if host_authenticated {
         #[cfg(windows)]
         {
             let principal_id = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
@@ -86,6 +89,53 @@ fn main() {
                 let response = engine.health().unwrap_or_else(|_| Response::Error {
                     code: "engine_failed".to_owned(),
                 });
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
+            Request::JobsList => {
+                let response = engine
+                    .list_jobs()
+                    .map(|result| Response::Jobs { result })
+                    .unwrap_or_else(|_| Response::Error {
+                        code: "job_state_unavailable".to_owned(),
+                    });
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
+            Request::JobCancel { job_id } => {
+                let response = match JobId::from_str(&job_id) {
+                    Ok(job_id) => match engine.cancel_job(job_id) {
+                        Ok(disposition) => {
+                            let name = match disposition {
+                                CancellationRequestDisposition::Signalled => "signalled",
+                                CancellationRequestDisposition::AlreadySignalled => {
+                                    "already_signalled"
+                                }
+                                CancellationRequestDisposition::TooLate => "too_late",
+                                CancellationRequestDisposition::AlreadyTerminal => {
+                                    "already_terminal"
+                                }
+                                CancellationRequestDisposition::OutcomeUnknown => "outcome_unknown",
+                            };
+                            let jobs = engine.list_jobs().unwrap_or(JobListView {
+                                status: JobJournalViewStatus::Unavailable,
+                                jobs: Vec::new(),
+                            });
+                            Response::JobCancel {
+                                disposition: name.to_owned(),
+                                jobs,
+                            }
+                        }
+                        Err(_) => Response::Error {
+                            code: "job_cancel_unavailable".to_owned(),
+                        },
+                    },
+                    Err(_) => Response::Error {
+                        code: "invalid_job_id".to_owned(),
+                    },
+                };
                 if write_response(&response).is_err() {
                     std::process::exit(74);
                 }
@@ -318,8 +368,21 @@ fn main() {
             }
             Request::Panic => engine.panic_for_spike(),
             Request::Shutdown => {
-                let _ = write_response(&Response::Shutdown);
-                return;
+                let result = engine
+                    .shutdown_jobs(Instant::now() + Duration::from_secs(2))
+                    .unwrap_or(JobShutdownView {
+                        drained: false,
+                        unfinished_job_ids: Vec::new(),
+                        unfinished_workers: 0,
+                        worker_panics: 0,
+                    });
+                let drained = result.drained;
+                if write_response(&Response::Shutdown { result }).is_err() {
+                    std::process::exit(74);
+                }
+                if drained {
+                    return;
+                }
             }
         }
     }

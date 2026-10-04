@@ -9,6 +9,12 @@ const projectName = document.querySelector("#project-name");
 const createButton = document.querySelector("#create-project");
 const openButton = document.querySelector("#open-project");
 const closeButton = document.querySelector("#close-project");
+const jobsPanel = document.querySelector("#jobs-panel");
+const jobsStatus = document.querySelector("#jobs-status");
+const jobsList = document.querySelector("#jobs-list");
+const jobsRefreshButton = document.querySelector("#jobs-refresh");
+const jobsCloseProjectButton = document.querySelector("#jobs-close-project");
+const jobsShutdownStatus = document.querySelector("#jobs-shutdown-status");
 
 const schemaPanel = document.querySelector("#schema-panel");
 const schemaStatus = document.querySelector("#schema-status");
@@ -319,6 +325,7 @@ let operationJournalUnavailable = false;
 let projectCreationJournalUnavailable = false;
 const pendingProjectCreationPrefix = "worlddb.pending_project_creations.v1:";
 let projectBusy = false;
+let jobsBusy = false;
 let schemaBusy = false;
 let entityBusy = false;
 let perspectiveBusy = false;
@@ -348,6 +355,7 @@ let factSearchCursor = null;
 let factSearchBaseSignature = null;
 let projectRefreshPromise = null;
 let projectRefreshQueued = false;
+let jobsRefreshPromise = null;
 let pendingFactActionPreviews = { assertion: false, event: false, lifecycle: false };
 let pendingFactCorrectionCommands = { assertion: null, event: null };
 let stagedEventRoles = [];
@@ -918,6 +926,8 @@ function updateProjectControls() {
   createButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation;
   openButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen;
   closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
+  jobsRefreshButton.disabled = jobsBusy || !projectOpen;
+  jobsCloseProjectButton.disabled = closeButton.disabled;
 }
 
 function setBusy(busy) {
@@ -951,20 +961,140 @@ function renderProject(project) {
   branchLayerPanel.hidden = !projectOpen;
   transferPanel.hidden = !projectOpen;
   factsPanel.hidden = !projectOpen;
+  jobsPanel.hidden = !projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
     projectDetails.textContent = "Lege ein Projekt an oder öffne einen vorhandenen Projektordner.";
+    jobsList.replaceChildren();
+    jobsStatus.textContent = "Öffne ein Projekt, um den Jobjournalstatus zu lesen.";
+    jobsShutdownStatus.textContent = "";
     updateSchemaControls();
+    updateProjectControls();
     return;
   }
   projectStatus.textContent = project.project_name ?? "WorldDB-Projekt geöffnet";
   projectDetails.textContent = `Rolle: ${project.role ?? "unbekannt"} · Stand: ${project.revision ?? "–"}`;
   updateSchemaControls();
+  updateProjectControls();
 }
 
 async function getProject(activeSessionId) {
   return invoke("project_status", { sessionId: activeSessionId });
+}
+
+const jobText = {
+  kind: { migration: "Migration", backup: "Sicherung", index_build: "Indexaufbau" },
+  status: { queued: "wartet", running: "läuft", succeeded: "abgeschlossen", failed: "fehlgeschlagen", cancelled: "abgebrochen", needs_restart: "Neustart erforderlich", interrupted: "nach Neustart unterbrochen" },
+  phase: { queued: "wartet in der Queue", starting: "wird gestartet", scanning: "liest Daten", preparing: "bereitet Änderung vor", committing: "Commit läuft", finalizing: "schließt ab", recovering: "prüft Wiederaufnahme", shutting_down: "wird beendet" },
+  cancellation: { ready: "Abbruch kann angefordert werden", cancellation_requested: "Abbruch angefordert; sichere Grenze wird abgewartet", commitpoint_passed: "too_late: Commit wird sicher abgeschlossen", committed: "Commit abgeschlossen", not_committed: "nicht veröffentlicht", outcome_unknown: "Ausgang unklar; Abgleich erforderlich", interrupted_after_restart: "Commit-Ausgang nach Neustart unklar" },
+};
+
+function formatJobMemory(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "unbekannt";
+  if (bytes < 1024) return `${bytes} Byte`;
+  const unit = bytes < 1024 * 1024 ? "KiB" : "MiB";
+  const divisor = unit === "KiB" ? 1024 : 1024 * 1024;
+  return `${(bytes / divisor).toFixed(1)} ${unit}`;
+}
+
+function jobJournalStatusText(status) {
+  switch (status) {
+    case "available": return "Der dauerhafte Jobjournalstatus ist geprüft.";
+    case "recovered_older_snapshot": return "Der neueste Journalstand war beschädigt; ein älterer geprüfter Stand wird angezeigt.";
+    case "write_failed": return "Die letzte Statusänderung konnte nicht dauerhaft gesichert werden. Angezeigt wird der letzte bestätigte Stand.";
+    case "unavailable": return "Das Jobjournal ist nicht lesbar. Es werden keine Hintergrundjobs angenommen.";
+    default: return "Der Jobjournalstatus ist unbekannt.";
+  }
+}
+
+function renderJobs(result, cancelDisposition = null) {
+  jobsList.replaceChildren();
+  jobsStatus.textContent = jobJournalStatusText(result?.status);
+  if (cancelDisposition) {
+    const cancelText = {
+      signalled: "Abbruch wurde angefordert.",
+      already_signalled: "Der Abbruch war bereits angefordert.",
+      too_late: "too_late: Der Commitpunkt ist erreicht; die Veröffentlichung läuft zu Ende.",
+      already_terminal: "Der Job war bereits abgeschlossen.",
+      outcome_unknown: "Der Commit-Ausgang ist unklar; bitte den Status abgleichen.",
+    }[cancelDisposition] ?? "Der Abbruchstatus ist unbekannt.";
+    jobsStatus.textContent = `${jobsStatus.textContent} ${cancelText}`;
+  }
+  const jobs = Array.isArray(result?.jobs) ? result.jobs : [];
+  if (jobs.length === 0) {
+    appendText(jobsList, "p", "Keine Hintergrundjobs aufgezeichnet.", "muted compact");
+    return;
+  }
+  for (const job of jobs) {
+    const entry = document.createElement("article");
+    entry.className = "job-entry";
+    const kind = jobText.kind[job.kind] ?? "Job";
+    const status = jobText.status[job.status] ?? "unbekannter Status";
+    appendText(entry, "h3", `${kind} · ${status}`);
+    appendText(entry, "p", `Phase: ${jobText.phase[job.phase] ?? "unbekannt"} · Fortschritt: ${job.progress?.kind === "determinate" && Number.isSafeInteger(job.progress.completed) && Number.isSafeInteger(job.progress.total) ? `${job.progress.completed.toLocaleString()} / ${job.progress.total.toLocaleString()}` : "unbestimmt"}`);
+    appendText(entry, "p", `Budget: höchstens ${Number(job.max_work_units).toLocaleString()} Arbeitseinheiten und ${formatJobMemory(job.max_memory_bytes)} · reserviert: ${formatJobMemory(job.reserved_memory_bytes)}.`);
+    appendText(entry, "p", `Abbruch: ${jobText.cancellation[job.cancellation_state] ?? "Status unbekannt"}.`);
+    if (job.resume_metadata_version !== null && job.resume_metadata_version !== undefined) {
+      appendText(entry, "p", `Wiederaufnahmepunkt belegt · Format ${job.resume_metadata_version} · ${job.resume_metadata_bytes} Byte.`);
+    }
+    if (job.recovered_after_restart) {
+      appendText(entry, "p", "Nach Neustart wiederhergestellt: Dieser letzte dauerhaft gespeicherte Stand ist unterbrochen; Erfolg wird nicht unterstellt.", "schema-note muted");
+    }
+    if (job.failure) appendText(entry, "p", "Der Worker hat einen Fehler gemeldet.", "muted");
+    appendText(entry, "p", `Zuletzt belegt: ${new Date(job.observed_at_unix_ms).toLocaleString()}.`, "muted");
+    if (["queued", "running"].includes(job.status)) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Abbruch anfordern";
+      cancel.disabled = jobsBusy || result.status === "unavailable" || result.status === "write_failed";
+      cancel.addEventListener("click", () => { void requestJobCancel(job.job_id); });
+      entry.append(cancel);
+    }
+    jobsList.append(entry);
+  }
+}
+
+async function refreshJobs(activeSessionId = sessionId) {
+  if (!projectOpen || !activeSessionId) return;
+  if (jobsRefreshPromise) return jobsRefreshPromise;
+  if (jobsBusy) return;
+  jobsBusy = true;
+  updateProjectControls();
+  jobsRefreshPromise = (async () => {
+    try {
+      const response = await invoke("list_jobs", {
+        request: { protocol_version: 1, session_id: activeSessionId },
+      });
+      if (response.protocol_version !== 1 || !response.result) throw new Error("unsupported_protocol");
+      renderJobs(response.result);
+    } catch (error) {
+      jobsStatus.textContent = showError(error);
+    } finally {
+      jobsBusy = false;
+      jobsRefreshPromise = null;
+      updateProjectControls();
+    }
+  })();
+  return jobsRefreshPromise;
+}
+
+async function requestJobCancel(jobId) {
+  if (!sessionId || jobsBusy) return;
+  jobsBusy = true;
+  updateProjectControls();
+  try {
+    const response = await invoke("cancel_job", {
+      request: { protocol_version: 1, session_id: sessionId, job_id: jobId },
+    });
+    if (response.protocol_version !== 1 || !response.result) throw new Error("unsupported_protocol");
+    renderJobs(response.result, response.cancel_disposition ?? null);
+  } catch (error) {
+    jobsStatus.textContent = showError(error);
+  } finally {
+    jobsBusy = false;
+    updateProjectControls();
+  }
 }
 
 async function refreshProject(activeSessionId) {
@@ -980,6 +1110,7 @@ async function refreshProject(activeSessionId) {
       const previousRevision = projectRevision;
       const previousDatabaseId = currentDatabaseId;
       renderProject(await getProject(activeSessionId));
+      if (projectOpen) await refreshJobs(activeSessionId);
       if (projectOpen && currentDatabaseId && currentDatabaseId !== previousDatabaseId) {
         await reconcilePendingOperations();
         await reconcilePendingProjectCreations();
@@ -1093,22 +1224,77 @@ async function runSecurityProbes(activeSessionId) {
 async function runProjectSmoke(activeSessionId) {
   if (role === "primary") {
     await createProjectTracked(activeSessionId, "IPC-Smoke");
-    return;
+  } else {
+    const deadline = Date.now() + 20000;
+    let project;
+    do {
+      project = await getProject(activeSessionId);
+      if (project.project_open) {
+        await invoke("open_project", {
+          sessionId: activeSessionId,
+          request: { protocol_version: 1 },
+        });
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    if (!project?.project_open) throw new Error("Das primäre Fenster hat das Testprojekt nicht angelegt.");
   }
-  const deadline = Date.now() + 20000;
-  let project;
-  do {
-    project = await getProject(activeSessionId);
-    if (project.project_open) {
-      await invoke("open_project", {
-        sessionId: activeSessionId,
-        request: { protocol_version: 1 },
-      });
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  } while (Date.now() < deadline);
-  throw new Error("Das primäre Fenster hat das Testprojekt nicht angelegt.");
+  renderProject(await getProject(activeSessionId));
+  if (jobsPanel.hidden) throw new Error("Die Hintergrundjob-Ansicht blieb trotz geöffnetem Projekt verborgen.");
+  const response = await invoke("list_jobs", {
+    request: { protocol_version: 1, session_id: activeSessionId },
+  });
+  if (response.protocol_version !== 1 || response.result?.status !== "available"
+    || !Array.isArray(response.result.jobs) || response.result.jobs.length !== 0) {
+    throw new Error("Das Jobjournal lieferte für das frische Smoke-Projekt keinen leeren, geprüften Status.");
+  }
+  renderJobs(response.result);
+  if (!jobsList.textContent.includes("Keine Hintergrundjobs aufgezeichnet.")) {
+    throw new Error("Die leere Jobliste wird nicht sichtbar dargestellt.");
+  }
+
+  const fixture = {
+    job_id: "00000000-0000-7000-8000-000000000020",
+    kind: "migration",
+    status: "running",
+    phase: "committing",
+    progress: { kind: "determinate", completed: 2, total: 10 },
+    max_work_units: 100,
+    max_memory_bytes: 4096,
+    reserved_memory_bytes: 1024,
+    pool: "blocking_io",
+    cancellation_state: "commitpoint_passed",
+    resume_metadata_version: 1,
+    resume_metadata_bytes: 3,
+    failure: null,
+    observed_at_unix_ms: Date.now(),
+    recovered_after_restart: false,
+  };
+  renderJobs({ status: "available", jobs: [fixture] }, "too_late");
+  const committingText = `${jobsStatus.textContent} ${jobsList.textContent}`;
+  if (!committingText.includes("2 / 10") || !committingText.includes("höchstens 100 Arbeitseinheiten")
+    || !committingText.includes("Commit läuft") || !committingText.includes("too_late:")
+    || !committingText.includes("Wiederaufnahmepunkt belegt")
+    || !jobsList.querySelector("button")) {
+    throw new Error("Fortschritt, Budget, Commitpoint, Cancelwirkung oder Resume-Hinweis fehlt in der Jobansicht.");
+  }
+  renderJobs({
+    status: "available",
+    jobs: [{
+      ...fixture,
+      status: "interrupted",
+      phase: "scanning",
+      progress: { kind: "indeterminate" },
+      cancellation_state: "interrupted_after_restart",
+      recovered_after_restart: true,
+    }],
+  });
+  if (!jobsList.textContent.includes("unbestimmt")
+    || !jobsList.textContent.includes("Nach Neustart wiederhergestellt")) {
+    throw new Error("Unbestimmter Fortschritt oder belegter Neustartstatus fehlt in der Jobansicht.");
+  }
+  renderJobs(response.result);
 }
 
 function schemaModeInput() {
@@ -5177,9 +5363,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
 
       const listen = window.__TAURI__?.event?.listen;
       if (listen) {
-        await listen("project-state-changed", () => {
+        await listen("project-state-changed", async () => {
           if (factBusy) return;
-          refreshProject(sessionId).catch(() => {});
+          try {
+            await refreshProject(sessionId);
+          } catch {
+            return;
+          }
+          if (!projectOpen) return;
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
@@ -5237,11 +5428,26 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
-        if (role === "primary") await recordFactsSmokeStage("project-complete");
+        if (role === "primary") {
+          const closeResponse = await invoke("close_project", {
+            sessionId,
+            request: { protocol_version: 1 },
+          });
+          if (!closeResponse.closed || closeResponse.project?.project_open
+            || !closeResponse.shutdown?.drained
+            || closeResponse.shutdown.unfinished_job_ids.length !== 0
+            || closeResponse.shutdown.unfinished_workers !== 0) {
+            throw new Error("Der geordnete Job-Shutdown hat den Projekt-Drain nicht vollständig bestätigt.");
+          }
+          renderProject(closeResponse.project);
+          jobsShutdownStatus.textContent = "Shutdown: vollständig; keine offenen Jobs oder Worker.";
+          await recordFactsSmokeStage("project-complete");
+        }
       }
 
       window.setInterval(() => {
         if (!factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
+        if (!jobsBusy && projectOpen) refreshJobs(sessionId).catch(() => {});
       }, 1200);
     })
     .catch((error) => {
@@ -5290,8 +5496,18 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     setBusy(true);
     operationStatus.textContent = "Projekt wird geschlossen …";
     try {
-      await invoke("close_project", { sessionId, request: { protocol_version: 1 } });
-      operationStatus.textContent = "Projekt wurde geschlossen.";
+      const result = await invoke("close_project", { sessionId, request: { protocol_version: 1 } });
+      const shutdown = result.shutdown;
+      const summary = shutdown
+        ? ` Job-Drain: ${shutdown.drained ? "vollständig" : "unvollständig"} · ${shutdown.unfinished_job_ids.length} offene Jobs · ${shutdown.unfinished_workers} offene Worker · ${shutdown.worker_panics} Worker-Fehler.`
+        : "";
+      if (result.closed) {
+        operationStatus.textContent = `Projekt wurde geordnet geschlossen.${summary}`;
+        jobsShutdownStatus.textContent = `Shutdown: ${shutdown?.drained ? "vollständig" : "kein aktiver Job-Drain erforderlich"}.`;
+      } else {
+        operationStatus.textContent = `Projekt bleibt geöffnet, bis alle Jobs einen sicheren Endzustand erreicht haben.${summary}`;
+        jobsShutdownStatus.textContent = operationStatus.textContent;
+      }
     } catch (error) {
       operationStatus.textContent = showError(error);
     } finally {
@@ -5299,6 +5515,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       await refreshProject(sessionId).catch(() => {});
     }
   });
+
+  jobsRefreshButton.addEventListener("click", () => refreshJobs().catch(() => {}));
+  jobsCloseProjectButton.addEventListener("click", () => closeButton.click());
 
   schemaRefreshButton.addEventListener("click", () => refreshSchema().catch(() => {}));
   schemaCreateButton.addEventListener("click", publishDefinition);

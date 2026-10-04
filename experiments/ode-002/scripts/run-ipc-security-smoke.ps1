@@ -577,6 +577,8 @@ try {
         filesystem_plugin_command_rejected_in_both_windows = 'PASS'
         host_principal_not_selected_by_environment = 'PASS'
         core_network_listeners = 'PASS'
+        background_job_journal_and_renderer = 'PASS'
+        background_job_shutdown_drain = 'PASS'
         process_shutdown = 'PASS'
     } | ConvertTo-Json -Compress
 }

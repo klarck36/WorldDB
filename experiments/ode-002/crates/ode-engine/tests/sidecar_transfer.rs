@@ -161,7 +161,10 @@ fn sidecar_acknowledges_each_chunk_and_finishes_or_cancels() {
     ));
 
     sidecar.send_request(&Request::Shutdown);
-    assert!(matches!(sidecar.read_response(), Response::Shutdown));
+    assert!(matches!(
+        sidecar.read_response(),
+        Response::Shutdown { result } if result.drained
+    ));
     let status = sidecar.child.wait().expect("sidecar exits");
     assert!(status.success());
     drop(sidecar);

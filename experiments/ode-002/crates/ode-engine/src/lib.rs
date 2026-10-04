@@ -5,7 +5,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use worlddb_core::{CursorStateStore, CursorStoreLimits, OperationId, PrincipalId, QueryHash};
+use worlddb_core::{
+    CursorStateStore, CursorStoreLimits, JobCompletion, JobControl, JobId, JobSpec, JobSupervisor,
+    OperationId, PrincipalId, QueryHash,
+};
 use worlddb_storage_file::{DatabaseLayout, FactTokenSearchSession, WriterLock};
 
 mod project;
@@ -65,6 +68,11 @@ pub use schema::{
     SchemaFamily, SchemaLifecycle, SchemaLifecycleUpdateDraft, SchemaModeInput,
     SchemaPublicationView, SchemaResponse, SchemaSnapshotView, TimeBoundDraft, ValueKindDraft,
 };
+mod jobs;
+pub use jobs::{
+    JobCancellationView, JobJournalViewStatus, JobKindView, JobListView, JobPhaseView, JobPoolView,
+    JobProgressView, JobShutdownView, JobStatusView, JobView,
+};
 
 pub const MAX_STREAM_BYTES: u64 = 100 * 1024 * 1024;
 pub const MAX_STREAM_CHUNK_BYTES: u32 = 1024 * 1024;
@@ -119,6 +127,8 @@ pub struct EngineHost {
     transfer_previews: Mutex<HashMap<String, history_space_transfer::PendingTransferPreview>>,
     query_cursors: Mutex<CursorStateStore>,
     fact_search_sessions: Mutex<HashMap<QueryHash, FactTokenSearchSession>>,
+    jobs: JobSupervisor,
+    job_journal: Mutex<Option<jobs::JobJournal>>,
     clock_origin: Instant,
 }
 
@@ -140,6 +150,10 @@ struct ActiveStream {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
     Health,
+    JobsList,
+    JobCancel {
+        job_id: String,
+    },
     StreamSink {
         total_bytes: u64,
         chunk_bytes: u32,
@@ -210,6 +224,13 @@ pub enum Response {
         engine_process_id: u32,
         writer_owned: bool,
     },
+    Jobs {
+        result: JobListView,
+    },
+    JobCancel {
+        disposition: String,
+        jobs: JobListView,
+    },
     StreamComplete {
         bytes_read: u64,
         digest: String,
@@ -244,7 +265,9 @@ pub enum Response {
     Facts {
         result: Box<FactResponse>,
     },
-    Shutdown,
+    Shutdown {
+        result: JobShutdownView,
+    },
     Error {
         code: String,
     },
@@ -343,6 +366,7 @@ pub enum EngineError {
     BranchLayer(String),
     Perspective(String),
     SecurityPolicy(String),
+    Jobs(String),
     HistorySpaceTransfer(String),
     Fact(String),
 }
@@ -357,6 +381,7 @@ impl std::fmt::Display for EngineError {
             Self::BranchLayer(message) => formatter.write_str(message),
             Self::Perspective(message) => formatter.write_str(message),
             Self::SecurityPolicy(message) => formatter.write_str(message),
+            Self::Jobs(message) => formatter.write_str(message),
             Self::HistorySpaceTransfer(message) => formatter.write_str(message),
             Self::Fact(message) => formatter.write_str(message),
         }
@@ -378,6 +403,9 @@ impl EngineHost {
             .map_err(|_| EngineError::Storage("database writer lock unavailable".to_owned()))?;
         let query_cursors =
             new_query_cursor_store().map_err(|error| EngineError::Storage(error.to_owned()))?;
+        let job_supervisor = jobs::supervisor()
+            .map_err(|_| EngineError::Storage("job worker pool unavailable".to_owned()))?;
+        let job_journal = jobs::JobJournal::open(&layout).ok();
         Ok(Self {
             _layout: layout,
             _writer_lock: writer_lock,
@@ -388,6 +416,8 @@ impl EngineHost {
             transfer_previews: Mutex::new(HashMap::new()),
             query_cursors: Mutex::new(query_cursors),
             fact_search_sessions: Mutex::new(HashMap::new()),
+            jobs: job_supervisor,
+            job_journal: Mutex::new(job_journal),
             clock_origin: Instant::now(),
         })
     }
@@ -407,6 +437,8 @@ impl EngineHost {
         })?;
         let access = project::resolve_open_access(&layout, &writer_lock, principal_id)?;
         let query_cursors = new_query_cursor_store().map_err(|_| ProjectError::HostUnavailable)?;
+        let job_supervisor = jobs::supervisor().map_err(|_| ProjectError::HostUnavailable)?;
+        let job_journal = jobs::JobJournal::open(&layout).ok();
         Ok((
             Self {
                 _layout: layout,
@@ -418,6 +450,8 @@ impl EngineHost {
                 transfer_previews: Mutex::new(HashMap::new()),
                 query_cursors: Mutex::new(query_cursors),
                 fact_search_sessions: Mutex::new(HashMap::new()),
+                jobs: job_supervisor,
+                job_journal: Mutex::new(job_journal),
                 clock_origin: Instant::now(),
             },
             access,
@@ -428,6 +462,91 @@ impl EngineHost {
     #[must_use]
     pub const fn principal_id(&self) -> Option<PrincipalId> {
         self.principal_id
+    }
+
+    /// Lists live and restart-recovered jobs from the checksummed durable journal.
+    pub fn list_jobs(&self) -> Result<JobListView, EngineError> {
+        let snapshots = self
+            .jobs
+            .list()
+            .map_err(|_| EngineError::Jobs("job state unavailable".to_owned()))?;
+        let mut journal = self
+            .job_journal
+            .lock()
+            .map_err(|_| EngineError::Jobs("job journal unavailable".to_owned()))?;
+        let Some(journal) = journal.as_mut() else {
+            return Ok(JobListView {
+                status: jobs::JobJournalViewStatus::Unavailable,
+                jobs: Vec::new(),
+            });
+        };
+        if journal.merge(&snapshots).is_err() {
+            journal.mark_write_failed();
+        }
+        Ok(journal.response())
+    }
+
+    /// Admits one bounded background task only after its queued state is durable.
+    pub fn submit_job(
+        &self,
+        spec: JobSpec,
+        work: impl FnOnce(JobControl) -> JobCompletion + Send + 'static,
+    ) -> Result<(), EngineError> {
+        let job_id = spec.job_id().to_string();
+        {
+            let mut journal = self
+                .job_journal
+                .lock()
+                .map_err(|_| EngineError::Jobs("job journal unavailable".to_owned()))?;
+            let Some(journal) = journal.as_mut() else {
+                return Err(EngineError::Jobs("job journal unavailable".to_owned()));
+            };
+            journal
+                .insert_queued(spec)
+                .map_err(|_| EngineError::Jobs("job journal unavailable".to_owned()))?;
+        }
+        if let Err(error) = self.jobs.submit(spec, work) {
+            if let Ok(mut journal) = self.job_journal.lock() {
+                if let Some(journal) = journal.as_mut() {
+                    let _ = journal.remove_unaccepted(&job_id);
+                }
+            }
+            return Err(EngineError::Jobs(error.to_string()));
+        }
+        let _ = self.list_jobs();
+        Ok(())
+    }
+
+    /// Requests cooperative cancellation and reports whether publication made it too late.
+    pub fn cancel_job(
+        &self,
+        job_id: JobId,
+    ) -> Result<worlddb_core::CancellationRequestDisposition, EngineError> {
+        let disposition = self
+            .jobs
+            .cancel_with_disposition(job_id)
+            .map_err(|_| EngineError::Jobs("job cancellation unavailable".to_owned()))?;
+        let _ = self.list_jobs();
+        Ok(disposition)
+    }
+
+    /// Stops job intake and drains workers to one bounded deadline.
+    pub fn shutdown_jobs(&mut self, deadline: Instant) -> Result<JobShutdownView, EngineError> {
+        let report = self
+            .jobs
+            .close(deadline)
+            .map_err(|_| EngineError::Jobs("job shutdown state unavailable".to_owned()))?;
+        let _ = self.list_jobs();
+        Ok(JobShutdownView {
+            drained: report.drained(),
+            unfinished_job_ids: report
+                .unfinished_jobs()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            unfinished_workers: report.unfinished_workers(),
+            worker_panics: report.worker_panics(),
+        })
     }
 
     pub(crate) fn query_now_ms(&self) -> u64 {
@@ -593,11 +712,19 @@ pub fn stream_response(report: StreamReport) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use super::{
-        OperationId, StreamConsumer, StreamPlan, fill_deterministic_chunk,
-        requested_operation_id_or, with_operation_id,
+        EngineHost, JobCancellationView, JobJournalViewStatus, JobStatusView, OperationId,
+        StreamConsumer, StreamPlan, fill_deterministic_chunk, requested_operation_id_or,
+        with_operation_id,
+    };
+    use worlddb_core::{
+        CancellationRequestDisposition, JobBudget, JobCompletion, JobId, JobKind, JobPhase,
+        JobPool, JobProgress, JobSpec,
     };
 
     static NEXT_TEST_DATABASE: AtomicU64 = AtomicU64::new(0);
@@ -763,6 +890,138 @@ mod tests {
         assert_eq!(cancelled.bytes_read, 3);
         assert!(cancelled.cancelled);
 
+        drop(engine);
+        let _ = std::fs::remove_dir_all(database_root);
+    }
+
+    #[test]
+    fn durable_job_journal_shows_last_evidence_as_interrupted_after_restart() {
+        let database_root = std::env::temp_dir().join(format!(
+            "worlddb-ode-job-restart-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DATABASE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let engine = EngineHost::open(&database_root).expect("test engine open");
+        let job_id = JobId::from_str("00000000-0000-7000-8000-000000000077").expect("valid job id");
+        let budget = JobBudget::new(100, 4096).expect("finite job budget");
+        let spec = JobSpec::new(job_id, JobKind::Backup, None, budget, JobPool::BlockingIo);
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        engine
+            .submit_job(spec, move |control| {
+                if control.report_phase(JobPhase::Scanning).is_err()
+                    || control
+                        .report_progress(JobProgress::determinate(2, 10).expect("valid progress"))
+                        .is_err()
+                    || control.set_resume_metadata(1, vec![7, 8, 9]).is_err()
+                {
+                    return JobCompletion::Failed;
+                }
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                JobCompletion::Succeeded
+            })
+            .expect("job accepted after its initial state was durable");
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("job reached its recorded phase");
+        let before_restart = engine.list_jobs().expect("running job is readable");
+        assert_eq!(before_restart.status, JobJournalViewStatus::Available);
+        assert_eq!(before_restart.jobs.len(), 1);
+        assert_eq!(before_restart.jobs[0].status, JobStatusView::Running);
+        assert_eq!(before_restart.jobs[0].phase, super::JobPhaseView::Scanning);
+        assert_eq!(before_restart.jobs[0].resume_metadata_version, Some(1));
+        drop(engine);
+
+        let restarted = EngineHost::open(&database_root).expect("database reopens");
+        let after_restart = restarted.list_jobs().expect("recovered job is readable");
+        assert_eq!(after_restart.jobs.len(), 1);
+        assert_eq!(after_restart.jobs[0].status, JobStatusView::Interrupted);
+        assert_eq!(after_restart.jobs[0].phase, super::JobPhaseView::Scanning);
+        assert_eq!(
+            after_restart.jobs[0].progress,
+            super::JobProgressView::Determinate {
+                completed: 2,
+                total: 10,
+            }
+        );
+        assert_eq!(after_restart.jobs[0].resume_metadata_version, Some(1));
+        assert!(after_restart.jobs[0].recovered_after_restart);
+        assert_ne!(after_restart.status, JobJournalViewStatus::Unavailable);
+        release_tx.send(()).expect("detached test worker released");
+        drop(restarted);
+        let _ = std::fs::remove_dir_all(database_root);
+    }
+
+    #[test]
+    fn engine_cancel_reports_too_late_and_persists_commitpoint_evidence() {
+        let database_root = std::env::temp_dir().join(format!(
+            "worlddb-ode-job-cancel-{}-{}",
+            std::process::id(),
+            NEXT_TEST_DATABASE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut engine = EngineHost::open(&database_root).expect("test engine open");
+        let job_id = JobId::from_str("00000000-0000-7000-8000-000000000078").expect("valid job id");
+        let budget = JobBudget::new(100, 4096).expect("finite job budget");
+        let spec = JobSpec::new(
+            job_id,
+            JobKind::Migration,
+            None,
+            budget,
+            JobPool::BlockingIo,
+        );
+        let (commitpoint_tx, commitpoint_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        engine
+            .submit_job(spec, move |control| {
+                if control.report_phase(JobPhase::Committing).is_err() {
+                    return JobCompletion::Failed;
+                }
+                let permit = match control.begin_commitpoint() {
+                    Ok(permit) => permit,
+                    Err(_) => return JobCompletion::Failed,
+                };
+                let _ = commitpoint_tx.send(());
+                if release_rx.recv().is_err() {
+                    return JobCompletion::Failed;
+                }
+                permit.committed();
+                JobCompletion::Succeeded
+            })
+            .expect("job accepted");
+        commitpoint_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("job entered the commitpoint");
+
+        assert_eq!(
+            engine.cancel_job(job_id).expect("cancellation reported"),
+            CancellationRequestDisposition::TooLate
+        );
+        let after_cancel = engine.list_jobs().expect("job state is readable");
+        assert_eq!(after_cancel.jobs.len(), 1);
+        assert_eq!(after_cancel.jobs[0].status, JobStatusView::Running);
+        assert_eq!(after_cancel.jobs[0].phase, super::JobPhaseView::Committing);
+        assert_eq!(
+            after_cancel.jobs[0].cancellation_state,
+            JobCancellationView::CommitpointPassed
+        );
+
+        release_tx.send(()).expect("commit released");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let completed = loop {
+            let jobs = engine.list_jobs().expect("terminal job is readable");
+            let job = jobs.jobs.first().expect("job retained");
+            if job.status == JobStatusView::Succeeded {
+                break job.clone();
+            }
+            assert!(std::time::Instant::now() < deadline, "job did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(completed.cancellation_state, JobCancellationView::Committed);
+        let shutdown = engine
+            .shutdown_jobs(std::time::Instant::now() + Duration::from_secs(2))
+            .expect("job pool drained");
+        assert!(shutdown.drained);
         drop(engine);
         let _ = std::fs::remove_dir_all(database_root);
     }

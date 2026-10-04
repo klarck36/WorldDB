@@ -62,6 +62,10 @@
       #facts-write-status, #facts-preview-status { min-height: 1.5em; }
       .result-cell { border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); padding: 12px 0; }
       .result-cell:first-child { border-top: 0; }
+      .job-entry { border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); padding: 14px 0; }
+      .job-entry:first-child { border-top: 0; }
+      .job-entry h3 { margin: 0 0 6px; font-size: 1rem; }
+      .job-entry p { margin: 4px 0; }
     </style>
   </head>
   <body>
@@ -85,6 +89,17 @@
         </div>
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
         <button id="reconcile-operations" type="button" hidden>Schreibstatus erneut prüfen</button>
+      </section>
+      <section id="jobs-panel" class="card" aria-labelledby="jobs-heading" hidden>
+        <h2 id="jobs-heading">Hintergrundjobs und Shutdown</h2>
+        <p class="muted">Fortschritt zeigt echte Zähler oder „unbestimmt“. Nach einem Neustart wird der letzte dauerhaft belegte Stand als unterbrochen angezeigt.</p>
+        <div class="actions">
+          <button id="jobs-refresh" type="button">Jobstatus aktualisieren</button>
+          <button id="jobs-close-project" type="button">Projekt geordnet schließen</button>
+        </div>
+        <p id="jobs-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="jobs-list" aria-live="polite"></div>
+        <p id="jobs-shutdown-status" class="muted" role="status" aria-live="polite"></p>
       </section>
       <section id="schema-panel" class="card" aria-labelledby="schema-heading" hidden>
         <h2 id="schema-heading">Schema-Verwaltung</h2>

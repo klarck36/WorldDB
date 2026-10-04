@@ -28,6 +28,21 @@ pub enum JobTerminalState {
     Cancelled,
     /// A worker panic requires the engine to restart before work can continue.
     NeedsRestart,
+    /// The last durable checkpoint was incomplete when the process restarted.
+    Interrupted,
+}
+
+/// User-visible phase reported by a bounded background job.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum JobPhase {
+    Queued,
+    Starting,
+    Scanning,
+    Preparing,
+    Committing,
+    Finalizing,
+    Recovering,
+    ShuttingDown,
 }
 
 /// Classified panic observed when joining a worker task.
@@ -237,6 +252,7 @@ pub struct JobDescriptor {
     kind: JobKind,
     owner: Option<PrincipalId>,
     status: JobStatus,
+    phase: JobPhase,
     budget: JobBudget,
     progress: JobProgress,
 }
@@ -249,6 +265,7 @@ impl JobDescriptor {
         kind: JobKind,
         owner: Option<PrincipalId>,
         status: JobStatus,
+        phase: JobPhase,
         budget: JobBudget,
         progress: JobProgress,
     ) -> Self {
@@ -257,6 +274,7 @@ impl JobDescriptor {
             kind,
             owner,
             status,
+            phase,
             budget,
             progress,
         }
@@ -286,6 +304,12 @@ impl JobDescriptor {
         self.status
     }
 
+    /// Returns the last explicitly reported job phase.
+    #[must_use]
+    pub const fn phase(self) -> JobPhase {
+        self.phase
+    }
+
     /// Returns the finite resource ceilings.
     #[must_use]
     pub const fn budget(self) -> JobBudget {
@@ -302,7 +326,7 @@ impl JobDescriptor {
 #[cfg(test)]
 mod tests {
     use super::{
-        JobBudget, JobBudgetError, JobDescriptor, JobKind, JobProgress, JobProgressError,
+        JobBudget, JobBudgetError, JobDescriptor, JobKind, JobPhase, JobProgress, JobProgressError,
         JobStatus, JobTerminalState, TaskFailure, TaskRole, observe_task_join,
     };
     use crate::ids::{DomainId, IdValidationError, JobId, PrincipalId};
@@ -332,12 +356,14 @@ mod tests {
                     JobKind::Migration,
                     Some(owner),
                     JobStatus::Running,
+                    JobPhase::Scanning,
                     budget,
                     progress,
                 );
                 assert_eq!(descriptor.job_id(), job_id);
                 assert_eq!(descriptor.owner(), Some(owner));
                 assert_eq!(descriptor.status(), JobStatus::Running);
+                assert_eq!(descriptor.phase(), JobPhase::Scanning);
                 assert_eq!(descriptor.budget().max_work_units(), 100);
                 assert_eq!(descriptor.progress(), progress);
             }
@@ -354,6 +380,7 @@ mod tests {
             JobTerminalState::Failed,
             JobTerminalState::Cancelled,
             JobTerminalState::NeedsRestart,
+            JobTerminalState::Interrupted,
         ] {
             assert!(JobStatus::Terminal(state).is_terminal());
         }

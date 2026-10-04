@@ -5,7 +5,6 @@ use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Instant;
 
-#[cfg(feature = "sidecar")]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -17,10 +16,10 @@ use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
     FactCommand, FactQueryModeInput, FactQuerySchemaModeInput, FactResponse,
-    HistorySpaceTransferCommand, HistorySpaceTransferResponse, MaskSelectorInput,
-    PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView, ResolutionResultView, Response,
-    SchemaCommand, SchemaResponse, SecurityPolicyCommand, SecurityPolicyResponse,
-    SecurityPolicySnapshotView, StreamPlan,
+    HistorySpaceTransferCommand, HistorySpaceTransferResponse, JobListView, JobShutdownView,
+    MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView,
+    ResolutionResultView, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
+    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -34,7 +33,9 @@ use transfer::{
     FinishTransferRequestV1, IPC_PROTOCOL_VERSION, MAX_TRANSFER_CHUNK_BYTES, TransferCompletionV1,
     TransferError, TransferManager,
 };
-use worlddb_core::{OperationId, PrincipalId};
+#[cfg(feature = "in-process")]
+use worlddb_core::CancellationRequestDisposition;
+use worlddb_core::{JobId, OperationId, PrincipalId};
 use worlddb_ode_engine::ProjectError;
 
 #[cfg(feature = "sidecar")]
@@ -169,6 +170,8 @@ fn run() -> Result<(), String> {
             finish_transfer,
             project_dialog_mode,
             project_status,
+            list_jobs,
+            cancel_job,
             create_project,
             open_project,
             close_project,
@@ -269,6 +272,37 @@ struct OpenProjectRequestV1 {
 #[serde(deny_unknown_fields)]
 struct CloseProjectRequestV1 {
     protocol_version: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobsRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelJobRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    job_id: String,
+}
+
+#[derive(Serialize)]
+struct JobListResponseV1 {
+    protocol_version: u16,
+    result: JobListView,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cancel_disposition: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CloseProjectResponseV1 {
+    protocol_version: u16,
+    project: ProjectStatusV1,
+    closed: bool,
+    shutdown: Option<JobShutdownView>,
 }
 
 #[derive(Deserialize)]
@@ -416,6 +450,17 @@ fn parse_client_operation_id(value: Option<&str>) -> Result<Option<OperationId>,
         .map_err(|_| IpcErrorV1::new("invalid_operation_id"))
 }
 
+#[cfg(feature = "in-process")]
+fn cancel_disposition_code(disposition: CancellationRequestDisposition) -> &'static str {
+    match disposition {
+        CancellationRequestDisposition::Signalled => "signalled",
+        CancellationRequestDisposition::AlreadySignalled => "already_signalled",
+        CancellationRequestDisposition::TooLate => "too_late",
+        CancellationRequestDisposition::AlreadyTerminal => "already_terminal",
+        CancellationRequestDisposition::OutcomeUnknown => "outcome_unknown",
+    }
+}
+
 #[tauri::command]
 fn security_smoke_mode() -> SecuritySmokeModeV1 {
     SecuritySmokeModeV1 {
@@ -477,6 +522,64 @@ fn project_status(
     backend
         .project_status(window.label())
         .map_err(map_project_error)
+}
+
+#[tauri::command]
+fn list_jobs(
+    window: tauri::WebviewWindow,
+    request: JobsRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<JobListResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let result = backend
+        .list_jobs()
+        .map_err(|_| IpcErrorV1::new("job_state_unavailable"))?;
+    Ok(JobListResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+        cancel_disposition: None,
+    })
+}
+
+#[tauri::command]
+fn cancel_job(
+    window: tauri::WebviewWindow,
+    request: CancelJobRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<JobListResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let job_id = JobId::from_str(&request.job_id).map_err(|_| IpcErrorV1::new("invalid_job_id"))?;
+    let disposition = backend
+        .cancel_job(job_id)
+        .map_err(|_| IpcErrorV1::new("job_cancel_unavailable"))?;
+    let result = backend
+        .list_jobs()
+        .map_err(|_| IpcErrorV1::new("job_state_unavailable"))?;
+    Ok(JobListResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+        cancel_disposition: Some(disposition),
+    })
 }
 
 #[tauri::command]
@@ -558,19 +661,28 @@ fn close_project(
     request: CloseProjectRequestV1,
     sessions: tauri::State<'_, HostSessionManager>,
     backend: tauri::State<'_, Backend>,
-) -> Result<ProjectStatusV1, IpcErrorV1> {
+) -> Result<CloseProjectResponseV1, IpcErrorV1> {
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectClose)
         .map_err(map_session_error)?;
-    backend.close_project().map_err(map_project_error)?;
-    app.emit("project-state-changed", ())
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    backend
+    let shutdown = backend.close_project().map_err(map_project_error)?;
+    let project = backend
         .project_status(window.label())
-        .map_err(map_project_error)
+        .map_err(map_project_error)?;
+    let closed = !project.project_open;
+    if closed {
+        app.emit("project-state-changed", ())
+            .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    }
+    Ok(CloseProjectResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        project,
+        closed,
+        shutdown,
+    })
 }
 
 #[tauri::command]
@@ -2107,6 +2219,14 @@ impl Backend {
         state.engine.as_ref().map(EngineBackend::health).transpose()
     }
 
+    fn list_jobs(&self) -> Result<JobListView, String> {
+        self.with_engine(EngineBackend::list_jobs)
+    }
+
+    fn cancel_job(&self, job_id: JobId) -> Result<String, String> {
+        self.with_engine(|engine| engine.cancel_job(job_id))
+    }
+
     fn project_status(&self, window_label: &str) -> Result<ProjectStatusV1, ProjectError> {
         let mut state = self
             .state
@@ -2269,17 +2389,27 @@ impl Backend {
         self.project_status_locked(&mut state, window_label)
     }
 
-    fn close_project(&self) -> Result<(), ProjectError> {
+    fn close_project(&self) -> Result<Option<JobShutdownView>, ProjectError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| ProjectError::HostUnavailable)?;
         if state.project.is_some() {
+            let shutdown = state
+                .engine
+                .as_mut()
+                .ok_or(ProjectError::HostUnavailable)?
+                .shutdown()
+                .map_err(|_| ProjectError::HostUnavailable)?;
+            if !shutdown.drained {
+                return Ok(Some(shutdown));
+            }
             state.windows.clear();
             state.project = None;
             state.engine = None;
+            return Ok(Some(shutdown));
         }
-        Ok(())
+        Ok(None)
     }
 
     fn schema_with_operation_id(
@@ -2703,6 +2833,50 @@ impl EngineBackend {
         }
     }
 
+    fn list_jobs(&self) -> Result<JobListView, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .list_jobs()
+                .map_err(|_| "job state unavailable".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .list_jobs(),
+        }
+    }
+
+    fn cancel_job(&self, job_id: JobId) -> Result<String, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .cancel_job(job_id)
+                .map(cancel_disposition_code)
+                .map(str::to_owned)
+                .map_err(|_| "job cancellation unavailable".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .cancel_job(job_id.to_string()),
+        }
+    }
+
+    fn shutdown(&mut self) -> Result<JobShutdownView, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .shutdown_jobs(Instant::now() + Duration::from_secs(2))
+                .map_err(|_| "job shutdown unavailable".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .get_mut()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .shutdown_child(),
+        }
+    }
+
     fn begin_stream(
         &self,
         transfer_id: &str,
@@ -2964,6 +3138,22 @@ impl Sidecar {
 
     fn health(&mut self) -> Result<Response, String> {
         self.request(Request::Health)
+    }
+
+    fn list_jobs(&mut self) -> Result<JobListView, String> {
+        match self.request(Request::JobsList)? {
+            Response::Jobs { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected job status request".to_owned()),
+            _ => Err("sidecar returned an unexpected job status response".to_owned()),
+        }
+    }
+
+    fn cancel_job(&mut self, job_id: String) -> Result<String, String> {
+        match self.request(Request::JobCancel { job_id })? {
+            Response::JobCancel { disposition, .. } => Ok(disposition),
+            Response::Error { .. } => Err("sidecar rejected job cancellation".to_owned()),
+            _ => Err("sidecar returned an unexpected job cancellation response".to_owned()),
+        }
     }
 
     fn schema(
@@ -3350,20 +3540,23 @@ impl Sidecar {
         self.request(Request::Health)
     }
 
-    fn shutdown_child(&mut self) -> Result<(), String> {
-        if !matches!(
-            self.request_without_recovery(Request::Shutdown)?,
-            Response::Shutdown
-        ) {
-            self.stop_after_transport_failure();
-            return Err("sidecar did not acknowledge shutdown".to_owned());
+    fn shutdown_child(&mut self) -> Result<JobShutdownView, String> {
+        let result = match self.request_without_recovery(Request::Shutdown)? {
+            Response::Shutdown { result } => result,
+            _ => {
+                self.stop_after_transport_failure();
+                return Err("sidecar did not acknowledge shutdown".to_owned());
+            }
+        };
+        if !result.drained {
+            return Ok(result);
         }
         let status = wait_for_child(&mut self.child)?;
         self.join_response_reader();
         if !status.success() {
             return Err("sidecar did not shut down cleanly".to_owned());
         }
-        Ok(())
+        Ok(result)
     }
 }
 

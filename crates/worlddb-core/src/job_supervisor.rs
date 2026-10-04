@@ -10,9 +10,14 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
+use crate::commit_cancellation::{
+    CancellationRequestDisposition, CommitCancellation, CommitCancellationState, CommitpointError,
+    CommitpointPermit,
+};
 use crate::ids::{JobId, PrincipalId};
 use crate::jobs::{
-    JobBudget, JobDescriptor, JobKind, JobProgress, JobStatus, JobTerminalState, TaskFailure,
+    JobBudget, JobDescriptor, JobKind, JobPhase, JobProgress, JobStatus, JobTerminalState,
+    TaskFailure,
 };
 
 /// Bounded worker pool selected for one job.
@@ -57,6 +62,30 @@ impl JobSpec {
     #[must_use]
     pub const fn job_id(self) -> JobId {
         self.job_id
+    }
+
+    /// Kind used for the job's public status snapshot.
+    #[must_use]
+    pub const fn kind(self) -> JobKind {
+        self.kind
+    }
+
+    /// Optional authenticated owner assigned at admission.
+    #[must_use]
+    pub const fn owner(self) -> Option<PrincipalId> {
+        self.owner
+    }
+
+    /// Finite work and memory ceilings assigned at admission.
+    #[must_use]
+    pub const fn budget(self) -> JobBudget {
+        self.budget
+    }
+
+    /// Worker pool assigned at admission.
+    #[must_use]
+    pub const fn pool(self) -> JobPool {
+        self.pool
     }
 }
 
@@ -183,6 +212,7 @@ pub enum JobCompletion {
 pub struct JobSnapshot {
     descriptor: JobDescriptor,
     pool: JobPool,
+    cancellation_state: CommitCancellationState,
     resume_metadata: Option<JobResumeMetadata>,
     failure: Option<TaskFailure>,
     reserved_memory_bytes: u64,
@@ -250,6 +280,12 @@ impl JobSnapshot {
         self.pool
     }
 
+    /// Last linearized cancellation or publication state.
+    #[must_use]
+    pub const fn cancellation_state(&self) -> CommitCancellationState {
+        self.cancellation_state
+    }
+
     /// Latest bounded resumable checkpoint, if one was reported.
     #[must_use]
     pub fn resume_metadata(&self) -> Option<&JobResumeMetadata> {
@@ -275,6 +311,7 @@ pub struct JobControl {
     job_id: JobId,
     budget: JobBudget,
     cancelled: Arc<AtomicBool>,
+    commit_cancellation: CommitCancellation,
     state: Arc<Mutex<JobState>>,
     max_resume_bytes: usize,
 }
@@ -284,6 +321,33 @@ impl JobControl {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Reports the current user-visible phase for this job.
+    pub fn report_phase(&self, phase: JobPhase) -> Result<(), JobStateError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| JobStateError::RegistryPoisoned)?;
+        let accepting = state.accepting;
+        let record = state
+            .jobs
+            .get_mut(&self.job_id)
+            .ok_or(JobStateError::UnknownJob)?;
+        if !matches!(record.status, JobStatus::Running) {
+            return Err(JobStateError::JobNotRunning);
+        }
+        record.phase = if accepting {
+            phase
+        } else {
+            JobPhase::ShuttingDown
+        };
+        Ok(())
+    }
+
+    /// Claims the final publication boundary. Cancellation after this point is too late.
+    pub fn begin_commitpoint(&self) -> Result<CommitpointPermit, CommitpointError> {
+        self.commit_cancellation.begin_commitpoint()
     }
 
     /// Reports determinate or indeterminate progress within the job's work budget.
@@ -385,13 +449,15 @@ impl JobControl {
 }
 
 type JobWork = Box<dyn FnOnce(JobControl) -> JobCompletion + Send + 'static>;
-type WorkItem = (JobSpec, Arc<AtomicBool>, JobWork);
+type WorkItem = (JobSpec, Arc<AtomicBool>, CommitCancellation, JobWork);
 
 struct JobRecord {
     spec: JobSpec,
     status: JobStatus,
+    phase: JobPhase,
     progress: JobProgress,
     cancellation: Arc<AtomicBool>,
+    commit_cancellation: CommitCancellation,
     resume_metadata: Option<JobResumeMetadata>,
     failure: Option<TaskFailure>,
     reserved_memory_bytes: u64,
@@ -468,6 +534,7 @@ impl JobSupervisor {
         work: impl FnOnce(JobControl) -> JobCompletion + Send + 'static,
     ) -> Result<(), JobSubmitError> {
         let cancellation = Arc::new(AtomicBool::new(false));
+        let commit_cancellation = CommitCancellation::new();
         {
             let mut state = self
                 .state
@@ -487,15 +554,22 @@ impl JobSupervisor {
                 JobRecord {
                     spec,
                     status: JobStatus::Queued,
+                    phase: JobPhase::Queued,
                     progress: JobProgress::Indeterminate,
                     cancellation: Arc::clone(&cancellation),
+                    commit_cancellation: commit_cancellation.clone(),
                     resume_metadata: None,
                     failure: None,
                     reserved_memory_bytes: 0,
                 },
             );
         }
-        let item = (spec, cancellation, Box::new(work) as JobWork);
+        let item = (
+            spec,
+            cancellation,
+            commit_cancellation,
+            Box::new(work) as JobWork,
+        );
         let sender = match spec.pool {
             JobPool::Cpu => self.cpu_sender.as_ref(),
             JobPool::BlockingIo => self.io_sender.as_ref(),
@@ -516,16 +590,36 @@ impl JobSupervisor {
 
     /// Requests cooperative cancellation for a queued or running job.
     pub fn cancel(&self, job_id: JobId) -> Result<bool, JobStateError> {
+        let disposition = self.cancel_with_disposition(job_id)?;
+        Ok(!matches!(
+            disposition,
+            CancellationRequestDisposition::AlreadyTerminal
+                | CancellationRequestDisposition::OutcomeUnknown
+        ))
+    }
+
+    /// Requests cancellation and returns the exact commitpoint disposition.
+    pub fn cancel_with_disposition(
+        &self,
+        job_id: JobId,
+    ) -> Result<CancellationRequestDisposition, JobStateError> {
         let state = self
             .state
             .lock()
             .map_err(|_| JobStateError::RegistryPoisoned)?;
         let record = state.jobs.get(&job_id).ok_or(JobStateError::UnknownJob)?;
         if record.status.is_terminal() {
-            return Ok(false);
+            return Ok(CancellationRequestDisposition::AlreadyTerminal);
         }
-        record.cancellation.store(true, Ordering::Release);
-        Ok(true)
+        let disposition = record.commit_cancellation.request_cancellation();
+        if matches!(
+            disposition,
+            CancellationRequestDisposition::Signalled
+                | CancellationRequestDisposition::AlreadySignalled
+        ) {
+            record.cancellation.store(true, Ordering::Release);
+        }
+        Ok(disposition)
     }
 
     /// Returns an owned, payload-safe snapshot of one job's public state.
@@ -535,6 +629,15 @@ impl JobSupervisor {
             .lock()
             .map_err(|_| JobStateError::RegistryPoisoned)?;
         Ok(state.jobs.get(&job_id).map(snapshot))
+    }
+
+    /// Returns owned, payload-safe snapshots in stable JobId order.
+    pub fn list(&self) -> Result<Vec<JobSnapshot>, JobStateError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| JobStateError::RegistryPoisoned)?;
+        Ok(state.jobs.values().map(snapshot).collect())
     }
 
     /// Drops one terminal job record so bounded registry capacity can be reused.
@@ -578,9 +681,17 @@ impl JobSupervisor {
                 .lock()
                 .map_err(|_| JobShutdownError::RegistryPoisoned)?;
             state.accepting = false;
-            for record in state.jobs.values() {
+            for record in state.jobs.values_mut() {
                 if !record.status.is_terminal() {
-                    record.cancellation.store(true, Ordering::Release);
+                    let disposition = record.commit_cancellation.request_cancellation();
+                    if matches!(
+                        disposition,
+                        CancellationRequestDisposition::Signalled
+                            | CancellationRequestDisposition::AlreadySignalled
+                    ) {
+                        record.cancellation.store(true, Ordering::Release);
+                        record.phase = JobPhase::ShuttingDown;
+                    }
                 }
             }
         }
@@ -640,9 +751,17 @@ impl Drop for JobSupervisor {
     fn drop(&mut self) {
         if let Ok(mut state) = self.state.lock() {
             state.accepting = false;
-            for record in state.jobs.values() {
+            for record in state.jobs.values_mut() {
                 if !record.status.is_terminal() {
-                    record.cancellation.store(true, Ordering::Release);
+                    let disposition = record.commit_cancellation.request_cancellation();
+                    if matches!(
+                        disposition,
+                        CancellationRequestDisposition::Signalled
+                            | CancellationRequestDisposition::AlreadySignalled
+                    ) {
+                        record.cancellation.store(true, Ordering::Release);
+                        record.phase = JobPhase::ShuttingDown;
+                    }
                 }
             }
         }
@@ -670,7 +789,7 @@ fn spawn_pool(
                     Ok(receiver) => receiver.recv(),
                     Err(_) => return,
                 };
-                let Ok((spec, cancellation, work)) = next else {
+                let Ok((spec, cancellation, commit_cancellation, work)) = next else {
                     return;
                 };
                 if !matches!(set_running(&state, spec.job_id), Ok(true)) {
@@ -680,6 +799,7 @@ fn spawn_pool(
                     job_id: spec.job_id,
                     budget: spec.budget,
                     cancelled: cancellation,
+                    commit_cancellation,
                     state: Arc::clone(&state),
                     max_resume_bytes,
                 };
@@ -706,11 +826,13 @@ fn set_running(state: &Mutex<JobState>, job_id: JobId) -> Result<bool, JobStateE
         .ok_or(JobStateError::UnknownJob)?;
     if matches!(record.status, JobStatus::Queued) && record.cancellation.load(Ordering::Acquire) {
         record.status = JobStatus::Terminal(JobTerminalState::Cancelled);
+        record.phase = JobPhase::ShuttingDown;
         record.reserved_memory_bytes = 0;
         return Ok(false);
     }
     if matches!(record.status, JobStatus::Queued) {
         record.status = JobStatus::Running;
+        record.phase = JobPhase::Starting;
         return Ok(true);
     }
     Ok(false)
@@ -725,6 +847,12 @@ fn set_terminal(
     if let Ok(mut state) = state.lock() {
         if let Some(record) = state.jobs.get_mut(&job_id) {
             record.status = JobStatus::Terminal(terminal);
+            record.phase = match terminal {
+                JobTerminalState::Succeeded | JobTerminalState::Failed => JobPhase::Finalizing,
+                JobTerminalState::Cancelled
+                | JobTerminalState::NeedsRestart
+                | JobTerminalState::Interrupted => JobPhase::ShuttingDown,
+            };
             record.failure = failure;
             record.reserved_memory_bytes = 0;
         }
@@ -738,10 +866,12 @@ fn snapshot(record: &JobRecord) -> JobSnapshot {
             record.spec.kind,
             record.spec.owner,
             record.status,
+            record.phase,
             record.spec.budget,
             record.progress,
         ),
         pool: record.spec.pool,
+        cancellation_state: record.commit_cancellation.state(),
         resume_metadata: record.resume_metadata.clone(),
         failure: record.failure,
         reserved_memory_bytes: record.reserved_memory_bytes,
@@ -816,8 +946,11 @@ mod tests {
     use super::{
         JobCompletion, JobPool, JobSpec, JobSubmitError, JobSupervisor, JobSupervisorLimits,
     };
+    use crate::commit_cancellation::{CancellationRequestDisposition, CommitpointError};
     use crate::ids::{DomainId, JobId};
-    use crate::jobs::{JobBudget, JobKind, JobProgress, JobStatus, JobTerminalState, TaskFailure};
+    use crate::jobs::{
+        JobBudget, JobKind, JobPhase, JobProgress, JobStatus, JobTerminalState, TaskFailure,
+    };
 
     fn id(tail: u8) -> Result<JobId, crate::ids::IdValidationError> {
         let mut bytes = [0_u8; 16];
@@ -1110,6 +1243,62 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_reports_too_late_after_commitpoint_and_keeps_phase_visible()
+    -> Result<(), String> {
+        let mut supervisor =
+            JobSupervisor::new(limits(2, 1, 1, 1, 1)?).map_err(|error| error.to_string())?;
+        let job_id = id(77).map_err(|error| error.to_string())?;
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (control_tx, control_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        supervisor
+            .submit(spec(job_id, JobPool::Cpu)?, move |control| {
+                if control.report_phase(JobPhase::Committing).is_err() {
+                    return JobCompletion::Failed;
+                }
+                let permit = match control.begin_commitpoint() {
+                    Ok(permit) => permit,
+                    Err(_) => return JobCompletion::Failed,
+                };
+                let _ = control_tx.send(control.clone());
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                permit.committed();
+                JobCompletion::Succeeded
+            })
+            .map_err(|error| error.to_string())?;
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            supervisor
+                .cancel_with_disposition(job_id)
+                .map_err(|error| error.to_string())?,
+            CancellationRequestDisposition::TooLate
+        );
+        let snapshot = supervisor
+            .get(job_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "committing job was not retained".to_owned())?;
+        assert_eq!(snapshot.descriptor().phase(), JobPhase::Committing);
+        assert_eq!(
+            snapshot.cancellation_state(),
+            crate::commit_cancellation::CommitCancellationState::CommitpointPassed
+        );
+        let control = control_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            control.begin_commitpoint().err(),
+            Some(CommitpointError::AlreadyStarted)
+        );
+        release_tx.send(()).map_err(|error| error.to_string())?;
+        wait_terminal(&supervisor, job_id)?;
+        close_drained(&mut supervisor)?;
+        Ok(())
+    }
+
+    #[test]
     fn shutdown_cancels_queued_jobs_and_can_retry_after_deadline() -> Result<(), String> {
         let mut supervisor =
             JobSupervisor::new(limits(3, 1, 1, 1, 1)?).map_err(|error| error.to_string())?;
@@ -1184,14 +1373,21 @@ mod tests {
             JobSupervisor::new(limits(2, 1, 1, 1, 1)?).map_err(|error| error.to_string())?;
         let running_id = id(17).map_err(|error| error.to_string())?;
         let (started_tx, started_rx) = mpsc::sync_channel(1);
-        let (cancelled_tx, cancelled_rx) = mpsc::sync_channel(1);
+        let (shutdown_state_tx, shutdown_state_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
         supervisor
             .submit(spec(running_id, JobPool::Cpu)?, move |control| {
                 let _ = started_tx.send(());
                 while !control.is_cancelled() {
                     thread::yield_now();
                 }
-                let _ = cancelled_tx.send(());
+                let phase_result = control.report_phase(JobPhase::Scanning);
+                let commit_was_cancelled = matches!(
+                    control.begin_commitpoint(),
+                    Err(CommitpointError::CancelledBeforeCommitpoint)
+                );
+                let _ = shutdown_state_tx.send((phase_result.is_ok(), commit_was_cancelled));
+                let _ = release_rx.recv();
                 JobCompletion::Cancelled
             })
             .map_err(|error| error.to_string())?;
@@ -1211,9 +1407,22 @@ mod tests {
                 .err(),
             Some(JobSubmitError::ShuttingDown)
         );
-        cancelled_rx
-            .recv_timeout(Duration::from_secs(2))
-            .map_err(|error| format!("running job did not observe cancellation: {error}"))?;
+        assert_eq!(
+            shutdown_state_rx
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|error| format!("running job did not observe cancellation: {error}"))?,
+            (true, true)
+        );
+        let shutting_down = supervisor
+            .get(running_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "running job disappeared".to_owned())?;
+        assert_eq!(shutting_down.descriptor().phase(), JobPhase::ShuttingDown);
+        assert_eq!(
+            shutting_down.cancellation_state(),
+            crate::commit_cancellation::CommitCancellationState::CancellationRequested
+        );
+        release_tx.send(()).map_err(|error| error.to_string())?;
         let report = supervisor
             .close(Instant::now() + Duration::from_secs(2))
             .map_err(|error| error.to_string())?;

@@ -1060,8 +1060,9 @@ pub use events::{
 };
 pub use history_model::{HistorySpaceModelError, HistorySpaceReferenceModel};
 pub use jobs::{
-    DeterminateJobProgress, JobBudget, JobBudgetError, JobDescriptor, JobKind, JobProgress,
-    JobProgressError, JobStatus, JobTerminalState, TaskFailure, TaskRole, observe_task_join,
+    DeterminateJobProgress, JobBudget, JobBudgetError, JobDescriptor, JobKind, JobPhase,
+    JobProgress, JobProgressError, JobStatus, JobTerminalState, TaskFailure, TaskRole,
+    observe_task_join,
 };
 pub use layers::{LayerDefinition, LayerSchemaError, LayerSchemaSnapshot, LayerSelection};
 pub use mask_projection::{
