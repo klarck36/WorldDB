@@ -4,8 +4,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use worlddb_core::PrincipalId;
-use worlddb_storage_file::{DatabaseLayout, WriterLock};
+use worlddb_core::{CursorStateStore, CursorStoreLimits, PrincipalId, QueryHash};
+use worlddb_storage_file::{DatabaseLayout, FactTokenSearchSession, WriterLock};
 
 mod project;
 pub use project::{ProjectAccess, ProjectError, create_project, open_project};
@@ -41,14 +41,17 @@ pub use facts::{
     AssertionCorrectionView, AssertionDraftInput, EventAttributeInput, EventCorrectionView,
     EventDraftInput, EventGraphConflictView, EventParticipantInput, EventRelationKindInput,
     EventTimeInput, FactCatalogRecordView, FactCatalogView, FactCommand, FactContextInput,
-    FactLifecycleActionInput, FactLifecycleView, FactOperationStatusKind, FactOperationStatusView,
-    FactPublicationView, FactQueryExplainStageView, FactQueryHistoryDetailView,
-    FactQueryHistoryRecordView, FactQueryMaskSelectorView, FactQueryModeInput,
-    FactQueryRecordContextView, FactQueryResultView, FactQuerySchemaModeInput,
-    FactQueryValidityView, FactQueryView, FactResponse, FactTargetInput, FactValueInput,
-    MaskSelectorInput, PolarityInput, ResolutionConflictView, ResolutionOutcomeView,
-    ResolutionPreviewView, ResolutionResultView, ResolutionSliceView, ResolutionValueView,
-    ValidityInput, WorldTimeSelectorInput,
+    FactGraphCyclePolicyInput, FactGraphDirectionInput, FactGraphInput, FactGraphRelationshipInput,
+    FactGraphRootFamilyInput, FactLifecycleActionInput, FactLifecycleView, FactOperationStatusKind,
+    FactOperationStatusView, FactPublicationView, FactQueryAggregateResultView,
+    FactQueryBudgetView, FactQueryExplainStageView, FactQueryGraphEdgeView,
+    FactQueryHistoryDetailView, FactQueryHistoryRecordView, FactQueryMaskSelectorView,
+    FactQueryModeInput, FactQueryPolarityGroupView, FactQueryRecordContextView,
+    FactQueryRecordRefView, FactQueryResultView, FactQuerySchemaModeInput, FactQuerySearchHitView,
+    FactQueryValidityView, FactQueryView, FactResponse, FactSearchMatchInput, FactTargetInput,
+    FactValueInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
+    ResolutionOutcomeView, ResolutionPreviewView, ResolutionResultView, ResolutionSliceView,
+    ResolutionValueView, ValidityInput, WorldTimeSelectorInput,
 };
 mod schema;
 pub use schema::{
@@ -80,6 +83,15 @@ pub struct EngineHost {
     schema_management: Mutex<()>,
     streams: Mutex<HashMap<[u8; 16], ActiveStream>>,
     transfer_previews: Mutex<HashMap<String, history_space_transfer::PendingTransferPreview>>,
+    query_cursors: Mutex<CursorStateStore>,
+    fact_search_sessions: Mutex<HashMap<QueryHash, FactTokenSearchSession>>,
+    clock_origin: Instant,
+}
+
+fn new_query_cursor_store() -> Result<CursorStateStore, String> {
+    let limits =
+        CursorStoreLimits::new(32, 1_048_576, 60_000).map_err(|error| error.to_string())?;
+    CursorStateStore::new(limits).map_err(|error| error.to_string())
 }
 
 struct ActiveStream {
@@ -316,6 +328,8 @@ impl EngineHost {
         let writer_lock = layout
             .try_writer_lock()
             .map_err(|_| EngineError::Storage("database writer lock unavailable".to_owned()))?;
+        let query_cursors =
+            new_query_cursor_store().map_err(|error| EngineError::Storage(error.to_owned()))?;
         Ok(Self {
             _layout: layout,
             _writer_lock: writer_lock,
@@ -324,6 +338,9 @@ impl EngineHost {
             schema_management: Mutex::new(()),
             streams: Mutex::new(HashMap::new()),
             transfer_previews: Mutex::new(HashMap::new()),
+            query_cursors: Mutex::new(query_cursors),
+            fact_search_sessions: Mutex::new(HashMap::new()),
+            clock_origin: Instant::now(),
         })
     }
 
@@ -341,6 +358,7 @@ impl EngineHost {
             | worlddb_storage_file::WriterLockError::Io(_) => ProjectError::HostUnavailable,
         })?;
         let access = project::resolve_open_access(&layout, &writer_lock, principal_id)?;
+        let query_cursors = new_query_cursor_store().map_err(|_| ProjectError::HostUnavailable)?;
         Ok((
             Self {
                 _layout: layout,
@@ -350,6 +368,9 @@ impl EngineHost {
                 schema_management: Mutex::new(()),
                 streams: Mutex::new(HashMap::new()),
                 transfer_previews: Mutex::new(HashMap::new()),
+                query_cursors: Mutex::new(query_cursors),
+                fact_search_sessions: Mutex::new(HashMap::new()),
+                clock_origin: Instant::now(),
             },
             access,
         ))
@@ -359,6 +380,10 @@ impl EngineHost {
     #[must_use]
     pub const fn principal_id(&self) -> Option<PrincipalId> {
         self.principal_id
+    }
+
+    pub(crate) fn query_now_ms(&self) -> u64 {
+        u64::try_from(self.clock_origin.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     pub fn health(&self) -> Result<Response, EngineError> {

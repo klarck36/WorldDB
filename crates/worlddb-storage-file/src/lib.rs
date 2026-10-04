@@ -104,10 +104,11 @@ pub use salvage::{
 };
 pub use schema_management::{
     AssertionCorrectionReceipt, EntityCatalogPublicationReceipt, EntityManagementError,
-    EventCorrectionReceipt, EventSnapshotRef, FactHistoryRecord, FactManagementError,
-    FactOperationStatus, FactPublicationReceipt, FactQueryExecution, FactQueryHistoryRow,
-    FactQueryOperation, FactQueryRequest, FactQueryResult, FactResolutionPreviewRequest,
-    FactSnapshot, FileEntityManager, FileFactManager, FileHistorySpaceTransferManager,
+    EventCorrectionReceipt, EventSnapshotRef, FactExplorerRequest, FactGraphExecution,
+    FactHistoryRecord, FactManagementError, FactOperationStatus, FactPublicationReceipt,
+    FactQueryExecution, FactQueryHistoryRow, FactQueryOperation, FactQueryRequest, FactQueryResult,
+    FactResolutionPreviewRequest, FactSnapshot, FactTokenSearchPage, FactTokenSearchRequest,
+    FactTokenSearchSession, FileEntityManager, FileFactManager, FileHistorySpaceTransferManager,
     FileProjectMetadataManager, FileSchemaManager, FileSecurityPolicyManager,
     HistorySpaceTransferError, LayerManagementError, MetadataPublicationReceipt,
     PolicyManagementError, PolicyPublicationReceipt, ReplacementBoundaryDraft,

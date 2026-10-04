@@ -350,6 +350,62 @@ impl ProductiveQueryEngine {
         })
     }
 
+    /// Aggregates only the distinct Assertion contributors of an owned resolution result.
+    ///
+    /// The adapter must return one row for every resolved contributor and may attach only
+    /// values read from that contributor at the pinned query snapshot. Core rejects missing,
+    /// duplicate, or unrelated rows before applying the normal record/field authorization
+    /// checks in the aggregate port.
+    pub fn aggregate_resolution_contributors<F>(
+        resolved: &OwnedQueryResult<ResolutionPreview>,
+        spec: &AggregateSpec,
+        context: &QueryContext,
+        policies: &SecurityPolicyHistory,
+        mut row_for_contributor: F,
+    ) -> Result<QueryEngineOutput<AggregateResult>, QueryEngineError>
+    where
+        F: FnMut(AssertionId, &[FieldSelector]) -> Result<ResolvedAggregateRow, AggregateError>,
+    {
+        ensure_active(context)?;
+        if resolved.binding() != context.schema_binding()
+            || !resolved.query_context_binding().matches(context)
+        {
+            return Err(AggregateError::QueryBindingMismatch.into());
+        }
+        let requested_fields = match spec {
+            AggregateSpec::GroupedCount { fields } => fields.as_slice(),
+            AggregateSpec::Count | AggregateSpec::Exists => &[],
+        };
+        let mut contributors = BTreeSet::new();
+        match resolved.value() {
+            ResolutionPreview::Point { resolved_view, .. } => {
+                contributors.extend(resolved_view.contributors().iter().copied());
+            }
+            ResolutionPreview::AllTimes { slices } => {
+                for slice in slices {
+                    contributors.extend(slice.resolved_view().contributors().iter().copied());
+                }
+            }
+            ResolutionPreview::CompleteEmpty => {}
+        }
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(contributors.len())
+            .map_err(|_| AggregateError::ResourceBudgetExceeded)?;
+        let mut row_keys = BTreeSet::new();
+        for contributor in contributors {
+            ensure_active(context)?;
+            let row = row_for_contributor(contributor, requested_fields)?;
+            if row.result_key() != RecordRef::Assertion(contributor)
+                || !row_keys.insert(row.result_key())
+            {
+                return Err(AggregateError::QueryBindingMismatch.into());
+            }
+            rows.push(row);
+        }
+        let resolved_rows = OwnedQueryResult::bind(context, policies, rows)?;
+        Self::aggregate(&resolved_rows, spec, context, policies)
+    }
+
     /// Pulls one bounded page from a deterministic source. The source factory must bind its
     /// ordering and filtering to the supplied snapshot and start strictly after the opaque
     /// internal sort key. The trusted adapter supplies the stable sort key and row-rights

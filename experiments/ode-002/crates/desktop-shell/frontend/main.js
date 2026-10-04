@@ -265,7 +265,24 @@ const factsQueryRecordedAsOf = document.querySelector("#facts-query-recorded-as-
 const factsQuerySchemaMode = document.querySelector("#facts-query-schema-mode");
 const factsQuerySchemaRevisionWrap = document.querySelector("#facts-query-schema-revision-wrap");
 const factsQuerySchemaRevision = document.querySelector("#facts-query-schema-revision");
+const factsQuerySearchControls = document.querySelector("#facts-query-search-controls");
+const factsQuerySearchTerms = document.querySelector("#facts-query-search-terms");
+const factsQuerySearchMatch = document.querySelector("#facts-query-search-match");
+const factsQueryPageSize = document.querySelector("#facts-query-page-size");
+const factsQueryGraphControls = document.querySelector("#facts-query-graph-controls");
+const factsQueryGraphRootFamily = document.querySelector("#facts-query-graph-root-family");
+const factsQueryGraphRootId = document.querySelector("#facts-query-graph-root-id");
+const factsQueryGraphRelationships = document.querySelector("#facts-query-graph-relationships");
+const factsQueryGraphDirection = document.querySelector("#facts-query-graph-direction");
+const factsQueryGraphMaxDepth = document.querySelector("#facts-query-graph-max-depth");
+const factsQueryGraphMaxNodes = document.querySelector("#facts-query-graph-max-nodes");
+const factsQueryGraphMaxEdges = document.querySelector("#facts-query-graph-max-edges");
+const factsQueryGraphCyclePolicy = document.querySelector("#facts-query-graph-cycle-policy");
+const factsQueryMaxCandidates = document.querySelector("#facts-query-max-candidates");
+const factsQueryMaxWorkUnits = document.querySelector("#facts-query-max-work-units");
+const factsQueryMaxResults = document.querySelector("#facts-query-max-results");
 const factsPreviewButton = document.querySelector("#facts-preview");
+const factsQueryContinueButton = document.querySelector("#facts-query-continue");
 const factsPreviewStatus = document.querySelector("#facts-preview-status");
 const factsPreviewResults = document.querySelector("#facts-preview-results");
 
@@ -278,6 +295,9 @@ const userMessages = {
   host_unavailable: "Der lokale WorldDB-Host ist gerade nicht verfügbar.",
   selection_cancelled: "Die Auswahl wurde abgebrochen.",
   invalid_request: "Bitte prüfe die Eingabe.",
+  "query cursor is invalidated; restart the search": "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.",
+  "query session state is unavailable": "Die Suchsitzung ist nicht verfügbar. Starte die Suche erneut.",
+  "query cursor state is unavailable": "Die Suchsitzung ist nicht verfügbar. Starte die Suche erneut.",
   unknown_commit_outcome: "Der Speicherstatus ist unklar. Prüfe das Projekt, bevor du es erneut änderst.",
   schema_rejected: "Die Schema-Aktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
   entity_rejected: "Die Entitätsaktion wurde abgelehnt. Prüfe Eingaben, Berechtigung und aktuellen Projektstand.",
@@ -316,6 +336,8 @@ let transferPreviewTicket = null;
 let factCatalog = null;
 let factCatalogRefreshPromise = null;
 let factCatalogRefreshQueued = false;
+let factSearchCursor = null;
+let factSearchBaseSignature = null;
 let projectRefreshPromise = null;
 let projectRefreshQueued = false;
 let pendingFactActionPreviews = { assertion: false, event: false, lifecycle: false };
@@ -331,6 +353,10 @@ function errorCode(error) {
 
 function showError(error) {
   const code = errorCode(error);
+  if (/cursor/i.test(code) && /(invalid|expir|session)/i.test(code)) {
+    invalidateFactsSearch();
+    return "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.";
+  }
   return userMessages[code] ?? userMessages[code.split(":").at(-1)] ?? "Die Aktion konnte nicht abgeschlossen werden.";
 }
 
@@ -1178,7 +1204,16 @@ function factsQueryRevisionInput(input) {
   return value;
 }
 
-function factsQueryCommand() {
+function factsQueryUnsignedInput(input, maximum, allowZero = false) {
+  const value = input.value.trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error("invalid_request");
+  let parsed;
+  try { parsed = BigInt(value); } catch { throw new Error("invalid_request"); }
+  if ((!allowZero && parsed === 0n) || parsed > BigInt(maximum)) throw new Error("invalid_request");
+  return Number(parsed);
+}
+
+function factsQueryCommand({ continuation = null } = {}) {
   if (!factCatalog || !factsSubject.value || !factsPredicate.value) throw new Error("invalid_request");
   const recordedAsOf = factsQueryRevisionInput(factsQueryRecordedAsOf);
   let schemaMode;
@@ -1195,19 +1230,49 @@ function factsQueryCommand() {
   if (factsQueryOperation.value === "explain" && worldTime.kind !== "at") {
     throw new Error("invalid_request");
   }
-  if (!["history", "resolved", "explain"].includes(factsQueryOperation.value)) {
+  const queryMode = factsQueryOperation.value;
+  if (!["history", "resolved", "explain", "token_search", "graph", "count", "exists", "grouped_count"].includes(queryMode)) {
     throw new Error("invalid_request");
   }
-  return {
+  if (queryMode === "token_search" && selectedFactPredicate()?.details?.value_kind !== "string") {
+    throw new Error("invalid_request");
+  }
+  const command = {
     command: "query",
     context: factsContextInput(),
     subject_id: factsSubject.value,
     predicate_id: factsPredicate.value,
     recorded_as_of: recordedAsOf,
     schema_mode: schemaMode,
-    query_mode: factsQueryOperation.value,
+    query_mode: queryMode,
     world_time: worldTime,
+    max_candidates: factsQueryUnsignedInput(factsQueryMaxCandidates, Number.MAX_SAFE_INTEGER),
+    max_work_units: factsQueryUnsignedInput(factsQueryMaxWorkUnits, Number.MAX_SAFE_INTEGER),
+    max_results: factsQueryUnsignedInput(factsQueryMaxResults, Number.MAX_SAFE_INTEGER),
   };
+  if (queryMode === "token_search") {
+    const terms = factsQuerySearchTerms.value.trim();
+    if (!terms) throw new Error("invalid_request");
+    command.search_terms = terms;
+    command.search_match = factsQuerySearchMatch.value;
+    command.page_size = factsQueryUnsignedInput(factsQueryPageSize, 500);
+    command.continuation = continuation;
+  } else if (queryMode === "graph") {
+    const rootRecordId = factsQueryGraphRootId.value.trim();
+    const relationships = Array.from(factsQueryGraphRelationships.selectedOptions, (option) => option.value);
+    if (!rootRecordId || relationships.length === 0) throw new Error("invalid_request");
+    command.graph = {
+      root_family: factsQueryGraphRootFamily.value,
+      root_record_id: rootRecordId,
+      relationships,
+      direction: factsQueryGraphDirection.value,
+      max_depth: factsQueryUnsignedInput(factsQueryGraphMaxDepth, 65535, true),
+      max_nodes: factsQueryUnsignedInput(factsQueryGraphMaxNodes, Number.MAX_SAFE_INTEGER),
+      max_edges: factsQueryUnsignedInput(factsQueryGraphMaxEdges, Number.MAX_SAFE_INTEGER),
+      cycle_policy: factsQueryGraphCyclePolicy.value,
+    };
+  }
+  return command;
 }
 
 function factsAssertionCorrectionCommand() {
@@ -1412,23 +1477,51 @@ function setFactsBusy(busy) {
   updateSchemaControls();
 }
 
-async function runFactsPreview(activeSessionId = sessionId) {
+async function runFactsPreview(activeSessionId = sessionId, continuation = null) {
   if (!activeSessionId || !projectOpen) return;
-  factsPreviewStatus.textContent = "Vollständige Auflösung wird berechnet …";
+  if (!continuation) invalidateFactsSearch();
+  factsPreviewStatus.textContent = continuation
+    ? "Weitere Suchtreffer werden geladen …"
+    : "Abfrage wird ausgeführt …";
   factsPreviewButton.disabled = true;
+  factsQueryContinueButton.disabled = true;
+  factsQueryContinueButton.hidden = true;
   factsPreviewResults.replaceChildren();
   let response;
   try {
-    response = await manageFacts(factsQueryCommand(), activeSessionId);
+    const command = factsQueryCommand({ continuation });
+    const signature = JSON.stringify({ ...command, continuation: null });
+    if (continuation && signature !== factSearchBaseSignature) {
+      throw new Error("query cursor is invalidated; restart the search");
+    }
+    response = await manageFacts(command, activeSessionId);
     if (response.kind !== "query") throw new Error("unsupported_protocol");
     renderFactsPreview(response);
+    if (response.result.kind === "token_search") {
+      factSearchCursor = response.result.next_cursor;
+      factSearchBaseSignature = signature;
+      factsQueryContinueButton.hidden = !factSearchCursor;
+      factsQueryContinueButton.disabled = !factSearchCursor;
+    } else {
+      invalidateFactsSearch();
+    }
   } catch (error) {
+    if (continuation) invalidateFactsSearch();
     await invoke("facts_smoke_diagnostic", {
       details: JSON.stringify({ error: String(error?.stack ?? error), result: response?.result ?? null }),
     }).catch(() => {});
     factsPreviewStatus.textContent = showError(error);
   } finally {
     updateFactControls();
+  }
+}
+
+function invalidateFactsSearch() {
+  factSearchCursor = null;
+  factSearchBaseSignature = null;
+  if (factsQueryContinueButton) {
+    factsQueryContinueButton.hidden = true;
+    factsQueryContinueButton.disabled = true;
   }
 }
 
@@ -1550,8 +1643,13 @@ function updateFactControls() {
   factsQueryPointWrap.hidden = factsQueryTimeMode.value !== "at";
   factsQueryNanosecondsWrap.hidden = factsQueryTimeMode.value !== "at";
   factsQuerySchemaRevisionWrap.hidden = factsQuerySchemaMode.value !== "explicit";
+  factsQuerySearchControls.hidden = factsQueryOperation.value !== "token_search";
+  factsQueryGraphControls.hidden = factsQueryOperation.value !== "graph";
+  if (factsQueryOperation.value !== "token_search") invalidateFactsSearch();
   const explainOption = factsQueryOperation.querySelector('option[value="explain"]');
   if (explainOption) explainOption.disabled = factsQueryTimeMode.value !== "at";
+  const tokenSearchOption = factsQueryOperation.querySelector('option[value="token_search"]');
+  if (tokenSearchOption) tokenSearchOption.disabled = predicate?.details?.value_kind !== "string";
   factsMaskExactWrap.hidden = factsMaskSelector.value !== "exact_assertion";
   factsLifecycleReason.hidden = factsLifecycleAction.value !== "retract";
   factsMaskSelectorNote.textContent = factsMaskSelector.value === "slot"
@@ -1582,6 +1680,8 @@ function updateFactControls() {
   factsProvenanceCreate.disabled = !canRead || !provenanceValid;
   factsProvenanceRetract.disabled = !canRead || !factsProvenanceRetractTarget.value || !factsProvenanceRetractReason.value.trim();
   factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid || !queryValid;
+  factsQueryContinueButton.disabled = !canRead || !slotValid
+    || factsQueryOperation.value !== "token_search" || !factSearchCursor;
   factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
   factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
   factsEventCorrectionPreviewButton.disabled = !canRead || !eventCorrectionValid;
@@ -1599,7 +1699,10 @@ function updateFactControls() {
 }
 
 function renderFactsPreview(query) {
-  factsPreviewStatus.textContent = `Abfrage abgeschlossen · Revision ${query.snapshot_revision}`;
+  const result = query.result;
+  factsPreviewStatus.textContent = result.kind === "token_search" && !result.result_complete
+    ? `Suchseite geladen · Revision ${query.snapshot_revision}`
+    : `Abfrage abgeschlossen · Revision ${query.snapshot_revision}`;
   factsPreviewResults.replaceChildren();
   const binding = document.createElement("article");
   binding.className = "result-cell";
@@ -1611,6 +1714,7 @@ function renderFactsPreview(query) {
     ? "Alle Zeiten"
     : `${query.world_time.timeline_id} · ${query.world_time.nanoseconds} ns`;
   appendText(binding, "p", `WorldTime ${selectedWorldTime} · Abfrage ${query.query_mode}`);
+  appendText(binding, "p", `Budgets · Kandidaten ${query.budget.max_candidates} · Arbeit ${query.budget.max_work_units} · Ergebnisse ${query.budget.max_results}`);
   const schemaMode = query.schema_mode.mode === "historical"
     ? `Historical (RecordedAsOf ${query.schema_mode.recorded_as_of})`
     : query.schema_mode.mode === "explicit"
@@ -1619,11 +1723,47 @@ function renderFactsPreview(query) {
   appendText(binding, "p", `SchemaMode ${schemaMode} · gebundene Schema-Revision ${query.schema_revision}`);
   factsPreviewResults.append(binding);
 
-  const result = query.result;
   if (result.kind === "history") {
     appendText(factsPreviewResults, "p", `Raw History · ${result.records.length} sichtbare Datensätze`);
     if (result.records.length === 0) appendText(factsPreviewResults, "p", "Keine passenden Rohdatensätze in dieser Historie.", "muted");
     for (const record of result.records) renderFactsHistoryRecord(record);
+    return;
+  }
+  if (result.kind === "token_search") {
+    appendText(factsPreviewResults, "p", `Wortsuche · ${result.hits.length} Treffer auf dieser Seite · Seitengröße ${result.page_size}`);
+    appendText(factsPreviewResults, "p", result.result_complete
+      ? "Alle Treffer wurden geladen."
+      : "Diese Seite enthält noch nicht alle Treffer. Lade weitere Seiten, um die Suche abzuschließen.", result.result_complete ? "muted" : "schema-note");
+    if (result.cursor_expires_at_ms) {
+      appendText(factsPreviewResults, "p", "Der Fortsetzungscursor ist 60 Sekunden nach der ersten Seite gültig. Ist er abgelaufen, starte die Suche erneut.", "muted");
+    }
+    if (result.hits.length === 0) appendText(factsPreviewResults, "p", "Keine sichtbaren Treffer.", "muted");
+    for (const hit of result.hits) {
+      appendText(factsPreviewResults, "p", `${hit.family} ${hit.record_id} · Trefferfelder: ${hit.matched_fields.join(", ") || "keine"}`);
+    }
+    return;
+  }
+  if (result.kind === "graph") {
+    appendText(factsPreviewResults, "p", `Vollständiger Graphdurchlauf · Tiefe ${result.max_depth_reached}/${result.max_depth_limit} · ${result.nodes.length} Knoten (Limit ${result.max_nodes_limit}) · ${result.edges.length} Beziehungen (Limit ${result.max_edges_limit})`);
+    if (result.nodes.length === 0) appendText(factsPreviewResults, "p", "Kein sichtbarer Startknoten im gebundenen Abfragekontext.", "muted");
+    for (const node of result.nodes) appendText(factsPreviewResults, "p", `Knoten · ${node.family} ${node.record_id}`);
+    for (const edge of result.edges) {
+      appendText(factsPreviewResults, "p", `Beziehung · ${edge.from.family} ${edge.from.record_id} —${edge.relationship}→ ${edge.to.family} ${edge.to.record_id} · ${edge.family} ${edge.record_id}`);
+    }
+    return;
+  }
+  if (result.kind === "aggregate") {
+    if (result.result.kind === "count") {
+      appendText(factsPreviewResults, "p", `COUNT · ${result.result.value} sichtbare aufgelöste Beiträge`);
+    } else if (result.result.kind === "exists") {
+      appendText(factsPreviewResults, "p", `EXISTS · ${result.result.value ? "Ja" : "Nein"}`);
+    } else if (result.result.kind === "grouped_count") {
+      appendText(factsPreviewResults, "p", "COUNT nach Polarity");
+      if (result.result.groups.length === 0) appendText(factsPreviewResults, "p", "Keine Gruppen.", "muted");
+      for (const group of result.result.groups) {
+        appendText(factsPreviewResults, "p", `${group.polarity}: ${group.count}`);
+      }
+    }
     return;
   }
   if (result.kind === "resolved") {
@@ -3232,7 +3372,7 @@ async function waitForFactWrite(label) {
 async function waitForFactPreview(expectedRevision = null) {
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const completed = factsPreviewStatus.textContent.match(/^Abfrage abgeschlossen · Revision ([0-9]+)$/);
+    const completed = factsPreviewStatus.textContent.match(/^(?:Abfrage abgeschlossen|Suchseite geladen) · Revision ([0-9]+)$/);
     if (completed) {
       if (expectedRevision === null || Number(completed[1]) >= expectedRevision) return;
       await new Promise((resolve) => window.setTimeout(resolve, 50));
@@ -3240,8 +3380,9 @@ async function waitForFactPreview(expectedRevision = null) {
     }
     if (factsPreviewStatus.textContent
       && !factsPreviewStatus.textContent.startsWith("Der Schreibbeleg steht fest.")
-      && !factsPreviewStatus.textContent.startsWith("Vollständige Auflösung wird berechnet …")) {
-      throw new Error(`Resolution preview was rejected: ${factsPreviewStatus.textContent}`);
+      && !factsPreviewStatus.textContent.startsWith("Abfrage wird ausgeführt …")
+      && !factsPreviewStatus.textContent.startsWith("Weitere Suchtreffer werden geladen …")) {
+      throw new Error(`Query was rejected: ${factsPreviewStatus.textContent}`);
     }
     await new Promise((resolve) => window.setTimeout(resolve, 50));
   }
@@ -3635,6 +3776,93 @@ async function runFactsSmoke(activeSessionId) {
     || explicitSchemaQuery.schema_revision !== factCatalog.queryRevision) {
     throw new Error("Explicit SchemaMode did not retain its selected schema revision in the query result");
   }
+
+  factsHistorySpace.value = root.history_space_id;
+  factsLayer.value = baseLayer.layer_id;
+  factsQueryTimeMode.value = "all_times";
+  factsQuerySchemaMode.value = "current";
+  factsQueryRecordedAsOf.dataset.auto = "true";
+  factsQuerySchemaRevision.dataset.auto = "true";
+  factsValueText.value = "Slot-Mask-Target";
+  factsPolarity.value = "positive";
+  updateFactsValueFields();
+  updateFactControls();
+  await clickFactWrite(factsCreateAssertion, "Assertion");
+
+  factsQueryOperation.value = "token_search";
+  factsQuerySearchTerms.value = "Slot-Mask-Target";
+  factsQuerySearchMatch.value = "all_terms";
+  factsQueryPageSize.value = "1";
+  updateFactControls();
+  const firstSearchPage = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (firstSearchPage.kind !== "query" || firstSearchPage.result.kind !== "token_search"
+    || firstSearchPage.result.hits.length !== 1 || !firstSearchPage.result.next_cursor
+    || firstSearchPage.result.result_complete) {
+    throw new Error("TokenSearch did not return an explicitly incomplete first page and cursor");
+  }
+  const firstSearchText = await clickFactPreview();
+  if (!firstSearchText.includes("Wortsuche") || firstSearchText.includes("Slot-Mask-Target")
+    || !firstSearchText.includes("60 Sekunden")
+    || factsQueryContinueButton.hidden || factsQueryContinueButton.disabled) {
+    throw new Error("TokenSearch did not show a safe, paginated result with its continuation action");
+  }
+  factsQueryContinueButton.click();
+  await waitForFactPreview();
+  if (!factsPreviewResults.textContent.includes("Alle Treffer wurden geladen")) {
+    throw new Error("TokenSearch continuation did not visibly complete the result pages");
+  }
+
+  factsQueryOperation.value = "graph";
+  factsQueryGraphRootFamily.value = "assertion";
+  factsQueryGraphRootId.value = slotAssertion.recordId;
+  for (const option of factsQueryGraphRelationships.options) {
+    option.selected = option.value === "event_causes";
+  }
+  factsQueryGraphDirection.value = "both";
+  factsQueryGraphMaxDepth.value = "0";
+  factsQueryGraphMaxNodes.value = "20";
+  factsQueryGraphMaxEdges.value = "20";
+  updateFactControls();
+  const graphQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (graphQuery.kind !== "query" || graphQuery.result.kind !== "graph"
+    || !graphQuery.result.nodes.some((node) => node.family === "assertion" && node.record_id === slotAssertion.recordId)) {
+    throw new Error("Graph traversal did not return its visible zero-depth root");
+  }
+  const graphText = await clickFactPreview();
+  if (!graphText.includes("Vollständiger Graphdurchlauf") || !graphText.includes(slotAssertion.recordId)) {
+    throw new Error("Graph result and traversal limits were not rendered in the desktop panel");
+  }
+
+  factsQueryOperation.value = "count";
+  updateFactControls();
+  const countQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (countQuery.kind !== "query" || countQuery.result.kind !== "aggregate"
+    || countQuery.result.result.kind !== "count" || BigInt(countQuery.result.result.value) < 3n) {
+    throw new Error("COUNT did not report complete visible resolved contributors");
+  }
+  if (!(await clickFactPreview()).includes("COUNT ·")) throw new Error("COUNT was not rendered in the query panel");
+
+  factsQueryOperation.value = "exists";
+  updateFactControls();
+  const existsQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (existsQuery.kind !== "query" || existsQuery.result.kind !== "aggregate"
+    || existsQuery.result.result.kind !== "exists" || existsQuery.result.result.value !== true) {
+    throw new Error("EXISTS did not report the visible resolved result");
+  }
+  if (!(await clickFactPreview()).includes("EXISTS · Ja")) throw new Error("EXISTS was not rendered in the query panel");
+
+  factsQueryOperation.value = "grouped_count";
+  updateFactControls();
+  const groupedQuery = await manageFacts(factsQueryCommand(), activeSessionId);
+  if (groupedQuery.kind !== "query" || groupedQuery.result.kind !== "aggregate"
+    || groupedQuery.result.result.kind !== "grouped_count"
+    || !groupedQuery.result.result.groups.some((group) => group.polarity === "positive")) {
+    throw new Error("GroupedCount did not return complete visible polarity groups");
+  }
+  if (!(await clickFactPreview()).includes("COUNT nach Polarity")) {
+    throw new Error("GroupedCount was not rendered in the query panel");
+  }
+
   factsQuerySchemaMode.value = "historical";
   factsQueryTimeMode.value = "all_times";
   factsQueryOperation.value = "resolved";
@@ -4749,12 +4977,31 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   }
   factsQueryRecordedAsOf.addEventListener("input", () => {
     factsQueryRecordedAsOf.dataset.auto = "false";
+    invalidateFactsSearch();
     updateFactControls();
   });
   factsQuerySchemaRevision.addEventListener("input", () => {
     factsQuerySchemaRevision.dataset.auto = "false";
+    invalidateFactsSearch();
     updateFactControls();
   });
+  for (const control of [factsHistorySpace, factsLayer, factsPerspective, factsEpistemicMode,
+    factsSubject, factsPredicate, factsQueryOperation, factsQuerySchemaMode, factsQueryTimeMode,
+    factsQueryTimeline, factsQueryNanoseconds, factsQuerySchemaRevision,
+    factsQuerySearchTerms, factsQuerySearchMatch, factsQueryPageSize,
+    factsQueryGraphRootFamily, factsQueryGraphRootId, factsQueryGraphRelationships,
+    factsQueryGraphDirection, factsQueryGraphMaxDepth, factsQueryGraphMaxNodes,
+    factsQueryGraphMaxEdges, factsQueryGraphCyclePolicy, factsQueryMaxCandidates,
+    factsQueryMaxWorkUnits, factsQueryMaxResults]) {
+    control.addEventListener("change", () => {
+      invalidateFactsSearch();
+      updateFactControls();
+    });
+    control.addEventListener("input", () => {
+      invalidateFactsSearch();
+      updateFactControls();
+    });
+  }
   for (const input of [factsSourceKind, factsSourceLocator, factsSourceDigest,
     factsSourceMetadataKey, factsSourceMetadataValue, factsEvidenceRetractReason,
     factsProvenanceRetractReason]) {
@@ -4850,6 +5097,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     close_nanoseconds: factsEventSpanCloseNanoseconds.value.trim(),
   }), "Event-Spanabschluss"));
   factsPreviewButton.addEventListener("click", () => runFactsPreview());
+  factsQueryContinueButton.addEventListener("click", () => {
+    if (factSearchCursor) runFactsPreview(sessionId, factSearchCursor);
+  });
   factsCorrectionPreviewButton.addEventListener("click", previewAssertionCorrection);
   factsCorrectionCommitButton.addEventListener("click", () => {
     try {

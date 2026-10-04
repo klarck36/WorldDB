@@ -1173,6 +1173,39 @@ fn record_facts_smoke(
                             Some(stages.len()),
                             Some(resolution_outcome_kind(outcome)),
                         ),
+                        worlddb_ode_engine::FactQueryResultView::TokenSearch {
+                            hits,
+                            result_complete,
+                            ..
+                        } => (
+                            if *result_complete {
+                                "token_search_complete"
+                            } else {
+                                "token_search_page"
+                            },
+                            Some(hits.len()),
+                            None,
+                        ),
+                        worlddb_ode_engine::FactQueryResultView::Graph { nodes, edges, .. } => {
+                            ("graph", Some(nodes.len() + edges.len()), Some("complete"))
+                        }
+                        worlddb_ode_engine::FactQueryResultView::Aggregate { result } => match result {
+                            worlddb_ode_engine::FactQueryAggregateResultView::Count { value } => (
+                                "aggregate_count",
+                                value.parse::<usize>().ok(),
+                                None,
+                            ),
+                            worlddb_ode_engine::FactQueryAggregateResultView::Exists { value } => (
+                                "aggregate_exists",
+                                Some(usize::from(*value)),
+                                None,
+                            ),
+                            worlddb_ode_engine::FactQueryAggregateResultView::GroupedCount { groups } => (
+                                "aggregate_grouped_count",
+                                Some(groups.len()),
+                                None,
+                            ),
+                        },
                     };
                     (
                         Some("query"),
@@ -1254,6 +1287,11 @@ fn record_facts_smoke(
                     FactQueryModeInput::History => "history",
                     FactQueryModeInput::Resolved => "resolved",
                     FactQueryModeInput::Explain => "explain",
+                    FactQueryModeInput::TokenSearch => "token_search",
+                    FactQueryModeInput::Graph => "graph",
+                    FactQueryModeInput::Count => "count",
+                    FactQueryModeInput::Exists => "exists",
+                    FactQueryModeInput::GroupedCount => "grouped_count",
                 }),
                 Some(query.recorded_as_of.clone()),
                 Some(match &query.schema_mode {

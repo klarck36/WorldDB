@@ -37,6 +37,18 @@ impl GroupValueKey {
             canonical_value: Arc::from(canonical_value),
         }
     }
+
+    /// Schema value family used by this group key.
+    #[must_use]
+    pub const fn value_kind(&self) -> ValueKind {
+        self.value_kind
+    }
+
+    /// Canonical comparator bytes for this group key.
+    #[must_use]
+    pub fn canonical_value(&self) -> &[u8] {
+        &self.canonical_value
+    }
 }
 
 /// One already resolved and caller-visible result, carrying only permitted group fields.
@@ -73,6 +85,12 @@ impl ResolvedAggregateRow {
             layer,
             group_values,
         })
+    }
+
+    /// Typed identity of the resolved contributor represented by this row.
+    #[must_use]
+    pub const fn result_key(&self) -> RecordRef {
+        self.result_key
     }
 }
 

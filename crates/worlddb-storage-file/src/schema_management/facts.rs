@@ -4,27 +4,33 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use worlddb_core::{
-    ArchiveAction, ArchiveHistoryReferenceModel, ArchiveState, ArchiveTargetRecord,
-    ArchiveTargetRef, ArchiveTransition, ArchiveTransitionId, Assertion,
-    AssertionCorrectionCommand, AssertionDraft, AssertionHistoryRecord, AssertionId,
+    AggregateError, AggregateResult, AggregateSpec, ArchiveAction, ArchiveHistoryReferenceModel,
+    ArchiveState, ArchiveTargetRecord, ArchiveTargetRef, ArchiveTransition, ArchiveTransitionId,
+    Assertion, AssertionCorrectionCommand, AssertionDraft, AssertionHistoryRecord, AssertionId,
     AssertionPointIndexAccess, AssertionPointRequest, AssertionQueryStore, AssertionRetraction,
     AssertionRetractionId, AssertionValidity, AuditAction, AuditCommitContext, AuditObjectClass,
     AuditOutcome, AuditPolicyFingerprint, AuditRecord, AuditRecordDetails, AuditRecordIdentity,
     AuthorizationDecision, AuthorizedAssertionMaskHistory, Bytes, CancellationToken, Capability,
-    ContextKey, ContextPrecedence, EntityTypeConstraint, EpistemicMode, Event, EventDraft, EventId,
-    EventKindId, EventMask, EventMaskId, EventMaskRetraction, EventMaskRetractionId, EventRelation,
-    EventRelationBatch, EventRelationHistory, EventRelationId, EventRelationInputKind,
-    EventRelationKind, EventRelationRetraction, EventRelationRetractionId, EventRetraction,
-    EventRetractionId, EventSpanClosure, EventSpanClosureId, FieldSelector, FullScanBudget,
-    HistoricalQueryBinding, HistorySpaceId, HistorySpaceReferenceModel, LayerSelection, Lifecycle,
-    Mask, MaskId, MaskRetraction, MaskRetractionId, MaskSelector, OperationId, PerspectiveScope,
+    ContextKey, ContextPrecedence, CursorStateStore, CursorToken, DomainId, EntityTypeConstraint,
+    EpistemicMode, Event, EventDraft, EventId, EventKindId, EventMask, EventMaskId,
+    EventMaskRetraction, EventMaskRetractionId, EventRelation, EventRelationBatch,
+    EventRelationHistory, EventRelationId, EventRelationInputKind, EventRelationKind,
+    EventRelationRetraction, EventRelationRetractionId, EventRetraction, EventRetractionId,
+    EventSpanClosure, EventSpanClosureId, FieldSelector, FullScanBudget, GraphCandidateSet,
+    GraphEdge, GraphNode, GraphRelationshipKind, GraphResult, GraphSpec, GroupValueKey,
+    HistoricalQueryBinding, HistorySpaceId, HistorySpaceReferenceModel, HistorySpaceView,
+    LayerSelection, Lifecycle, Mask, MaskId, MaskRetraction, MaskRetractionId, MaskSelector,
+    OperationId, PageExecution, PageOperation, PageRequest, PerspectiveScope,
     PolicyEventRelationKind, PolicyTarget, PredicateId, ProductiveQueryEngine, ProvenanceId,
     ProvenanceRelationship, QueryBudget, QueryBudgetLimits, QueryContext, QueryContextInput,
-    QueryEngineOutput, Record, RecordRef, RecordedAsOf, ReferenceExplain, RelationshipSelector,
-    ReplacementBoundary, ReplacementBoundaryId, ReplacementBoundaryRetraction,
-    ReplacementBoundaryRetractionId, ReplacementBoundarySource, ResolutionPreview, Revision,
-    SchemaDefinition, SchemaMode, SchemaRevision, SecurityContext, SecurityPolicyVersion,
-    SnapshotRef, Subject, ValidatedLayerSelection, Value, WorldTimeSelector,
+    QueryEngineError, QueryEngineOutput, QueryHash, Record, RecordRef, RecordedAsOf,
+    ReferenceExplain, RelationshipSelector, ReplacementBoundary, ReplacementBoundaryId,
+    ReplacementBoundaryRetraction, ReplacementBoundaryRetractionId, ReplacementBoundarySource,
+    ResolutionPreview, ResolvedAggregateRow, Revision, SchemaDefinition, SchemaMode,
+    SchemaRevision, SearchDocument, SearchHit, SearchMatch, SearchSpec, SearchTextField,
+    SearchToken, SecurityContext, SecurityPolicyVersion, SnapshotBinding, SnapshotBindingInput,
+    SnapshotLifetimeLimits, SnapshotPinPurpose, SnapshotRef, SnapshotRegistry,
+    SnapshotSecurityBinding, Subject, ValidatedLayerSelection, Value, ValueKind, WorldTimeSelector,
     WriteReferenceSnapshot, encode_record, prepare_assertion_correction, prepare_event_correction,
     validate_assertion_batch, validate_event_graph_transaction, validate_value_for_predicate,
     validate_write_references,
@@ -314,6 +320,12 @@ pub enum FactQueryOperation {
     Resolved,
     /// Explain the selected point resolution, including applied Masks and Boundaries.
     Explain,
+    /// Count distinct visible resolved contributors.
+    AggregateCount,
+    /// Test whether any visible resolved contributor exists.
+    AggregateExists,
+    /// Count resolved contributors grouped by their visible Assertion polarity.
+    AggregateByPolarity,
 }
 
 /// Complete semantic inputs for an explicit factual query.
@@ -339,6 +351,207 @@ pub struct FactQueryRequest {
     pub epistemic_mode: EpistemicMode,
     /// Point or complete all-times selector.
     pub world_time: WorldTimeSelector,
+    /// Maximum authorized candidates to inspect.
+    pub max_candidates: u64,
+    /// Maximum deterministic work units.
+    pub max_work_units: u64,
+    /// Maximum complete result rows.
+    pub max_results: u64,
+}
+
+/// Shared, fully typed context for the M8-18 search, graph, and aggregate explorer.
+#[derive(Clone, Debug)]
+pub struct FactExplorerRequest {
+    /// Transaction-time read point.
+    pub recorded_as_of: Revision,
+    /// Schema interpretation used to validate the selected Predicate and Layers.
+    pub schema_mode: SchemaMode,
+    /// Selected HistorySpace and immutable ancestry.
+    pub history_space_id: HistorySpaceId,
+    /// Schema-validated query Layers.
+    pub layer_selection: LayerSelection,
+    /// Subject of the selected Assertion slot.
+    pub subject: Subject,
+    /// Predicate of the selected Assertion slot.
+    pub predicate_id: PredicateId,
+    /// Perspective scope.
+    pub perspective_scope: PerspectiveScope,
+    /// Epistemic partition.
+    pub epistemic_mode: EpistemicMode,
+    /// Point or all-times selection.
+    pub world_time: WorldTimeSelector,
+    /// Visible-candidate budget.
+    pub max_candidates: u64,
+    /// Deterministic-work budget.
+    pub max_work_units: u64,
+    /// Complete-result budget.
+    pub max_results: u64,
+}
+
+/// One complete, exact-token search request with bounded page size.
+#[derive(Clone, Debug)]
+pub struct FactTokenSearchRequest {
+    /// Shared context and finite work budgets.
+    pub query: FactExplorerRequest,
+    /// Exact UTF-8 terms split from the user's input.
+    pub terms: Vec<String>,
+    /// Whether every term or any term must match.
+    pub matching: SearchMatch,
+    /// Positive requested page size.
+    pub page_size: u32,
+    /// Canonical identity derived by the trusted engine host.
+    pub query_hash: QueryHash,
+}
+
+/// Server-owned continuation session; its data and snapshot lease never cross IPC.
+#[derive(Debug)]
+pub struct FactTokenSearchSession {
+    query_hash: QueryHash,
+    context: QueryContext,
+    results: QueryEngineOutput<Vec<SearchHit>>,
+    coordinates: BTreeMap<RecordRef, (HistorySpaceId, worlddb_core::LayerId)>,
+    field: FieldSelector,
+    page_size: u32,
+    expires_at_ms: u64,
+    snapshot_revision: Revision,
+    schema_revision: SchemaRevision,
+    resolved_layers: Vec<worlddb_core::LayerId>,
+}
+
+impl FactTokenSearchSession {
+    /// Query identity used only as an in-process session map key.
+    #[must_use]
+    pub const fn query_hash(&self) -> QueryHash {
+        self.query_hash
+    }
+
+    /// Fixed cursor expiry shared by every page in this search session.
+    #[must_use]
+    pub const fn expires_at_ms(&self) -> u64 {
+        self.expires_at_ms
+    }
+}
+
+/// One complete page plus the query binding needed to label it in the UI.
+#[derive(Clone, Debug)]
+pub struct FactTokenSearchPage {
+    /// Live database head fixed for this query.
+    pub snapshot_revision: Revision,
+    /// Schema revision bound to the query.
+    pub schema_revision: SchemaRevision,
+    /// Concrete Layers selected by the query.
+    pub resolved_layers: Vec<worlddb_core::LayerId>,
+    /// Visible search hits without snippets.
+    pub hits: Vec<SearchHit>,
+    /// Opaque, host-session-bound continuation.
+    pub next_cursor: Option<Vec<u8>>,
+    /// Expiry of the opaque continuation, if present.
+    pub cursor_expires_at_ms: Option<u64>,
+}
+
+/// Complete bounded graph traversal with the query axes displayed to the caller.
+#[derive(Clone, Debug)]
+pub struct FactGraphExecution {
+    /// Live database head fixed for the graph read.
+    pub snapshot_revision: Revision,
+    /// Schema revision bound to the query.
+    pub schema_revision: SchemaRevision,
+    /// Concrete Layers selected by the query.
+    pub resolved_layers: Vec<worlddb_core::LayerId>,
+    /// Complete authorized traversal; budget failures contain no partial graph.
+    pub result: QueryEngineOutput<GraphResult>,
+}
+
+struct PreparedExplorerQuery {
+    context: QueryContext,
+    facts: FactSnapshot,
+    metadata: worlddb_core::ProjectMetadataSnapshot,
+    history_spaces: worlddb_core::HistorySpaceCatalog,
+    snapshot_revision: Revision,
+    schema_revision: SchemaRevision,
+    resolved_layers: Vec<worlddb_core::LayerId>,
+}
+
+fn history_space_view(
+    catalog: &worlddb_core::HistorySpaceCatalog,
+    selected: HistorySpaceId,
+) -> Result<HistorySpaceView, FactManagementError> {
+    let mut ancestry = Vec::new();
+    let mut current = Some(selected);
+    while let Some(history_space_id) = current {
+        let definition =
+            catalog
+                .definition(history_space_id)
+                .ok_or(FactManagementError::InvalidCandidate(
+                    "the selected HistorySpace is unavailable",
+                ))?;
+        ancestry.push(definition);
+        current = definition.parent_history_space_id();
+    }
+    ancestry.reverse();
+    HistorySpaceView::new(ancestry).map_err(|error| FactManagementError::Query(error.to_string()))
+}
+
+fn history_space_contains_record(
+    catalog: &worlddb_core::HistorySpaceCatalog,
+    selected: HistorySpaceId,
+    record_space: HistorySpaceId,
+    record_revision: Revision,
+    as_of: Revision,
+) -> bool {
+    let mut current = selected;
+    let mut cutoff = as_of;
+    loop {
+        let Some(definition) = catalog.definition(current) else {
+            return false;
+        };
+        if current == record_space {
+            return record_revision <= cutoff;
+        }
+        let Some(parent) = definition.parent_history_space_id() else {
+            return false;
+        };
+        cutoff = cutoff.min(definition.base_revision());
+        current = parent;
+    }
+}
+
+fn token_search_sort_key(hit: &SearchHit) -> Vec<u8> {
+    match hit.result_key() {
+        RecordRef::Assertion(assertion_id) => assertion_id.to_bytes().to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+fn provenance_endpoint_record_ref(endpoint: worlddb_core::ProvenanceEndpointRef) -> RecordRef {
+    use worlddb_core::ProvenanceEndpointRef as Endpoint;
+    match endpoint {
+        Endpoint::Assertion(id) => RecordRef::Assertion(id),
+        Endpoint::Mask(id) => RecordRef::Mask(id),
+        Endpoint::ReplacementBoundary(id) => RecordRef::ReplacementBoundary(id),
+        Endpoint::Event(id) => RecordRef::Event(id),
+        Endpoint::EventMask(id) => RecordRef::EventMask(id),
+        Endpoint::Source(id) => RecordRef::Source(id),
+        Endpoint::Evidence(id) => RecordRef::Evidence(id),
+        Endpoint::Provenance(id) => RecordRef::Provenance(id),
+        Endpoint::AssertionValidityClosure(id) => RecordRef::AssertionValidityClosure(id),
+        Endpoint::AssertionRetraction(id) => RecordRef::AssertionRetraction(id),
+        Endpoint::MaskValidityClosure(id) => RecordRef::MaskValidityClosure(id),
+        Endpoint::MaskRetraction(id) => RecordRef::MaskRetraction(id),
+        Endpoint::ReplacementBoundaryValidityClosure(id) => {
+            RecordRef::ReplacementBoundaryValidityClosure(id)
+        }
+        Endpoint::ReplacementBoundaryRetraction(id) => RecordRef::ReplacementBoundaryRetraction(id),
+        Endpoint::EventSpanClosure(id) => RecordRef::EventSpanClosure(id),
+        Endpoint::EventRetraction(id) => RecordRef::EventRetraction(id),
+        Endpoint::EventMaskRetraction(id) => RecordRef::EventMaskRetraction(id),
+        Endpoint::EventRelationRetraction(id) => RecordRef::EventRelationRetraction(id),
+        Endpoint::EvidenceRetraction(id) => RecordRef::EvidenceRetraction(id),
+        Endpoint::ProvenanceRetraction(id) => RecordRef::ProvenanceRetraction(id),
+        Endpoint::EntityRetirement(id) => RecordRef::EntityRetirement(id),
+        Endpoint::PerspectiveRetirement(id) => RecordRef::PerspectiveRetirement(id),
+        Endpoint::ArchiveTransition(id) => RecordRef::ArchiveTransition(id),
+    }
 }
 
 /// Output variants from a user-visible factual query.
@@ -350,6 +563,8 @@ pub enum FactQueryResult {
     Resolved(QueryEngineOutput<ResolutionPreview>),
     /// Productive, visibility-checked Explain trace.
     Explain(QueryEngineOutput<ReferenceExplain>),
+    /// Complete count, existence, or grouped count over resolved contributors.
+    Aggregate(QueryEngineOutput<AggregateResult>),
 }
 
 /// One authorized owned raw-history record and its recorded coordinates.
@@ -2744,14 +2959,17 @@ impl<'a> FileFactManager<'a> {
             perspective_scope: request.perspective_scope,
             epistemic_mode: request.epistemic_mode,
             world_time: request.world_time,
+            max_candidates: 100_000,
+            max_work_units: 500_000,
+            max_results: 20_000,
         })?;
         match execution.result {
             FactQueryResult::Resolved(output) => Ok(output),
-            FactQueryResult::History(_) | FactQueryResult::Explain(_) => {
-                Err(FactManagementError::Query(
-                    "resolution query returned an incompatible result".to_owned(),
-                ))
-            }
+            FactQueryResult::History(_)
+            | FactQueryResult::Explain(_)
+            | FactQueryResult::Aggregate(_) => Err(FactManagementError::Query(
+                "resolution query returned an incompatible result".to_owned(),
+            )),
         }
     }
 
@@ -2764,6 +2982,9 @@ impl<'a> FileFactManager<'a> {
             FactQueryOperation::History => Capability::RawHistoryRead,
             FactQueryOperation::Resolved => Capability::QueryResolve,
             FactQueryOperation::Explain => Capability::QueryExplain,
+            FactQueryOperation::AggregateCount
+            | FactQueryOperation::AggregateExists
+            | FactQueryOperation::AggregateByPolarity => Capability::QueryAggregate,
         };
         self.authorize(required_capability, PolicyTarget::default())?;
         let revision = self.revision();
@@ -2844,8 +3065,13 @@ impl<'a> FileFactManager<'a> {
         let resolved_layers = layers.resolved().as_slice().to_vec();
         let budget_limits = QueryBudgetLimits::new(100_000, 500_000, 20_000)
             .map_err(|error| FactManagementError::Query(error.to_string()))?;
-        let budget = QueryBudget::new(100_000, 500_000, 20_000, budget_limits)
-            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let budget = QueryBudget::new(
+            request.max_candidates,
+            request.max_work_units,
+            request.max_results,
+            budget_limits,
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
         let snapshot_id = worlddb_core::storage_internal::generate_project_bootstrap_id::<
             worlddb_core::SnapshotId,
         >()
@@ -3100,11 +3326,759 @@ impl<'a> FileFactManager<'a> {
                 )
                 .map_err(|error| FactManagementError::Query(error.to_string()))?,
             ),
+            FactQueryOperation::AggregateCount
+            | FactQueryOperation::AggregateExists
+            | FactQueryOperation::AggregateByPolarity => {
+                let resolved = ProductiveQueryEngine::resolution_preview(
+                    store,
+                    query,
+                    slot,
+                    predicate,
+                    |left, right| temporal_value_equality(metadata.schema(), left, right),
+                )
+                .map_err(|error| FactManagementError::Query(error.to_string()))?;
+                let spec = match request.operation {
+                    FactQueryOperation::AggregateCount => AggregateSpec::Count,
+                    FactQueryOperation::AggregateExists => AggregateSpec::Exists,
+                    FactQueryOperation::AggregateByPolarity => {
+                        AggregateSpec::grouped_count(vec![FieldSelector::AssertionPolarity])
+                            .map_err(|error| FactManagementError::Query(error.to_string()))?
+                    }
+                    FactQueryOperation::History
+                    | FactQueryOperation::Resolved
+                    | FactQueryOperation::Explain => {
+                        return Err(FactManagementError::Query(
+                            "aggregate query entered an incompatible operation".to_owned(),
+                        ));
+                    }
+                };
+                let output = ProductiveQueryEngine::aggregate_resolution_contributors(
+                    resolved.query(),
+                    &spec,
+                    &context,
+                    policies,
+                    |assertion_id, fields| {
+                        let assertion = facts
+                            .assertions()
+                            .iter()
+                            .find(|item| item.id() == assertion_id)
+                            .ok_or(AggregateError::QueryBindingMismatch)?;
+                        let group_values = fields
+                            .iter()
+                            .map(|field| {
+                                let key = match field {
+                                    FieldSelector::AssertionPolarity => {
+                                        let positive = matches!(
+                                            assertion.polarity(),
+                                            worlddb_core::Polarity::Positive
+                                        );
+                                        GroupValueKey::new(
+                                            ValueKind::Bool,
+                                            vec![u8::from(positive)],
+                                        )
+                                    }
+                                    _ => return Err(AggregateError::QueryBindingMismatch),
+                                };
+                                Ok((*field, Some(key)))
+                            })
+                            .collect::<Result<Vec<_>, AggregateError>>()?;
+                        ResolvedAggregateRow::new(
+                            RecordRef::Assertion(assertion_id),
+                            assertion.context().history_space_id(),
+                            assertion.context().layer_id(),
+                            group_values,
+                        )
+                    },
+                )
+                .map_err(|error| FactManagementError::Query(error.to_string()))?;
+                FactQueryResult::Aggregate(output)
+            }
         };
         Ok(FactQueryExecution {
             snapshot_revision: revision,
             schema_revision,
             resolved_layers,
+            result,
+        })
+    }
+
+    fn prepare_explorer_query(
+        &self,
+        request: &FactExplorerRequest,
+        now_ms: u64,
+    ) -> Result<PreparedExplorerQuery, FactManagementError> {
+        let revision = self.revision();
+        if request.recorded_as_of > revision {
+            return Err(FactManagementError::RevisionNotPublished);
+        }
+        let metadata_manager = FileProjectMetadataManager::open(
+            self.schema.layout.clone(),
+            self.schema.writer_lock,
+            self.schema.principal,
+        )
+        .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let metadata = metadata_manager
+            .snapshot_at(request.schema_mode, request.recorded_as_of)
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let metadata_as_of = metadata_manager
+            .snapshot_at(SchemaMode::Historical, request.recorded_as_of)
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        if metadata_as_of
+            .history_spaces()
+            .definition(request.history_space_id)
+            .is_none()
+        {
+            return Err(FactManagementError::InvalidCandidate(
+                "the selected HistorySpace is unavailable",
+            ));
+        }
+        if let WorldTimeSelector::At(time) = request.world_time {
+            if !metadata
+                .schema()
+                .timeline(time.timeline().id())
+                .is_some_and(|timeline| timeline.lifecycle() == Lifecycle::Active)
+            {
+                return Err(FactManagementError::InvalidCandidate(
+                    "the selected query time requires an Active registered Timeline",
+                ));
+            }
+        }
+        let layers =
+            ValidatedLayerSelection::resolve(metadata.layers(), request.layer_selection.clone())
+                .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let resolved_layers = layers.resolved().as_slice().to_vec();
+        let facts = self.snapshot_at(request.recorded_as_of)?;
+        let recorded_as_of = RecordedAsOf::from_published_revision(request.recorded_as_of);
+        let schema_binding = HistoricalQueryBinding::bind(
+            &self.schema.schema_history,
+            recorded_as_of,
+            request.schema_mode,
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let schema_revision = schema_binding.schema_revision();
+        let history_spaces = metadata_as_of.history_spaces().clone();
+        let budget_limits = QueryBudgetLimits::new(100_000, 500_000, 20_000)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let budget = QueryBudget::new(
+            request.max_candidates,
+            request.max_work_units,
+            request.max_results,
+            budget_limits,
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let snapshot_id = worlddb_core::storage_internal::generate_project_bootstrap_id::<
+            worlddb_core::SnapshotId,
+        >()
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let input = QueryContextInput {
+            snapshot: SnapshotRef::new(snapshot_id),
+            snapshot_revision: revision,
+            recorded_as_of,
+            history_space: request.history_space_id,
+            layers,
+            world_time: request.world_time,
+            perspective: request.perspective_scope,
+            epistemic_mode: request.epistemic_mode,
+            schema_binding,
+            security: SecurityContext::new(
+                self.schema.principal,
+                worlddb_core::AuthorizationMode::Now,
+            ),
+            budget,
+            cancellation: CancellationToken::new(),
+        };
+        let history_space =
+            history_space_view(metadata_as_of.history_spaces(), request.history_space_id)?;
+        let database_id = self.schema.layout.database_id().ok_or_else(|| {
+            FactManagementError::Storage("database identity is unavailable".to_owned())
+        })?;
+        let policy_version = self
+            .schema
+            .policy_history
+            .policy()
+            .latest_version()
+            .map_err(|error| FactManagementError::Storage(error.to_string()))?;
+        let binding = SnapshotBinding::new(SnapshotBindingInput {
+            database_id,
+            snapshot_id,
+            data_revision: revision,
+            recorded_as_of,
+            schema: input.schema_binding,
+            history_space,
+            layer_schema: metadata.layers().clone(),
+            layer_selection: request.layer_selection.clone(),
+            security: SnapshotSecurityBinding::new(
+                self.schema.principal,
+                worlddb_core::AuthorizationMode::Now,
+                policy_version.epoch(),
+            ),
+            backend_generation: self.schema.manifest.generation(),
+        })
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let limits = SnapshotLifetimeLimits::new(30_000, 120_000, 600_000)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let registry = SnapshotRegistry::new(limits);
+        let lease = registry
+            .pin(binding, SnapshotPinPurpose::Interactive, now_ms)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let context = QueryContext::new_leased(input, lease, now_ms)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        Ok(PreparedExplorerQuery {
+            context,
+            facts,
+            metadata,
+            history_spaces,
+            snapshot_revision: revision,
+            schema_revision,
+            resolved_layers,
+        })
+    }
+
+    /// Starts a complete authorized TokenSearch and returns its first bounded page.
+    pub fn start_token_search(
+        &self,
+        request: FactTokenSearchRequest,
+        cursors: &mut CursorStateStore,
+        now_ms: u64,
+    ) -> Result<(FactTokenSearchSession, FactTokenSearchPage), FactManagementError> {
+        self.authorize(Capability::QuerySearch, PolicyTarget::default())?;
+        if request.page_size == 0 || request.page_size > 500 {
+            return Err(FactManagementError::Query(
+                "page size must be between 1 and 500".to_owned(),
+            ));
+        }
+        let prepared = self.prepare_explorer_query(&request.query, now_ms)?;
+        let predicate = prepared
+            .metadata
+            .schema()
+            .definitions()
+            .iter()
+            .find_map(|definition| match definition {
+                SchemaDefinition::Predicate(predicate)
+                    if predicate.predicate_id() == request.query.predicate_id =>
+                {
+                    Some(predicate)
+                }
+                _ => None,
+            })
+            .ok_or(FactManagementError::InvalidCandidate(
+                "the selected Predicate is unavailable in the pinned schema",
+            ))?;
+        if predicate.value_kind() != ValueKind::String {
+            return Err(FactManagementError::InvalidCandidate(
+                "exact TokenSearch requires a String-valued Predicate",
+            ));
+        }
+        let field = FieldSelector::AssertionValue(request.query.predicate_id);
+        let mut terms = Vec::new();
+        terms
+            .try_reserve_exact(request.terms.len())
+            .map_err(|_| FactManagementError::Query("search request is too large".to_owned()))?;
+        for term in request.terms {
+            terms.push(
+                SearchToken::new(term)
+                    .map_err(|error| FactManagementError::Query(error.to_string()))?,
+            );
+        }
+        let spec = SearchSpec::new(vec![field], terms, request.matching)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+
+        let mut commits = BTreeMap::<Revision, Vec<(HistorySpaceId, Assertion)>>::new();
+        for assertion in prepared.facts.assertions() {
+            commits
+                .entry(assertion.created_revision())
+                .or_default()
+                .push((assertion.context().history_space_id(), assertion.clone()));
+        }
+        let history = HistorySpaceReferenceModel::from_published_snapshot(
+            prepared.history_spaces.definitions().to_vec(),
+            request.query.recorded_as_of,
+            commits.into_iter().collect(),
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let mut documents = Vec::new();
+        let mut coordinates = BTreeMap::new();
+        for (_, history_space_id, assertion) in history
+            .read_at(request.query.history_space_id, request.query.recorded_as_of)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?
+        {
+            let context = assertion.context();
+            if !prepared.resolved_layers.contains(&context.layer_id())
+                || assertion.subject() != request.query.subject
+                || assertion.predicate_id() != request.query.predicate_id
+                || context.perspective_scope() != request.query.perspective_scope
+                || context.epistemic_mode() != request.query.epistemic_mode
+            {
+                continue;
+            }
+            if let WorldTimeSelector::At(time) = request.query.world_time {
+                if !assertion
+                    .validity()
+                    .contains(time)
+                    .map_err(|error| FactManagementError::Query(error.to_string()))?
+                {
+                    continue;
+                }
+            }
+            let Value::String(text) = assertion.value() else {
+                return Err(FactManagementError::InvalidCandidate(
+                    "a String-valued Predicate contains an incompatible Assertion",
+                ));
+            };
+            let record_ref = RecordRef::Assertion(assertion.id());
+            let document = SearchDocument::new(
+                record_ref,
+                history_space_id,
+                context.layer_id(),
+                vec![SearchTextField::new(field, text.clone())],
+            )
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+            documents.push(document);
+            coordinates.insert(record_ref, (history_space_id, context.layer_id()));
+        }
+        let results = ProductiveQueryEngine::token_search(
+            &documents,
+            &spec,
+            &[field],
+            &prepared.context,
+            self.schema.policy_history.policy(),
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let expires_at_ms = now_ms
+            .checked_add(60_000)
+            .ok_or_else(|| FactManagementError::Query("cursor expiry overflow".to_owned()))?;
+        let session = FactTokenSearchSession {
+            query_hash: request.query_hash,
+            context: prepared.context,
+            results,
+            coordinates,
+            field,
+            page_size: request.page_size,
+            expires_at_ms,
+            snapshot_revision: prepared.snapshot_revision,
+            schema_revision: prepared.schema_revision,
+            resolved_layers: prepared.resolved_layers,
+        };
+        let page = self.read_token_search_page(&session, None, cursors, now_ms)?;
+        Ok((session, page))
+    }
+
+    /// Continues one server-owned TokenSearch with current-policy reauthorization.
+    pub fn continue_token_search(
+        &self,
+        session: &FactTokenSearchSession,
+        cursor: Vec<u8>,
+        cursors: &mut CursorStateStore,
+        now_ms: u64,
+    ) -> Result<FactTokenSearchPage, FactManagementError> {
+        self.read_token_search_page(session, Some(cursor), cursors, now_ms)
+    }
+
+    fn read_token_search_page(
+        &self,
+        session: &FactTokenSearchSession,
+        cursor: Option<Vec<u8>>,
+        cursors: &mut CursorStateStore,
+        now_ms: u64,
+    ) -> Result<FactTokenSearchPage, FactManagementError> {
+        let page_request = PageRequest::new(session.page_size, cursor)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let execution = PageExecution::new(
+            cursors,
+            session.query_hash,
+            PageOperation::TokenSearch,
+            now_ms,
+            session.expires_at_ms,
+            500,
+            worlddb_core::QueryExecutionPath::FullScan,
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let principal = session.context.security().principal_id();
+        let field = session.field;
+        let page = ProductiveQueryEngine::stream_page(
+            page_request,
+            execution,
+            &session.context,
+            self.schema.policy_history.policy(),
+            |after| {
+                let hits = session
+                    .results
+                    .query()
+                    .value()
+                    .iter()
+                    .filter(|hit| {
+                        let key = token_search_sort_key(hit);
+                        after.is_none_or(|after| after < key.as_slice())
+                    })
+                    .cloned()
+                    .map(Ok)
+                    .collect::<Vec<Result<SearchHit, QueryEngineError>>>();
+                Ok(hits.into_iter())
+            },
+            token_search_sort_key,
+            |hit, policy, _context| {
+                let Some((history_space, layer)) = session.coordinates.get(&hit.result_key())
+                else {
+                    return false;
+                };
+                let record_target = PolicyTarget::new(
+                    Some(*history_space),
+                    Some(*layer),
+                    Some(hit.result_key()),
+                    None,
+                    None,
+                );
+                policy.authorize(principal, Capability::AssertionRead, record_target)
+                    == AuthorizationDecision::Allow
+                    && policy.authorize(
+                        principal,
+                        Capability::FieldRead,
+                        PolicyTarget::new(
+                            Some(*history_space),
+                            Some(*layer),
+                            Some(hit.result_key()),
+                            Some(field),
+                            None,
+                        ),
+                    ) == AuthorizationDecision::Allow
+            },
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        let next_cursor = page.next_cursor().map(<[u8]>::to_vec);
+        let cursor_expires_at_ms = next_cursor
+            .as_deref()
+            .and_then(|wire| CursorToken::decode(wire).ok())
+            .map(CursorToken::expires_at_ms);
+        Ok(FactTokenSearchPage {
+            snapshot_revision: session.snapshot_revision,
+            schema_revision: session.schema_revision,
+            resolved_layers: session.resolved_layers.clone(),
+            hits: page.results().to_vec(),
+            next_cursor,
+            cursor_expires_at_ms,
+        })
+    }
+
+    /// Executes a complete bounded graph traversal over visible Event and Provenance records.
+    pub fn query_graph(
+        &self,
+        request: FactExplorerRequest,
+        spec: GraphSpec,
+        now_ms: u64,
+    ) -> Result<FactGraphExecution, FactManagementError> {
+        self.authorize(Capability::QueryGraphTraverse, PolicyTarget::default())?;
+        let prepared = self.prepare_explorer_query(&request, now_ms)?;
+        let mut node_map = BTreeMap::<RecordRef, GraphNode>::new();
+        let mut assertion_coordinates = BTreeMap::new();
+        let mut mask_coordinates = BTreeMap::new();
+        let mut boundary_coordinates = BTreeMap::new();
+
+        for assertion in prepared.facts.assertions() {
+            let context = assertion.context();
+            if !history_space_contains_record(
+                &prepared.history_spaces,
+                request.history_space_id,
+                context.history_space_id(),
+                assertion.created_revision(),
+                request.recorded_as_of,
+            ) || !prepared.resolved_layers.contains(&context.layer_id())
+                || context.perspective_scope() != request.perspective_scope
+                || context.epistemic_mode() != request.epistemic_mode
+                || assertion.subject() != request.subject
+                || assertion.predicate_id() != request.predicate_id
+            {
+                continue;
+            }
+            if let WorldTimeSelector::At(time) = request.world_time {
+                if !assertion
+                    .validity()
+                    .contains(time)
+                    .map_err(|error| FactManagementError::Query(error.to_string()))?
+                {
+                    continue;
+                }
+            }
+            let record_ref = RecordRef::Assertion(assertion.id());
+            let coordinates = (context.history_space_id(), context.layer_id());
+            node_map.insert(
+                record_ref,
+                GraphNode::new(record_ref, coordinates.0, coordinates.1),
+            );
+            assertion_coordinates.insert(assertion.id(), coordinates);
+        }
+        for mask in prepared.facts.masks() {
+            let context = mask.context();
+            if !history_space_contains_record(
+                &prepared.history_spaces,
+                request.history_space_id,
+                context.history_space_id(),
+                mask.created_revision(),
+                request.recorded_as_of,
+            ) || !prepared.resolved_layers.contains(&context.layer_id())
+                || context.perspective_scope() != request.perspective_scope
+                || context.epistemic_mode() != request.epistemic_mode
+            {
+                continue;
+            }
+            if let WorldTimeSelector::At(time) = request.world_time {
+                if let Some(validity) = mask.validity() {
+                    if !validity
+                        .contains(time)
+                        .map_err(|error| FactManagementError::Query(error.to_string()))?
+                    {
+                        continue;
+                    }
+                }
+            }
+            let record_ref = RecordRef::Mask(mask.id());
+            let coordinates = (context.history_space_id(), context.layer_id());
+            node_map.insert(
+                record_ref,
+                GraphNode::new(record_ref, coordinates.0, coordinates.1),
+            );
+            mask_coordinates.insert(mask.id(), coordinates);
+        }
+        for boundary in prepared.facts.replacement_boundaries() {
+            let context = boundary.context();
+            if !history_space_contains_record(
+                &prepared.history_spaces,
+                request.history_space_id,
+                context.history_space_id(),
+                boundary.created_revision(),
+                request.recorded_as_of,
+            ) || !prepared.resolved_layers.contains(&context.layer_id())
+                || context.perspective_scope() != request.perspective_scope
+                || context.epistemic_mode() != request.epistemic_mode
+            {
+                continue;
+            }
+            if let WorldTimeSelector::At(time) = request.world_time {
+                if let Some(validity) = boundary.validity() {
+                    if !validity
+                        .contains(time)
+                        .map_err(|error| FactManagementError::Query(error.to_string()))?
+                    {
+                        continue;
+                    }
+                }
+            }
+            let record_ref = RecordRef::ReplacementBoundary(boundary.id());
+            let coordinates = (context.history_space_id(), context.layer_id());
+            node_map.insert(
+                record_ref,
+                GraphNode::new(record_ref, coordinates.0, coordinates.1),
+            );
+            boundary_coordinates.insert(boundary.id(), coordinates);
+        }
+        for event in prepared.facts.events() {
+            if !history_space_contains_record(
+                &prepared.history_spaces,
+                request.history_space_id,
+                event.history_space_id(),
+                event.created_revision(),
+                request.recorded_as_of,
+            ) || !prepared.resolved_layers.contains(&event.layer_id())
+            {
+                continue;
+            }
+            let record_ref = RecordRef::Event(event.event_id());
+            let coordinates = (event.history_space_id(), event.layer_id());
+            node_map.insert(
+                record_ref,
+                GraphNode::new(record_ref, coordinates.0, coordinates.1),
+            );
+        }
+
+        for (assertion_id, coordinates) in &assertion_coordinates {
+            for retraction in prepared
+                .facts
+                .assertion_retractions()
+                .iter()
+                .filter(|item| {
+                    item.assertion_id() == *assertion_id
+                        && item.created_revision() <= request.recorded_as_of
+                })
+            {
+                let record_ref = RecordRef::AssertionRetraction(retraction.id());
+                node_map.insert(
+                    record_ref,
+                    GraphNode::new(record_ref, coordinates.0, coordinates.1),
+                );
+            }
+        }
+        for (mask_id, coordinates) in &mask_coordinates {
+            for retraction in prepared.facts.mask_retractions().iter().filter(|item| {
+                item.mask_id() == *mask_id && item.created_revision() <= request.recorded_as_of
+            }) {
+                let record_ref = RecordRef::MaskRetraction(retraction.id());
+                node_map.insert(
+                    record_ref,
+                    GraphNode::new(record_ref, coordinates.0, coordinates.1),
+                );
+            }
+        }
+        for (boundary_id, coordinates) in &boundary_coordinates {
+            for retraction in prepared
+                .facts
+                .replacement_boundary_retractions()
+                .iter()
+                .filter(|item| {
+                    item.replacement_boundary_id() == *boundary_id
+                        && item.created_revision() <= request.recorded_as_of
+                })
+            {
+                let record_ref = RecordRef::ReplacementBoundaryRetraction(retraction.id());
+                node_map.insert(
+                    record_ref,
+                    GraphNode::new(record_ref, coordinates.0, coordinates.1),
+                );
+            }
+        }
+        for event_mask in prepared.facts.event_masks() {
+            if !history_space_contains_record(
+                &prepared.history_spaces,
+                request.history_space_id,
+                event_mask.history_space_id(),
+                event_mask.created_revision(),
+                request.recorded_as_of,
+            ) || !prepared.resolved_layers.contains(&event_mask.layer_id())
+            {
+                continue;
+            }
+            let record_ref = RecordRef::EventMask(event_mask.id());
+            node_map.insert(
+                record_ref,
+                GraphNode::new(
+                    record_ref,
+                    event_mask.history_space_id(),
+                    event_mask.layer_id(),
+                ),
+            );
+        }
+
+        for source in prepared.facts.sources() {
+            if source.created_revision() > request.recorded_as_of {
+                continue;
+            }
+            node_map.insert(
+                RecordRef::Source(source.id()),
+                GraphNode::new_project_wide(RecordRef::Source(source.id())),
+            );
+        }
+        for evidence in prepared.facts.evidence() {
+            if evidence.created_revision() > request.recorded_as_of {
+                continue;
+            }
+            let record_ref = RecordRef::Evidence(evidence.id());
+            node_map.insert(record_ref, GraphNode::new_project_wide(record_ref));
+        }
+        for edge in prepared.facts.provenance() {
+            if edge.created_revision() > request.recorded_as_of {
+                continue;
+            }
+            let record_ref = RecordRef::Provenance(edge.id());
+            node_map.insert(record_ref, GraphNode::new_project_wide(record_ref));
+        }
+        for retraction in prepared.facts.evidence_retractions() {
+            if retraction.created_revision() > request.recorded_as_of {
+                continue;
+            }
+            let record_ref = RecordRef::EvidenceRetraction(retraction.id());
+            node_map.insert(record_ref, GraphNode::new_project_wide(record_ref));
+        }
+        for retraction in prepared.facts.provenance_retractions() {
+            if retraction.created_revision() > request.recorded_as_of {
+                continue;
+            }
+            let record_ref = RecordRef::ProvenanceRetraction(retraction.id());
+            node_map.insert(record_ref, GraphNode::new_project_wide(record_ref));
+        }
+
+        let retracted_relations = prepared
+            .facts
+            .event_relation_retractions()
+            .iter()
+            .filter(|item| item.created_revision() <= request.recorded_as_of)
+            .map(EventRelationRetraction::event_relation_id)
+            .collect::<BTreeSet<_>>();
+        let mut edges = Vec::new();
+        for relation in prepared.facts.event_relations() {
+            if relation.created_revision() > request.recorded_as_of
+                || retracted_relations.contains(&relation.id())
+            {
+                continue;
+            }
+            let from = RecordRef::Event(relation.from_event());
+            let to = RecordRef::Event(relation.to_event());
+            if !node_map.contains_key(&from) || !node_map.contains_key(&to) {
+                continue;
+            }
+            let relationship = match relation.kind() {
+                worlddb_core::EventRelationKind::Before => GraphRelationshipKind::EventBefore,
+                worlddb_core::EventRelationKind::SameTime => GraphRelationshipKind::EventSameTime,
+                worlddb_core::EventRelationKind::Causes => GraphRelationshipKind::EventCauses,
+            };
+            edges.push(GraphEdge::new_project_wide(
+                RecordRef::EventRelation(relation.id()),
+                from,
+                to,
+                relationship,
+            ));
+        }
+        let retracted_provenance = prepared
+            .facts
+            .provenance_retractions()
+            .iter()
+            .filter(|item| item.created_revision() <= request.recorded_as_of)
+            .map(worlddb_core::ProvenanceRetraction::provenance_id)
+            .collect::<BTreeSet<_>>();
+        for provenance in prepared.facts.provenance() {
+            if provenance.created_revision() > request.recorded_as_of
+                || retracted_provenance.contains(&provenance.id())
+            {
+                continue;
+            }
+            let from = provenance_endpoint_record_ref(provenance.from());
+            let to = provenance_endpoint_record_ref(provenance.to());
+            if !node_map.contains_key(&from) || !node_map.contains_key(&to) {
+                continue;
+            }
+            let relationship = match provenance.relation() {
+                worlddb_core::ProvenanceRelation::Corrects => {
+                    GraphRelationshipKind::ProvenanceCorrects
+                }
+                worlddb_core::ProvenanceRelation::DerivedFrom => {
+                    GraphRelationshipKind::ProvenanceDerivedFrom
+                }
+                worlddb_core::ProvenanceRelation::ResultedFrom => {
+                    GraphRelationshipKind::ProvenanceResultedFrom
+                }
+            };
+            edges.push(GraphEdge::new_project_wide(
+                RecordRef::Provenance(provenance.id()),
+                from,
+                to,
+                relationship,
+            ));
+        }
+        // Relation records are project-wide. Endpoint coordinates are retained above for
+        // their own record checks; the query context still binds every semantic axis.
+        let candidates = GraphCandidateSet::new_for_context(
+            &prepared.context,
+            node_map.into_values().collect(),
+            edges,
+        );
+        let result = ProductiveQueryEngine::graph_traversal(
+            &candidates,
+            &spec,
+            &prepared.context,
+            self.schema.policy_history.policy(),
+        )
+        .map_err(|error| FactManagementError::Query(error.to_string()))?;
+        Ok(FactGraphExecution {
+            snapshot_revision: prepared.snapshot_revision,
+            schema_revision: prepared.schema_revision,
+            resolved_layers: prepared.resolved_layers,
             result,
         })
     }
@@ -4186,8 +5160,9 @@ mod tests {
 
     use super::super::tests::{TempArea, create_project, id};
     use super::{
-        FactHistoryRecord, FactManagementError, FactQueryOperation, FactQueryRequest,
-        FactQueryResult, FileFactManager as Manager, SourceDraft,
+        FactExplorerRequest, FactHistoryRecord, FactManagementError, FactQueryOperation,
+        FactQueryRequest, FactQueryResult, FactTokenSearchRequest, FileFactManager as Manager,
+        SourceDraft,
     };
 
     struct Fixture {
@@ -4236,6 +5211,9 @@ mod tests {
             values.extend([
                 Capability::QueryResolve,
                 Capability::QueryExplain,
+                Capability::QuerySearch,
+                Capability::QueryGraphTraverse,
+                Capability::QueryAggregate,
                 Capability::RawHistoryRead,
             ]);
         }
@@ -5791,6 +6769,9 @@ mod tests {
                 perspective_scope: worlddb_core::PerspectiveScope::World,
                 epistemic_mode: worlddb_core::EpistemicMode::WorldState,
                 world_time,
+                max_candidates: 100_000,
+                max_work_units: 500_000,
+                max_results: 20_000,
             }
         };
         let point = WorldTimeSelector::At(WorldTime::from_nanoseconds(
@@ -5900,12 +6881,175 @@ mod tests {
                 Timeline::new(denied.timeline_id),
                 0,
             )),
+            max_candidates: 100_000,
+            max_work_units: 500_000,
+            max_results: 20_000,
         };
         if !matches!(
             denied_manager.query_slot(denied_request),
             Err(FactManagementError::Unauthorized(Capability::QueryExplain))
         ) {
             return Err("Explain without QueryExplain was not rejected".to_owned());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn query_explorer_pages_search_and_returns_complete_graph_and_aggregates() -> Result<(), String>
+    {
+        use worlddb_core::{
+            AggregateResult, CursorStateStore, CursorStoreLimits, GraphCyclePolicy, GraphDirection,
+            GraphRelationshipKind, GraphSpec, QueryHash, SearchMatch,
+        };
+
+        let fixture = build_fixture_with_correction_rights(true, true, true)?;
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let context = make_context(&fixture)?;
+        let subject = Subject::new(fixture.entity_id);
+        let first_id = id::<worlddb_core::AssertionId>(151)?;
+        let first = manager
+            .create_assertion(
+                manager.revision(),
+                id::<OperationId>(150)?,
+                first_id,
+                AssertionDraft::new(
+                    context,
+                    subject,
+                    fixture.predicate_id,
+                    Value::String("Alice".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+        let second_id = id::<worlddb_core::AssertionId>(153)?;
+        manager
+            .create_assertion(
+                first.revision(),
+                id::<OperationId>(152)?,
+                second_id,
+                AssertionDraft::new(
+                    context,
+                    subject,
+                    fixture.predicate_id,
+                    Value::String("Alice".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+
+        let explorer = || FactExplorerRequest {
+            recorded_as_of: manager.revision(),
+            schema_mode: SchemaMode::Current,
+            history_space_id: fixture.history_space_id,
+            layer_selection: worlddb_core::LayerSelection::BaseOnly,
+            subject,
+            predicate_id: fixture.predicate_id,
+            perspective_scope: worlddb_core::PerspectiveScope::World,
+            epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+            world_time: WorldTimeSelector::AllTimes,
+            max_candidates: 100_000,
+            max_work_units: 500_000,
+            max_results: 20_000,
+        };
+
+        let mut cursors = CursorStateStore::new(
+            CursorStoreLimits::new(8, 65_536, 60_000).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let (session, first_page) = manager
+            .start_token_search(
+                FactTokenSearchRequest {
+                    query: explorer(),
+                    terms: vec!["Alice".to_owned()],
+                    matching: SearchMatch::AllTerms,
+                    page_size: 1,
+                    query_hash: QueryHash::new([0x5a; 32]),
+                },
+                &mut cursors,
+                100,
+            )
+            .map_err(|error| format!("start TokenSearch: {error}"))?;
+        let next = first_page
+            .next_cursor
+            .clone()
+            .ok_or_else(|| "TokenSearch did not return a continuation for two hits".to_owned())?;
+        let second_page = manager
+            .continue_token_search(&session, next, &mut cursors, 101)
+            .map_err(|error| format!("continue TokenSearch: {error}"))?;
+        if first_page.hits.len() != 1
+            || second_page.hits.len() != 1
+            || second_page.next_cursor.is_some()
+        {
+            return Err(
+                "TokenSearch pagination did not return two complete single-hit pages".to_owned(),
+            );
+        }
+
+        let graph = manager
+            .query_graph(
+                explorer(),
+                GraphSpec::new(
+                    vec![RecordRef::Assertion(first_id)],
+                    vec![GraphRelationshipKind::EventCauses],
+                    GraphDirection::Both,
+                    0,
+                    2,
+                    2,
+                    GraphCyclePolicy::StopAtRepeatedNode,
+                )
+                .map_err(|error| error.to_string())?,
+                102,
+            )
+            .map_err(|error| format!("Graph traversal: {error}"))?;
+        if graph.result.query().value().nodes() != [RecordRef::Assertion(first_id)]
+            || !graph.result.query().value().edges().is_empty()
+        {
+            return Err(
+                "zero-depth Graph traversal did not return only its visible root".to_owned(),
+            );
+        }
+
+        let query_slot = |operation| FactQueryRequest {
+            recorded_as_of: manager.revision(),
+            schema_mode: SchemaMode::Current,
+            operation,
+            history_space_id: fixture.history_space_id,
+            layer_selection: worlddb_core::LayerSelection::BaseOnly,
+            subject,
+            predicate_id: fixture.predicate_id,
+            perspective_scope: worlddb_core::PerspectiveScope::World,
+            epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+            world_time: WorldTimeSelector::AllTimes,
+            max_candidates: 100_000,
+            max_work_units: 500_000,
+            max_results: 20_000,
+        };
+        let count = manager
+            .query_slot(query_slot(FactQueryOperation::AggregateCount))
+            .map_err(|error| format!("COUNT: {error}"))?;
+        let exists = manager
+            .query_slot(query_slot(FactQueryOperation::AggregateExists))
+            .map_err(|error| format!("EXISTS: {error}"))?;
+        let grouped = manager
+            .query_slot(query_slot(FactQueryOperation::AggregateByPolarity))
+            .map_err(|error| format!("GroupedCount: {error}"))?;
+        if !matches!(count.result, FactQueryResult::Aggregate(output)
+            if matches!(output.query().value(), AggregateResult::Count(2)))
+            || !matches!(exists.result, FactQueryResult::Aggregate(output)
+                if matches!(output.query().value(), AggregateResult::Exists(true)))
+            || !matches!(grouped.result, FactQueryResult::Aggregate(output)
+                if matches!(output.query().value(), AggregateResult::GroupedCount(groups)
+                    if groups.len() == 1 && groups.first().is_some_and(|group| group.count() == 2)))
+        {
+            return Err(
+                "COUNT/EXISTS/GroupedCount did not return complete resolved-contributor results"
+                    .to_owned(),
+            );
         }
         Ok(())
     }

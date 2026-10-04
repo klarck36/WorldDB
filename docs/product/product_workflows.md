@@ -116,12 +116,16 @@ Eine Source beschreibt Herkunft, behauptet allein aber nichts über einen Datens
 
 ## 11. Query ausführen
 
-**Desktop:** `Abfragen` mit Modi Raw History, Resolved View, Search und Explain; Kontextleiste für Snapshot, RecordedAsOf, HistorySpace, LayerSelection, WorldTime, Perspective/EpistemicMode und SchemaMode.
+**Desktop:** `Abfragen` mit Raw History, Resolved View, Explain, Wortsuche, Graphdurchlauf, COUNT, EXISTS und COUNT nach Polarity; Kontextleiste für Snapshot, RecordedAsOf, HistorySpace, LayerSelection, WorldTime, Perspective/EpistemicMode und SchemaMode.
 **CLI/API:** ein gemeinsames typed `QueryRequest`; CLI-/IPC-Adapter setzen dieselben Pflichtfelder und Ergebnis-/Fehler-DTOs.
 
-Vor Ausführung zeigt die Query-Oberfläche alle gebundenen Kontextwerte und endliche Candidate-/Work-/Result-Budgets. `Current` wird einmal zu einem Snapshot gebunden; Folgeseiten verwenden denselben Cursor/Snapshot. Die Resolved View stellt `Known`, `Unknown` und `Conflict` als getrennte fachliche Ergebnisse dar; technische Query-/Storagefehler bleiben separate Fehlerzustände. Fehlende FieldRead- oder Recordrechte filtern Kandidaten vor Resolution, Counts, Sortierung oder Explain. Suchvarianten und optionale Queryfähigkeiten werden ausdrücklich gewählt; FullText wird nicht still durch TokenSearch ersetzt.
+Vor Ausführung zeigt die Query-Oberfläche alle gebundenen Kontextwerte und endliche Candidate-/Work-/Result-Budgets. `Current` wird einmal zu einem Snapshot gebunden; Folgeseiten verwenden denselben Cursor und Snapshot. Die Resolved View stellt `Known`, `Unknown` und `Conflict` als getrennte fachliche Ergebnisse dar; technische Query-/Storagefehler bleiben separate Fehlerzustände. Fehlende FieldRead- oder Recordrechte filtern Kandidaten vor Resolution, Counts, Sortierung oder Explain.
 
-**Abnahmeschritt:** Eine identische Anfrage am selben Snapshot liefert dieselbe geordnete logische Seite. WorldState darf perspektivfrei sein, epistemische Modes benötigen ihre passende Perspective. Fehlender Pflichtkontext, nicht unterstützte Queryfähigkeit, Budgetende, Cancellation oder ungültiger Cursor erscheinen als getrennte Endzustände; verborgene Records ändern kein Resultat, Count oder öffentliches Fehlerdetail.
+Die Wortsuche ist eine exakte, indexfreie TokenSearch über Stringwerte. Der Nutzer wählt, ob alle Suchwörter oder mindestens eines vorkommen müssen. Treffer enthalten nur Record-ID, Recordfamilie und gefundene Feldnamen; Textausschnitte werden nicht ausgegeben. Seiten verwenden einen opaken, an Anfrage und Snapshot gebundenen Cursor. Die Oberfläche benennt unvollständige Ergebnisse, zeigt die Cursorfrist von 60 Sekunden und bietet nach Ablauf einen Neustart der Suche an. Die Trefferanzahl pro Seite ist begrenzt.
+
+Der Graphdurchlauf startet an einem explizit ausgewählten Record und bindet Beziehungstypen, Ein-/Auswärtsrichtung, maximale Tiefe, Knoten-/Kantenzahlen und Zyklusverhalten. Ergebnis und erreichte Tiefe zeigen die Grenzen der Traversierung. COUNT und EXISTS sowie COUNT nach Polarity werten die vollständigen, im gewählten Querykontext sichtbaren Resolution-Contributors aus; die Gruppierung liefert Gruppen nach vorhandener Polarity. Endliche Budgets werden in jeder Antwort mitgeführt. Such-, Graph- und Aggregatmodi umgehen weder Kontextbindung noch Securityfilter. FullText wird nicht still durch TokenSearch ersetzt.
+
+**Abnahmeschritt:** Eine identische Anfrage am selben Snapshot liefert dieselbe geordnete logische Seite. WorldState darf perspektivfrei sein, epistemische Modes benötigen ihre passende Perspective. Fehlender Pflichtkontext, nicht unterstützte Queryfähigkeit, Budgetende, Cancellation, unvollständige Suche oder ungültiger/abgelaufener Cursor erscheinen als getrennte Endzustände; verborgene Records ändern kein Resultat, Count oder öffentliches Fehlerdetail.
 
 ## 12. Rollen und Zugriffsrechte verwalten
 

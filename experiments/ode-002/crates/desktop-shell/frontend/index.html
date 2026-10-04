@@ -699,11 +699,11 @@
           <div class="actions"><button id="facts-lifecycle-commit" type="button" disabled>Lebenszyklusaktion speichern</button></div>
         </fieldset>
         <p id="facts-write-status" class="muted" role="status" aria-live="polite"></p>
-        <fieldset>
-          <legend>Historie, Auflösung und Erklärung</legend>
+      <fieldset>
+          <legend>Abfrage, Suche, Graph und Kennzahlen</legend>
           <p class="muted">Jede Abfrage bindet den aktuellen Snapshot, den gewählten Datenstand, Branch, Layer, Perspektive, Aussagekontext, Weltzeit und Schema-Modus ausdrücklich.</p>
           <div class="grid">
-            <div><label for="facts-query-operation">Ansicht</label><select id="facts-query-operation"><option value="history">Raw History</option><option value="resolved" selected>Resolved View</option><option value="explain">Explain</option></select></div>
+            <div><label for="facts-query-operation">Abfrageart</label><select id="facts-query-operation"><option value="history">Raw History</option><option value="resolved" selected>Resolved View</option><option value="explain">Explain</option><option value="token_search">Wortsuche</option><option value="graph">Graphdurchlauf</option><option value="count">COUNT</option><option value="exists">EXISTS</option><option value="grouped_count">COUNT nach Polarity</option></select></div>
             <div><label for="facts-query-recorded-as-of">Datenstand (RecordedAsOf)</label><input id="facts-query-recorded-as-of" inputmode="numeric" autocomplete="off" value="0" data-auto="true" /></div>
             <div><label for="facts-query-schema-mode">Schema-Modus</label><select id="facts-query-schema-mode"><option value="historical" selected>Historical</option><option value="current">Current</option><option value="explicit">Explicit revision</option></select></div>
             <div id="facts-query-schema-revision-wrap" hidden><label for="facts-query-schema-revision">Schema-Revision</label><input id="facts-query-schema-revision" inputmode="numeric" autocomplete="off" value="0" data-auto="true" /></div>
@@ -713,7 +713,39 @@
             <div id="facts-query-point-wrap" hidden><label for="facts-query-timeline">Timeline</label><select id="facts-query-timeline"></select></div>
             <div id="facts-query-nanoseconds-wrap" hidden><label for="facts-query-nanoseconds">Zeitpunkt (Nanosekunden)</label><input id="facts-query-nanoseconds" inputmode="numeric" autocomplete="off" value="0" /></div>
           </div>
-          <div class="actions"><button id="facts-preview" type="button" disabled>Abfrage ausführen</button></div>
+          <fieldset id="facts-query-search-controls" hidden>
+            <legend>Wortsuche</legend>
+            <p class="muted">Exakte, groß-/kleinschreibungssensitive Token-Suche im Textwert des ausgewählten Prädikats. Suchwörter werden an ASCII-Leerraum getrennt. Es werden keine Textausschnitte ausgegeben; Berechtigungsfilter greifen vor den Budgets.</p>
+            <div class="grid">
+              <div><label for="facts-query-search-terms">Suchwörter</label><input id="facts-query-search-terms" autocomplete="off" placeholder="z. B. Berlin Hauptstadt" /></div>
+              <div><label for="facts-query-search-match">Trefferregel</label><select id="facts-query-search-match"><option value="all_terms">Alle Wörter</option><option value="any_term">Mindestens ein Wort</option></select></div>
+              <div><label for="facts-query-page-size">Treffer pro Seite (1–500)</label><input id="facts-query-page-size" inputmode="numeric" autocomplete="off" value="50" /></div>
+            </div>
+          </fieldset>
+          <fieldset id="facts-query-graph-controls" hidden>
+            <legend>Graphdurchlauf</legend>
+            <p class="muted">Der Graph enthält nur sichtbare Knoten und Beziehungen. Tiefen-, Knoten- und Kantenlimits sind verbindlich; bei Budgetfehlern wird kein Teilergebnis angezeigt.</p>
+            <div class="grid">
+              <div><label for="facts-query-graph-root-family">Startdatensatz</label><select id="facts-query-graph-root-family"><option value="assertion">Assertion</option><option value="mask">Mask</option><option value="replacement_boundary">ReplacementBoundary</option><option value="event">Event</option><option value="event_mask">EventMask</option><option value="source">Source</option><option value="evidence">Evidence</option><option value="provenance">Provenance</option><option value="assertion_retraction">AssertionRetraction</option><option value="mask_retraction">MaskRetraction</option><option value="replacement_boundary_retraction">ReplacementBoundaryRetraction</option><option value="evidence_retraction">EvidenceRetraction</option><option value="provenance_retraction">ProvenanceRetraction</option></select></div>
+              <div><label for="facts-query-graph-root-id">Start-ID</label><input id="facts-query-graph-root-id" autocomplete="off" placeholder="UUID des Datensatzes" /></div>
+              <div><label for="facts-query-graph-relationships">Beziehungsarten</label><select id="facts-query-graph-relationships" multiple size="4"><option value="event_before">Event: Before</option><option value="event_same_time">Event: SameTime</option><option value="event_causes">Event: Causes</option><option value="provenance_corrects">Provenance: Corrects</option><option value="provenance_derived_from">Provenance: DerivedFrom</option><option value="provenance_resulted_from">Provenance: ResultedFrom</option></select></div>
+              <div><label for="facts-query-graph-direction">Laufrichtung</label><select id="facts-query-graph-direction"><option value="outgoing">Ausgehend</option><option value="incoming">Eingehend</option><option value="both">Beide Richtungen</option></select></div>
+              <div><label for="facts-query-graph-max-depth">Maximale Tiefe</label><input id="facts-query-graph-max-depth" inputmode="numeric" value="3" /></div>
+              <div><label for="facts-query-graph-max-nodes">Maximale Knoten</label><input id="facts-query-graph-max-nodes" inputmode="numeric" value="500" /></div>
+              <div><label for="facts-query-graph-max-edges">Maximale Kanten</label><input id="facts-query-graph-max-edges" inputmode="numeric" value="1000" /></div>
+              <div><label for="facts-query-graph-cycle-policy">Zyklen</label><select id="facts-query-graph-cycle-policy"><option value="stop_at_repeated_node">Bei wiederholtem Knoten stoppen</option><option value="emit_repeated_edge_and_stop">Wiederholungskante zeigen, dann stoppen</option></select></div>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>Abfragebudgets</legend>
+            <p class="muted">Berechtigungen werden vor Kandidaten- und Arbeitsbudgets angewandt. Budgetüberschreitungen liefern einen Fehler ohne unvollständiges Ergebnis.</p>
+            <div class="grid">
+              <div><label for="facts-query-max-candidates">Maximale Kandidaten</label><input id="facts-query-max-candidates" inputmode="numeric" value="100000" /></div>
+              <div><label for="facts-query-max-work-units">Maximale Arbeitseinheiten</label><input id="facts-query-max-work-units" inputmode="numeric" value="500000" /></div>
+              <div><label for="facts-query-max-results">Maximale Ergebnisse</label><input id="facts-query-max-results" inputmode="numeric" value="20000" /></div>
+            </div>
+          </fieldset>
+          <div class="actions"><button id="facts-preview" type="button" disabled>Abfrage ausführen</button><button id="facts-query-continue" type="button" disabled hidden>Weitere Treffer laden</button></div>
           <p id="facts-preview-status" class="muted" role="status" aria-live="polite"></p>
           <div id="facts-preview-results" aria-live="polite"></div>
         </fieldset>

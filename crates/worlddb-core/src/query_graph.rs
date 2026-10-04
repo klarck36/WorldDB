@@ -106,8 +106,8 @@ impl GraphSpec {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GraphNode {
     record_ref: RecordRef,
-    history_space: HistorySpaceId,
-    layer: LayerId,
+    history_space: Option<HistorySpaceId>,
+    layer: Option<LayerId>,
 }
 
 impl GraphNode {
@@ -116,8 +116,18 @@ impl GraphNode {
     pub const fn new(record_ref: RecordRef, history_space: HistorySpaceId, layer: LayerId) -> Self {
         Self {
             record_ref,
-            history_space,
-            layer,
+            history_space: Some(history_space),
+            layer: Some(layer),
+        }
+    }
+
+    /// Binds an operational record whose policy target is project-wide.
+    #[must_use]
+    pub const fn new_project_wide(record_ref: RecordRef) -> Self {
+        Self {
+            record_ref,
+            history_space: None,
+            layer: None,
         }
     }
 
@@ -134,8 +144,8 @@ pub struct GraphEdge {
     record_ref: RecordRef,
     from: RecordRef,
     to: RecordRef,
-    history_space: HistorySpaceId,
-    layer: LayerId,
+    history_space: Option<HistorySpaceId>,
+    layer: Option<LayerId>,
     relationship: GraphRelationshipKind,
 }
 
@@ -154,8 +164,26 @@ impl GraphEdge {
             record_ref,
             from,
             to,
-            history_space,
-            layer,
+            history_space: Some(history_space),
+            layer: Some(layer),
+            relationship,
+        }
+    }
+
+    /// Creates a relationship whose policy target is project-wide.
+    #[must_use]
+    pub const fn new_project_wide(
+        record_ref: RecordRef,
+        from: RecordRef,
+        to: RecordRef,
+        relationship: GraphRelationshipKind,
+    ) -> Self {
+        Self {
+            record_ref,
+            from,
+            to,
+            history_space: None,
+            layer: None,
             relationship,
         }
     }
@@ -228,6 +256,12 @@ impl TraversedGraphEdge {
     pub const fn to(self) -> RecordRef {
         self.to
     }
+
+    /// Closed semantic relationship kind.
+    #[must_use]
+    pub const fn relationship(self) -> GraphRelationshipKind {
+        self.relationship
+    }
 }
 
 /// Complete traversal result. Hidden node/edge counts and partial outputs are never exposed.
@@ -291,8 +325,8 @@ pub fn full_scan_authorized_graph_traversal(
             continue;
         };
         let target = PolicyTarget::new(
-            Some(node.history_space),
-            Some(node.layer),
+            node.history_space,
+            node.layer,
             Some(node.record_ref),
             None,
             None,
@@ -519,8 +553,8 @@ fn edge_is_authorized(
         }
     };
     let relationship_target = PolicyTarget::new(
-        Some(edge.history_space),
-        Some(edge.layer),
+        edge.history_space,
+        edge.layer,
         Some(edge.record_ref),
         None,
         Some(relationship),
@@ -543,8 +577,8 @@ fn edge_is_authorized(
             principal,
             Capability::ProvenanceRead,
             PolicyTarget::new(
-                Some(edge.history_space),
-                Some(edge.layer),
+                edge.history_space,
+                edge.layer,
                 Some(edge.record_ref),
                 None,
                 Some(relationship),

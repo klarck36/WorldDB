@@ -248,6 +248,12 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             }).Count
             $historyQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'history' -and $_.result_kind -eq 'history' }).Count
             $explainQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'explain' -and $_.result_kind -eq 'explain' }).Count
+            $tokenSearchPages = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'token_search' -and $_.result_kind -eq 'token_search_page' }).Count
+            $tokenSearchCompletePages = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'token_search' -and $_.result_kind -eq 'token_search_complete' }).Count
+            $graphQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'graph' -and $_.result_kind -eq 'graph' }).Count
+            $countQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'count' -and $_.result_kind -eq 'aggregate_count' }).Count
+            $existsQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'exists' -and $_.result_kind -eq 'aggregate_exists' }).Count
+            $groupedCountQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.query_mode -eq 'grouped_count' -and $_.result_kind -eq 'aggregate_grouped_count' }).Count
             $historicalSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'historical' }).Count
             $currentSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'current' }).Count
             $explicitSchemaQueries = @($operations | Where-Object { $_.operation -eq 'query' -and $_.schema_mode -eq 'explicit' }).Count
@@ -272,6 +278,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $metaHistoryComplete -and $projectSmokeComplete -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $historyQueries -ge 1 -and $explainQueries -ge 1 -and
+                $tokenSearchPages -ge 1 -and $tokenSearchCompletePages -ge 1 -and
+                $graphQueries -ge 1 -and $countQueries -ge 1 -and
+                $existsQueries -ge 1 -and $groupedCountQueries -ge 1 -and
                 $historicalSchemaQueries -ge 1 -and $currentSchemaQueries -ge 1 -and
                 $explicitSchemaQueries -ge 1 -and $olderRecordedAsOfQueries -ge 1 -and
                 $hasExact -and $hasProposition -and $hasSlot
@@ -284,7 +293,7 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
         Start-Sleep -Milliseconds 100
     }
     $events = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
-    throw "Timed out waiting for factual-record, Event, EventMask, graph-conflict, History, Resolved, and Explain IPC workflows. Recorded: $events"
+    throw "Timed out waiting for factual-record, Event, EventMask, graph-conflict, History, Resolved, Explain, paged TokenSearch, Graph, and aggregate IPC workflows. Recorded: $events"
 }
 
 try {
@@ -536,6 +545,9 @@ try {
         point_and_all_times_resolution_previews = 'PASS'
         raw_history_resolved_explain_queries = 'PASS'
         recorded_as_of_and_explicit_schema_modes = 'PASS'
+        paged_token_search_cursor_and_expiry_message = 'PASS'
+        authorized_graph_traversal_and_limits = 'PASS'
+        complete_count_exists_and_grouped_count = 'PASS'
         event_roles_attributes_and_instant_span_creation = 'PASS'
         explicit_event_span_closure_and_event_retractions = 'PASS'
         event_mask_priority_and_separate_retraction = 'PASS'
