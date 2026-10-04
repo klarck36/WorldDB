@@ -15,8 +15,9 @@ use worlddb_ode_engine::EngineHost;
 use worlddb_ode_engine::Request;
 use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
-    HistorySpaceTransferCommand, HistorySpaceTransferResponse, PerspectiveCommand,
-    PerspectiveResponse, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
+    FactCommand, FactResponse, HistorySpaceTransferCommand, HistorySpaceTransferResponse,
+    MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView,
+    ResolutionResultView, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
     SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
@@ -173,6 +174,8 @@ fn run() -> Result<(), String> {
             manage_entities,
             manage_branch_layers,
             manage_history_space_transfer,
+            manage_facts,
+            facts_smoke_diagnostic,
             manage_perspectives,
             manage_security_policy
         ])
@@ -292,6 +295,14 @@ struct HistorySpaceTransferRequestV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct FactRequestV1 {
+    protocol_version: u16,
+    session_id: String,
+    command: FactCommand,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PerspectiveRequestV1 {
     protocol_version: u16,
     session_id: String,
@@ -316,6 +327,12 @@ struct BranchLayerResponseV1 {
 struct HistorySpaceTransferResponseV1 {
     protocol_version: u16,
     result: HistorySpaceTransferResponse,
+}
+
+#[derive(Serialize)]
+struct FactResponseV1 {
+    protocol_version: u16,
+    result: FactResponse,
 }
 
 #[derive(Serialize)]
@@ -651,6 +668,84 @@ fn manage_history_space_transfer(
 }
 
 #[tauri::command]
+fn manage_facts(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: FactRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<FactResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(
+            window.label(),
+            &request.session_id,
+            HostCapability::ProjectOpen,
+        )
+        .map_err(map_session_error)?;
+    let is_write = !matches!(&request.command, FactCommand::Preview { .. });
+    let operation = facts_smoke_operation(&request.command);
+    let selector_kind = facts_smoke_selector_kind(&request.command);
+    match backend.facts(request.command) {
+        Ok(result) => {
+            record_facts_smoke(
+                window.label(),
+                operation,
+                selector_kind,
+                true,
+                Some(&result),
+            )?;
+            if is_write {
+                let _ = app.emit("project-state-changed", ());
+            }
+            Ok(FactResponseV1 {
+                protocol_version: IPC_PROTOCOL_VERSION,
+                result,
+            })
+        }
+        Err(_) => {
+            record_facts_smoke(window.label(), operation, selector_kind, false, None)?;
+            Err(IpcErrorV1::new("facts_rejected"))
+        }
+    }
+}
+
+#[tauri::command]
+fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-facts-{}.jsonl", window.label()));
+    let record = serde_json::json!({
+        "operation": "diagnostic",
+        "details": details.chars().take(1024).collect::<String>(),
+        "window": window.label(),
+        "succeeded": true,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
+    serde_json::to_writer(&mut file, &record)
+        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
+    file.write_all(b"\n")
+        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn manage_perspectives(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -912,6 +1007,117 @@ fn security_policy_smoke_operation(command: &SecurityPolicyCommand) -> &'static 
         SecurityPolicyCommand::RevokeRoleAssignment { .. } => "revoke_role_assignment",
         SecurityPolicyCommand::AddCapabilityRule { .. } => "add_capability_rule",
         SecurityPolicyCommand::RevokeCapabilityRule { .. } => "revoke_capability_rule",
+    }
+}
+
+fn facts_smoke_operation(command: &FactCommand) -> &'static str {
+    match command {
+        FactCommand::CreateAssertion { .. } => "create_assertion",
+        FactCommand::CreateMask { .. } => "create_mask",
+        FactCommand::CreateReplacementBoundary { .. } => "create_replacement_boundary",
+        FactCommand::Preview { .. } => "preview",
+    }
+}
+
+fn facts_smoke_selector_kind(command: &FactCommand) -> Option<&'static str> {
+    match command {
+        FactCommand::CreateMask { selector, .. } => Some(match selector {
+            MaskSelectorInput::ExactAssertion { .. } => "exact_assertion",
+            MaskSelectorInput::Proposition { .. } => "proposition",
+            MaskSelectorInput::Slot { .. } => "slot",
+        }),
+        _ => None,
+    }
+}
+
+fn record_facts_smoke(
+    window_label: &str,
+    operation: &str,
+    selector_kind: Option<&str>,
+    succeeded: bool,
+    result: Option<&FactResponse>,
+) -> Result<(), IpcErrorV1> {
+    let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT") else {
+        return Ok(());
+    };
+    if !cfg!(debug_assertions) || project_smoke_root().is_none() {
+        return Ok(());
+    }
+    let result_prefix = PathBuf::from(result_prefix);
+    let file_stem = result_prefix
+        .file_stem()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or("ipc");
+    let result_path =
+        result_prefix.with_file_name(format!("{file_stem}-facts-{window_label}.jsonl"));
+    let (kind, revision, family, record_id, result_kind, slice_count, outcome_kind) = result
+        .map_or(
+            (None, None, None, None, None, None, None),
+            |response| match response {
+                FactResponse::Published(publication) => (
+                    Some("published"),
+                    Some(publication.revision),
+                    Some(publication.family.as_str()),
+                    Some(publication.record_id.as_str()),
+                    None,
+                    None,
+                    None,
+                ),
+                FactResponse::Preview(preview) => {
+                    let (result_kind, slice_count, outcome_kind) = match &preview.result {
+                        ResolutionResultView::Point { outcome, .. } => {
+                            ("point", None, Some(resolution_outcome_kind(outcome)))
+                        }
+                        ResolutionResultView::AllTimes { slices } => (
+                            "all_times",
+                            Some(slices.len()),
+                            slices
+                                .first()
+                                .map(|slice| resolution_outcome_kind(&slice.outcome)),
+                        ),
+                        ResolutionResultView::CompleteEmpty => ("complete_empty", Some(0), None),
+                    };
+                    (
+                        Some("preview"),
+                        Some(preview.revision),
+                        None,
+                        None,
+                        Some(result_kind),
+                        slice_count,
+                        outcome_kind,
+                    )
+                }
+            },
+        );
+    let record = serde_json::json!({
+        "window": window_label,
+        "operation": operation,
+        "selector_kind": selector_kind,
+        "succeeded": succeeded,
+        "kind": kind,
+        "revision": revision,
+        "family": family,
+        "record_id": record_id,
+        "result_kind": result_kind,
+        "slice_count": slice_count,
+        "outcome_kind": outcome_kind,
+    });
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(result_path)
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    file.write_all(&encoded)
+        .and_then(|()| file.write_all(b"\n"))
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+}
+
+fn resolution_outcome_kind(outcome: &ResolutionOutcomeView) -> &'static str {
+    match outcome {
+        ResolutionOutcomeView::Known { .. } => "known",
+        ResolutionOutcomeView::Unknown => "unknown",
+        ResolutionOutcomeView::Conflict { .. } => "conflict",
     }
 }
 
@@ -1776,6 +1982,10 @@ impl Backend {
         self.with_engine(|engine| engine.history_space_transfer(command))
     }
 
+    fn facts(&self, command: FactCommand) -> Result<FactResponse, String> {
+        self.with_engine(|engine| engine.facts(command))
+    }
+
     fn perspectives(&self, command: PerspectiveCommand) -> Result<PerspectiveResponse, String> {
         self.with_engine(|engine| engine.perspectives(command))
     }
@@ -2011,6 +2221,20 @@ impl EngineBackend {
                 .lock()
                 .map_err(|_| "sidecar lock failed".to_owned())?
                 .history_space_transfer(command),
+        }
+    }
+
+    fn facts(&self, command: FactCommand) -> Result<FactResponse, String> {
+        match self {
+            #[cfg(feature = "in-process")]
+            Self::InProcess(engine) => engine
+                .facts(command)
+                .map_err(|_| "engine rejected factual-record operation".to_owned()),
+            #[cfg(feature = "sidecar")]
+            Self::Sidecar(engine) => engine
+                .lock()
+                .map_err(|_| "sidecar lock failed".to_owned())?
+                .facts(command),
         }
     }
 
@@ -2355,6 +2579,14 @@ impl Sidecar {
             Response::HistorySpaceTransfer { result } => Ok(result),
             Response::Error { .. } => Err("sidecar rejected HistorySpace transfer".to_owned()),
             _ => Err("sidecar returned an unexpected transfer response".to_owned()),
+        }
+    }
+
+    fn facts(&mut self, command: FactCommand) -> Result<FactResponse, String> {
+        match self.request(Request::Facts { command })? {
+            Response::Facts { result } => Ok(result),
+            Response::Error { .. } => Err("sidecar rejected factual-record operation".to_owned()),
+            _ => Err("sidecar returned an unexpected factual-record response".to_owned()),
         }
     }
 

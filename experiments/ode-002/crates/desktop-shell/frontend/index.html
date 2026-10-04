@@ -59,6 +59,9 @@
       #project-status { font-size: 1.05rem; font-weight: 600; }
       #project-details { margin-bottom: 0; }
       #operation-status { min-height: 1.5em; }
+      #facts-write-status, #facts-preview-status { min-height: 1.5em; }
+      .result-cell { border-top: 1px solid color-mix(in srgb, CanvasText 15%, transparent); padding: 12px 0; }
+      .result-cell:first-child { border-top: 0; }
     </style>
   </head>
   <body>
@@ -502,6 +505,90 @@
           <div id="transfer-preview-summary" aria-live="polite"></div>
           <div class="inline compact"><input id="transfer-acknowledge" type="checkbox" /><label for="transfer-acknowledge">Ich bestätige die ausgewiesenen Auslassungen und den unarchivierten Start der Kopien.</label></div>
           <div class="actions"><button id="transfer-commit" type="button" disabled>Übertragung veröffentlichen</button></div>
+        </fieldset>
+      </section>
+      <section id="facts-panel" class="card" aria-labelledby="facts-heading" hidden>
+        <h2 id="facts-heading">Assertions, Masken und Boundaries</h2>
+        <p class="muted">Jede Erfassung wird gegen den aktuellen Katalog und die geltenden Rechte geprüft und append-only gespeichert. Die Auflösungsvorschau erscheint unabhängig vom Schreibbeleg.</p>
+        <fieldset>
+          <legend>Kontext</legend>
+          <div class="grid">
+            <div><label for="facts-history-space">Branch</label><select id="facts-history-space"></select></div>
+            <div><label for="facts-layer">Layer</label><select id="facts-layer"></select></div>
+            <div><label for="facts-epistemic-mode">Aussagekontext</label><select id="facts-epistemic-mode"><option value="world_state">WorldState</option><option value="knows">Knows</option><option value="believes">Believes</option><option value="claims">Claims</option></select></div>
+            <div id="facts-perspective-wrap" hidden><label for="facts-perspective">Perspektive</label><select id="facts-perspective"></select></div>
+            <div><label for="facts-subject">Entität (Subjekt)</label><select id="facts-subject"></select></div>
+            <div><label for="facts-predicate">Prädikat</label><select id="facts-predicate"></select></div>
+          </div>
+          <p id="facts-context-note" class="muted" role="status"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Weltzeit-Gültigkeit</legend>
+          <div class="grid">
+            <div><label for="facts-validity-timeline">Timeline</label><select id="facts-validity-timeline"></select></div>
+            <div class="inline" style="align-self:end; min-height:40px"><input id="facts-validity-enabled" type="checkbox" /><label for="facts-validity-enabled">Intervall begrenzen</label></div>
+          </div>
+          <div id="facts-validity-range" class="grid" hidden>
+            <div><label for="facts-validity-start">Von einschließlich (ns, leer = offen)</label><input id="facts-validity-start" inputmode="numeric" autocomplete="off" /></div>
+            <div><label for="facts-validity-end">Bis ausschließlich (ns, leer = offen)</label><input id="facts-validity-end" inputmode="numeric" autocomplete="off" /></div>
+          </div>
+          <p class="muted">Assertions benötigen eine Timeline und gelten bei deaktiviertem Intervall unbegrenzt darauf. Bei Mask und Boundary bedeutet ein deaktiviertes Intervall: ohne zeitliche Begrenzung.</p>
+        </fieldset>
+        <fieldset id="facts-proposition-fields">
+          <legend>Polarity und Wert</legend>
+          <p class="muted">Für Assertions und Proposition-Masks. Die Wertart folgt dem ausgewählten Prädikat.</p>
+          <div class="grid">
+            <div><label for="facts-polarity">Polarity</label><select id="facts-polarity"><option value="positive">Positiv</option><option value="negative">Negativ</option></select></div>
+            <div id="facts-value-text-wrap">
+              <label for="facts-value-text">Wert <span id="facts-value-kind-label" class="muted"></span></label>
+              <input id="facts-value-text" maxlength="262144" autocomplete="off" />
+            </div>
+            <div id="facts-value-bool-wrap" hidden>
+              <label for="facts-value-bool">Wert</label>
+              <select id="facts-value-bool"><option value="true">Wahr</option><option value="false">Falsch</option></select>
+            </div>
+            <div id="facts-value-entity-wrap" hidden>
+              <label for="facts-value-entity">Entity-Verweis</label><select id="facts-value-entity"></select>
+            </div>
+          </div>
+          <div id="facts-time-value-fields" hidden class="grid">
+            <div><label for="facts-time-value-timeline">Timeline</label><select id="facts-time-value-timeline"></select></div>
+            <div><label for="facts-time-value-ticks">Ticks (signed 128-bit)</label><input id="facts-time-value-ticks" inputmode="numeric" autocomplete="off" /></div>
+            <div><label for="facts-time-value-unit">Zeiteinheit</label><select id="facts-time-value-unit"></select></div>
+          </div>
+        </fieldset>
+        <div class="grid">
+          <fieldset id="facts-assertion-fields">
+            <legend>Assertion erfassen</legend>
+            <p class="muted">Speichert eine unveränderliche Assertion im ausgewählten Kontext.</p>
+            <div class="actions"><button id="facts-create-assertion" type="button" disabled>Assertion speichern</button></div>
+          </fieldset>
+          <fieldset id="facts-mask-fields">
+            <legend>Mask erfassen</legend>
+            <label for="facts-mask-selector">Geschlossener Selector</label>
+            <select id="facts-mask-selector"><option value="exact_assertion">Konkrete Assertion</option><option value="proposition">Proposition (Wert und Polarity)</option><option value="slot">Gesamter Subject/Predicate-Slot</option></select>
+            <div id="facts-mask-exact-wrap"><label for="facts-mask-assertion-id">Assertion-ID</label><input id="facts-mask-assertion-id" autocomplete="off" placeholder="UUID der bestehenden Assertion" /></div>
+            <p id="facts-mask-selector-note" class="muted">Proposition und Slot verwenden Subjekt, Prädikat und Kontext aus dem gemeinsamen Formular.</p>
+            <div class="actions"><button id="facts-create-mask" type="button" disabled>Mask speichern</button></div>
+          </fieldset>
+          <fieldset id="facts-boundary-fields">
+            <legend>MultiValueReplace-Boundary erfassen</legend>
+            <p id="facts-boundary-note" class="muted">Die Boundary setzt für den Slot ab ihrer Gültigkeit eine neue, gegebenenfalls leere Wertemenge.</p>
+            <div class="actions"><button id="facts-create-boundary" type="button" disabled>Boundary speichern</button></div>
+          </fieldset>
+        </div>
+        <p id="facts-write-status" class="muted" role="status" aria-live="polite"></p>
+        <fieldset>
+          <legend>M8-14d-Auflösungsvorschau</legend>
+          <p class="muted">Abfrage derselben Assertion-, Mask- und Boundary-Historie im ausgewählten Branch, Layer und epistemischen Kontext.</p>
+          <div class="grid">
+            <div><label for="facts-query-time-mode">Weltzeit</label><select id="facts-query-time-mode"><option value="all_times">Alle Zeiten</option><option value="at">Zeitpunkt</option></select></div>
+            <div id="facts-query-point-wrap" hidden><label for="facts-query-timeline">Timeline</label><select id="facts-query-timeline"></select></div>
+            <div id="facts-query-nanoseconds-wrap" hidden><label for="facts-query-nanoseconds">Zeitpunkt (Nanosekunden)</label><input id="facts-query-nanoseconds" inputmode="numeric" autocomplete="off" value="0" /></div>
+          </div>
+          <div class="actions"><button id="facts-preview" type="button" disabled>Auflösung anzeigen</button></div>
+          <p id="facts-preview-status" class="muted" role="status" aria-live="polite"></p>
+          <div id="facts-preview-results" aria-live="polite"></div>
         </fieldset>
       </section>
     </main>

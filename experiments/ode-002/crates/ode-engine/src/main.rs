@@ -213,6 +213,20 @@ fn main() {
                     std::process::exit(74);
                 }
             }
+            Request::Facts { command } => {
+                let response = match engine.facts(command) {
+                    Ok(result) => Response::Facts { result },
+                    Err(worlddb_ode_engine::EngineError::Fact(_)) => Response::Error {
+                        code: "facts_rejected".to_owned(),
+                    },
+                    Err(_) => Response::Error {
+                        code: "engine_failed".to_owned(),
+                    },
+                };
+                if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
             Request::Perspectives { command } => {
                 let response = match engine.perspectives(command) {
                     Ok(result) => Response::Perspectives { result },

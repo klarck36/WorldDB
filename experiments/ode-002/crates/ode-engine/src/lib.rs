@@ -36,6 +36,13 @@ pub use history_space_transfer::{
     HistorySpaceTransferResponse, TransferCatalogView, TransferContentView, TransferPreviewView,
     TransferPublishedView, TransferRelationView,
 };
+mod facts;
+pub use facts::{
+    FactCommand, FactContextInput, FactPublicationView, FactResponse, FactValueInput,
+    MaskSelectorInput, PolarityInput, ResolutionConflictView, ResolutionOutcomeView,
+    ResolutionPreviewView, ResolutionResultView, ResolutionSliceView, ResolutionValueView,
+    ValidityInput, WorldTimeSelectorInput,
+};
 mod schema;
 pub use schema::{
     CalendarPeriodDraft, CardinalityDraft, ConstraintDraft, DecimalMetadataDraft,
@@ -117,6 +124,9 @@ pub enum Request {
     HistorySpaceTransfer {
         command: HistorySpaceTransferCommand,
     },
+    Facts {
+        command: FactCommand,
+    },
     Panic,
     Shutdown,
 }
@@ -163,6 +173,9 @@ pub enum Response {
     },
     HistorySpaceTransfer {
         result: HistorySpaceTransferResponse,
+    },
+    Facts {
+        result: FactResponse,
     },
     Shutdown,
     Error {
@@ -264,6 +277,7 @@ pub enum EngineError {
     Perspective(String),
     SecurityPolicy(String),
     HistorySpaceTransfer(String),
+    Fact(String),
 }
 
 impl std::fmt::Display for EngineError {
@@ -277,6 +291,7 @@ impl std::fmt::Display for EngineError {
             Self::Perspective(message) => formatter.write_str(message),
             Self::SecurityPolicy(message) => formatter.write_str(message),
             Self::HistorySpaceTransfer(message) => formatter.write_str(message),
+            Self::Fact(message) => formatter.write_str(message),
         }
     }
 }

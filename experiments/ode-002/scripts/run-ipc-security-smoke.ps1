@@ -4,7 +4,8 @@ param(
     [string]$Mode,
     [Parameter(Mandatory = $true)]
     [string]$ExecutablePath,
-    [string]$EngineExecutablePath
+    [string]$EngineExecutablePath,
+    [switch]$KeepArtifacts
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,7 +38,9 @@ $primaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-primary.jsonl'
 $secondaryPerspectivePath = Join-Path $testRoot 'ipc-perspective-secondary.jsonl'
 $primarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-primary.jsonl'
 $secondarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-secondary.jsonl'
+$primaryFactsPath = Join-Path $testRoot 'ipc-facts-primary.jsonl'
 $process = $null
+$smokePassed = $false
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -186,6 +189,40 @@ function Wait-ForSecurityPolicyOperations([System.Diagnostics.Process]$Process, 
     throw "Timed out waiting for policy IPC workflows. Primary: $events"
 }
 
+function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(120)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
+            $operations = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $rejected = @($operations | Where-Object { -not $_.succeeded })
+            if ($rejected.Count -gt 0) {
+                throw "A factual-record or resolution-preview IPC call was rejected: $($rejected | ConvertTo-Json -Compress -Depth 5)"
+            }
+            $assertions = @($operations | Where-Object { $_.operation -eq 'create_assertion' -and $_.succeeded }).Count
+            $masks = @($operations | Where-Object { $_.operation -eq 'create_mask' -and $_.succeeded })
+            $boundaries = @($operations | Where-Object { $_.operation -eq 'create_replacement_boundary' -and $_.succeeded }).Count
+            $allTimes = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'all_times' }).Count
+            $points = @($operations | Where-Object { $_.operation -eq 'preview' -and $_.succeeded -and $_.result_kind -eq 'point' }).Count
+            $selectors = @($masks | Select-Object -ExpandProperty selector_kind -Unique)
+            $hasExact = $selectors -contains 'exact_assertion'
+            $hasProposition = $selectors -contains 'proposition'
+            $hasSlot = $selectors -contains 'slot'
+            if (
+                $assertions -ge 3 -and $masks.Count -ge 3 -and $boundaries -ge 1 -and
+                $allTimes -ge 7 -and $points -ge 1 -and
+                $hasExact -and $hasProposition -and $hasSlot
+            ) {
+                return
+            }
+        }
+        $Process.Refresh()
+        if ($Process.HasExited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    $events = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
+    throw "Timed out waiting for Assertion, Mask, Boundary, and resolution-preview IPC workflows. Recorded: $events"
+}
+
 try {
     $env:WORLDDB_ODE_RESULT = $reportPath
     $env:WORLDDB_ODE_IPC_RESULT = $ipcPrefix
@@ -195,8 +232,9 @@ try {
     $env:WORLDDB_ODE_TRANSFER_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT = $ipcPrefix
+    $env:WORLDDB_ODE_FACTS_SMOKE_RESULT = $ipcPrefix
     $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
-    $env:WORLDDB_ODE_AUTOCLOSE_MS = '90000'
+    $env:WORLDDB_ODE_AUTOCLOSE_MS = '180000'
     $env:WORLDDB_ODE_ENGINE_PRINCIPAL_ID = '00000000-0000-7000-8000-000000000099'
     if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
         $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)
@@ -216,6 +254,7 @@ try {
     Wait-ForTransferOperations $process $primaryTransferPath
     Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath
     Wait-ForSecurityPolicyOperations $process $primarySecurityPolicyPath
+    Wait-ForFactsOperations $process $primaryFactsPath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
     $primary = Get-Content -LiteralPath $primaryPath -Raw | ConvertFrom-Json
     $secondary = Get-Content -LiteralPath $secondaryPath -Raw | ConvertFrom-Json
@@ -234,6 +273,7 @@ try {
     $secondarySecurityPolicy = if (Test-Path -LiteralPath $secondarySecurityPolicyPath -PathType Leaf) {
         @(Get-Content -LiteralPath $secondarySecurityPolicyPath | ForEach-Object { $_ | ConvertFrom-Json })
     } else { @() }
+    $primaryFacts = @(Get-Content -LiteralPath $primaryFactsPath | ForEach-Object { $_ | ConvertFrom-Json })
     if ($report.mode -ne ($Mode -replace '-', '_')) { throw 'The executable reported the wrong process mode.' }
     foreach ($entry in @(@{ Value = $primary; Label = 'primary' }, @{ Value = $secondary; Label = 'secondary' })) {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or $entry.Value.status -ne 'authorized_health_ok' -or $entry.Value.security_probe_mode -ne $true) {
@@ -388,12 +428,13 @@ try {
         }
     }
 
-    if (-not $process.WaitForExit(90000)) {
+    if (-not $process.WaitForExit(240000)) {
         $process.Kill()
         throw 'The IPC smoke process did not shut down.'
     }
     $process.Refresh()
     if ($process.ExitCode -ne 0) { throw "The IPC smoke process exited with code $($process.ExitCode)." }
+    $smokePassed = $true
 
     [pscustomobject]@{
         mode = $Mode
@@ -418,6 +459,9 @@ try {
         authenticated_history_space_transfer_catalog = 'PASS'
         authenticated_perspective_catalog_and_contexts = 'PASS'
         current_historical_and_explicit_perspective_reads = 'PASS'
+        assertion_mask_and_replacement_boundary_forms = 'PASS'
+        exact_proposition_and_slot_mask_selectors = 'PASS'
+        point_and_all_times_resolution_previews = 'PASS'
         world_state_and_epistemic_contexts_separate = 'PASS'
         invalid_and_retired_perspectives_rejected = 'PASS'
         secondary_window_perspective_read = 'PASS'
@@ -432,7 +476,7 @@ try {
     } | ConvertTo-Json -Compress
 }
 finally {
-    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
+    foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_RESULT', 'WORLDDB_ODE_IPC_RESULT', 'WORLDDB_ODE_SCHEMA_SMOKE_RESULT', 'WORLDDB_ODE_ENTITY_SMOKE_RESULT', 'WORLDDB_ODE_BRANCH_LAYER_SMOKE_RESULT', 'WORLDDB_ODE_TRANSFER_SMOKE_RESULT', 'WORLDDB_ODE_PERSPECTIVE_SMOKE_RESULT', 'WORLDDB_ODE_SECURITY_POLICY_SMOKE_RESULT', 'WORLDDB_ODE_FACTS_SMOKE_RESULT', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_ODE_ENGINE_EXECUTABLE', 'WORLDDB_ODE_ENGINE_PRINCIPAL_ID')) {
         Remove-Item "Env:\$name" -ErrorAction SilentlyContinue
     }
     if ($null -ne $process) {
@@ -447,5 +491,9 @@ finally {
     if (-not $resolvedRoot.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'Refusing to remove a smoke-test directory outside the system temp directory.'
     }
-    if (Test-Path -LiteralPath $resolvedRoot) { Remove-Item -LiteralPath $resolvedRoot -Recurse -Force }
+    if ($KeepArtifacts -and -not $smokePassed) {
+        Write-Warning "Preserved failed smoke artifacts at $resolvedRoot"
+    } elseif (Test-Path -LiteralPath $resolvedRoot) {
+        Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+    }
 }

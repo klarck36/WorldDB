@@ -104,9 +104,9 @@ pub use salvage::{
 };
 pub use schema_management::{
     EntityCatalogPublicationReceipt, EntityManagementError, FactManagementError,
-    FactPublicationReceipt, FactSnapshot, FileEntityManager, FileFactManager,
-    FileHistorySpaceTransferManager, FileProjectMetadataManager, FileSchemaManager,
-    FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,
+    FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot, FileEntityManager,
+    FileFactManager, FileHistorySpaceTransferManager, FileProjectMetadataManager,
+    FileSchemaManager, FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,
     MetadataPublicationReceipt, PolicyManagementError, PolicyPublicationReceipt,
     ReplacementBoundaryDraft, SchemaManagementError, SchemaPublicationReceipt,
     TransferEventRelationItem, TransferPublicationReceipt, TransferSourceItem,
