@@ -1,20 +1,23 @@
 //! Productive, snapshot-bound Raw, Resolved, and Explain query entry points.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::mem::size_of;
 
+use crate::archive::{ArchiveState, ArchiveTargetRef};
 use crate::archive_projection::ArchiveHistoryReferenceModel;
 use crate::assertion_point_index::{AssertionPointHistoryIndex, AssertionPointIndexError};
 use crate::candidate_scan::{
     AssertionCandidate, AssertionCandidateQuery, AssertionCandidateSecurityContext,
     AssertionHistoryRecord, AssertionPointCandidateFilter, CandidateScanError,
-    full_scan_authorized_point_assertion_candidates, indexed_authorized_assertion_candidates,
+    assertion_candidate_is_authorized, full_scan_authorized_point_assertion_candidates,
+    indexed_authorized_assertion_candidates,
 };
 use crate::context::{ContextError, ContextKey};
+use crate::context_precedence::ContextPrecedence;
 use crate::cursor::{CursorInsertRequest, CursorSecurityContext, CursorStateError};
 use crate::history_model::HistorySpaceReferenceModel;
-use crate::ids::{AssertionId, MaskId, ReplacementBoundaryId};
+use crate::ids::{AssertionId, MaskId, ReplacementBoundaryId, TimelineId};
 use crate::index_generation::{
     FullScanBudget, IndexAccessPlan, IndexAvailability, IndexBuildVersion, IndexFallbackReason,
     IndexFamily, IndexFormatVersion, IndexQueryRequirement, IndexSchemaVersion, plan_index_access,
@@ -23,9 +26,11 @@ use crate::layers::LayerSchemaSnapshot;
 use crate::mask_projection::{
     AssertionMaskContext, AuthorizedAssertionMaskHistory,
     apply_authorized_assertion_masks_with_trace,
+    apply_authorized_assertion_masks_with_trace_all_times, mask_is_authorized,
 };
 use crate::masks::{
-    ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
+    Mask, MaskRetraction, MaskSelector, MaskValidityClosure, ReplacementBoundary,
+    ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
 };
 use crate::multi_value_resolution::{
     MultiValueReplaceContext, MultiValueResolutionError, MultiValueSlot,
@@ -63,6 +68,7 @@ use crate::security::{
 use crate::single_value_resolution::{
     SingleValueResolutionError, SingleValueSlot, resolve_single_value_replace,
 };
+use crate::temporal::{TimeInterval, Timeline, WorldTime};
 use crate::values::Value;
 
 const MAX_PAGE_SORT_KEY_BYTES: usize = 64 * 1024;
@@ -101,6 +107,7 @@ impl<'a> AssertionPointIndexAccess<'a> {
 }
 
 /// Complete boundary and lifecycle inputs for a pinned point query.
+#[derive(Clone, Copy)]
 pub struct ReplacementBoundarySource<'a> {
     boundaries: &'a [ReplacementBoundary],
     closures: &'a [ReplacementBoundaryValidityClosure],
@@ -154,6 +161,7 @@ impl<'a> AssertionQueryStore<'a> {
 }
 
 /// Per-request semantic and index inputs for one Assertion point query.
+#[derive(Clone, Copy)]
 pub struct AssertionPointRequest<'a> {
     context: &'a QueryContext,
     masks: AuthorizedAssertionMaskHistory<'a>,
@@ -211,6 +219,49 @@ impl<T: 'static> QueryEngineOutput<T> {
     #[must_use]
     pub const fn path(&self) -> QueryExecutionPath {
         self.path
+    }
+}
+
+/// Complete resolution preview bound to the supplied QueryContext.
+///
+/// Technical failures are returned as `QueryEngineError`; they are never
+/// converted into a domain `Unknown` or an incomplete result.
+#[derive(Clone, Debug)]
+pub enum ResolutionPreview {
+    /// One world-time point was selected, including an `Unknown` outcome when
+    /// the selected slot has no visible candidates at that point.
+    Point {
+        world_time: WorldTime,
+        resolved_view: ResolvedView,
+    },
+    /// Complete, ordered half-open time slices for each visible assertion or
+    /// ReplacementBoundary timeline used by the selected slot. This variant
+    /// always contains at least one slice.
+    AllTimes { slices: Vec<ResolutionTimeSlice> },
+    /// A complete all-times query found no visible assertion or explicit
+    /// ReplacementBoundary time domain from which a timeline result could be
+    /// enumerated.
+    CompleteEmpty,
+}
+
+/// One outcome over a complete half-open world-time interval.
+#[derive(Clone, Debug)]
+pub struct ResolutionTimeSlice {
+    interval: TimeInterval,
+    resolved_view: ResolvedView,
+}
+
+impl ResolutionTimeSlice {
+    /// Time interval covered by the outcome.
+    #[must_use]
+    pub const fn interval(&self) -> TimeInterval {
+        self.interval
+    }
+
+    /// Known, Unknown, or Conflict domain outcome for this interval.
+    #[must_use]
+    pub const fn resolved_view(&self) -> &ResolvedView {
+        &self.resolved_view
     }
 }
 
@@ -605,6 +656,126 @@ impl ProductiveQueryEngine {
         result
     }
 
+    /// Produces a complete resolution preview for one subject/Predicate slot.
+    ///
+    /// A point selector returns exactly one Resolved View. `AllTimes` partitions
+    /// each visible assertion or ReplacementBoundary timeline at the half-open
+    /// validity and closure boundaries, resolves every cell, and returns an
+    /// explicit `CompleteEmpty` when there is no visible temporal domain to
+    /// enumerate. Event-window filters are intentionally not part of this
+    /// operation.
+    pub fn resolution_preview<F>(
+        store: AssertionQueryStore<'_>,
+        request: AssertionPointRequest<'_>,
+        slot: MultiValueSlot,
+        predicate: &PredicateDefinition,
+        mut temporal_value_equal: F,
+    ) -> Result<QueryEngineOutput<ResolutionPreview>, QueryEngineError>
+    where
+        F: FnMut(&Value, &Value) -> Result<bool, ()>,
+    {
+        let context = request.context;
+        let policies = store.policies;
+        ensure_active(context)?;
+        if predicate.predicate_id() != slot.predicate_id() {
+            return Err(QueryEngineError::Resolution(
+                ResolutionFailure::PredicateMismatch,
+            ));
+        }
+
+        let mut visible_assertions = BTreeSet::new();
+        let mut memory_reservations = Vec::new();
+        let (preview, path) = match context.world_time() {
+            WorldTimeSelector::At(world_time) => {
+                let execution = execute_point_at(
+                    store,
+                    request,
+                    slot,
+                    predicate,
+                    world_time,
+                    &mut temporal_value_equal,
+                )?;
+                visible_assertions.extend(execution.candidate_ids.iter().copied());
+                (
+                    ResolutionPreview::Point {
+                        world_time,
+                        resolved_view: execution.resolved_view,
+                    },
+                    execution.path,
+                )
+            }
+            WorldTimeSelector::AllTimes => {
+                require_full_scan_budget(request.scan_budget)?;
+                let policy = policies.resolve(context)?;
+                let plan = collect_resolution_partitions(
+                    store,
+                    request,
+                    slot,
+                    policy.snapshot(),
+                    &mut memory_reservations,
+                )?;
+                if plan.partitions.is_empty() {
+                    (
+                        ResolutionPreview::CompleteEmpty,
+                        QueryExecutionPath::FullScan,
+                    )
+                } else {
+                    let mut slices = Vec::new();
+                    slices
+                        .try_reserve_exact(plan.partitions.len())
+                        .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+                    for partition in plan.partitions {
+                        ensure_active(context)?;
+                        if u64::try_from(slices.len()).unwrap_or(u64::MAX)
+                            >= context.budget().max_results().get()
+                        {
+                            return Err(QueryEngineError::BudgetExceeded(BudgetDimension::Results));
+                        }
+                        let execution = execute_all_times_point(
+                            store,
+                            request,
+                            slot,
+                            predicate,
+                            partition.sample,
+                            AllTimesPointHistory {
+                                assertion_ids: &plan.assertion_ids,
+                                policy: policy.snapshot(),
+                            },
+                            &mut temporal_value_equal,
+                        )?;
+                        visible_assertions.extend(execution.candidate_ids.iter().copied());
+                        reserve_query_memory(
+                            context,
+                            size_of::<ResolutionTimeSlice>(),
+                            &mut memory_reservations,
+                        )?;
+                        slices.push(ResolutionTimeSlice {
+                            interval: partition.interval,
+                            resolved_view: execution.resolved_view,
+                        });
+                    }
+                    (
+                        ResolutionPreview::AllTimes { slices },
+                        QueryExecutionPath::FullScan,
+                    )
+                }
+            }
+        };
+
+        if !preview_contributors_are_visible(&preview, &visible_assertions) {
+            return Err(QueryEngineError::QueryBinding);
+        }
+        ensure_active(context)?;
+        let query = OwnedQueryResult::bind_with_memory_reservations(
+            context,
+            policies,
+            preview,
+            memory_reservations,
+        )?;
+        ensure_active(context)?;
+        Ok(QueryEngineOutput { query, path })
+    }
+
     /// Resolves one Assertion subject/Predicate point using a compatible index or
     /// the complete authorized M2 scan. Mask and boundary records are security-filtered
     /// before they can affect the owned outcome.
@@ -739,6 +910,30 @@ fn execute_point<F>(
 where
     F: FnMut(&Value, &Value) -> Result<bool, ()>,
 {
+    let WorldTimeSelector::At(world_time) = request.context.world_time() else {
+        return Err(QueryEngineError::AllTimesResolutionUnavailable);
+    };
+    execute_point_at(
+        store,
+        request,
+        slot,
+        predicate,
+        world_time,
+        &mut temporal_value_equal,
+    )
+}
+
+fn execute_point_at<F>(
+    store: AssertionQueryStore<'_>,
+    request: AssertionPointRequest<'_>,
+    slot: MultiValueSlot,
+    predicate: &PredicateDefinition,
+    world_time: WorldTime,
+    mut temporal_value_equal: F,
+) -> Result<PointExecution, QueryEngineError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
     let AssertionQueryStore {
         history,
         archive,
@@ -758,9 +953,6 @@ where
             ResolutionFailure::PredicateMismatch,
         ));
     }
-    let WorldTimeSelector::At(world_time) = context.world_time() else {
-        return Err(QueryEngineError::AllTimesResolutionUnavailable);
-    };
     let query = AssertionCandidateQuery::new(
         context.history_space(),
         context.layers().requested().clone(),
@@ -843,14 +1035,24 @@ where
         layers,
     )
     .with_query_history_space(context.history_space());
-    let mask_projection = apply_authorized_assertion_masks_with_trace(
-        &candidates,
-        masks,
-        mask_context,
-        security.snapshot(),
-        context,
-        &mut temporal_value_equal,
-    )?;
+    let mask_projection = match context.world_time() {
+        WorldTimeSelector::At(_) => apply_authorized_assertion_masks_with_trace(
+            &candidates,
+            masks,
+            mask_context,
+            security.snapshot(),
+            context,
+            &mut temporal_value_equal,
+        )?,
+        WorldTimeSelector::AllTimes => apply_authorized_assertion_masks_with_trace_all_times(
+            &candidates,
+            masks,
+            mask_context,
+            security.snapshot(),
+            context,
+            &mut temporal_value_equal,
+        )?,
+    };
     let masked_candidate_ids = candidate_ids(mask_projection.candidates());
     let applied_mask_ids = mask_projection.applied_mask_ids().to_vec();
 
@@ -931,6 +1133,641 @@ where
         resolved_view,
         path,
     })
+}
+
+#[derive(Clone, Copy)]
+struct ResolutionPartition {
+    interval: TimeInterval,
+    sample: WorldTime,
+}
+
+struct ResolutionTimePlan {
+    partitions: Vec<ResolutionPartition>,
+    assertion_ids: BTreeSet<AssertionId>,
+}
+
+struct AllTimesPointHistory<'a> {
+    assertion_ids: &'a BTreeSet<AssertionId>,
+    policy: &'a SecurityPolicySnapshot,
+}
+
+#[derive(Default)]
+struct OwnedMaskHistory {
+    masks: Vec<Mask>,
+    closures: Vec<MaskValidityClosure>,
+    retractions: Vec<MaskRetraction>,
+    archive_visible: BTreeSet<MaskId>,
+}
+
+#[derive(Default)]
+struct OwnedBoundaryHistory {
+    boundaries: Vec<ReplacementBoundary>,
+    closures: Vec<ReplacementBoundaryValidityClosure>,
+    retractions: Vec<ReplacementBoundaryRetraction>,
+    archive_visible: BTreeSet<ReplacementBoundaryId>,
+}
+
+fn execute_all_times_point<F>(
+    store: AssertionQueryStore<'_>,
+    request: AssertionPointRequest<'_>,
+    slot: MultiValueSlot,
+    predicate: &PredicateDefinition,
+    world_time: WorldTime,
+    history: AllTimesPointHistory<'_>,
+    temporal_value_equal: F,
+) -> Result<PointExecution, QueryEngineError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
+    let context = request.context;
+    let mask_history = masks_for_time(
+        store,
+        request.masks,
+        context,
+        slot,
+        history.assertion_ids,
+        world_time.timeline().id(),
+        history.policy,
+    );
+    let boundary_history = boundaries_for_time(
+        store,
+        request.boundaries,
+        context,
+        slot,
+        world_time.timeline().id(),
+        history.policy,
+    );
+    let masks = AuthorizedAssertionMaskHistory::new(
+        &mask_history.masks,
+        &mask_history.closures,
+        &mask_history.retractions,
+        &mask_history.archive_visible,
+    );
+    let boundaries = ReplacementBoundarySource::new(
+        &boundary_history.boundaries,
+        &boundary_history.closures,
+        &boundary_history.retractions,
+        &boundary_history.archive_visible,
+    );
+    let request = AssertionPointRequest::new(
+        context,
+        masks,
+        boundaries,
+        AssertionPointIndexAccess::missing(),
+        request.scan_budget,
+    );
+    execute_point_at(
+        store,
+        request,
+        slot,
+        predicate,
+        world_time,
+        temporal_value_equal,
+    )
+}
+
+fn collect_resolution_partitions(
+    store: AssertionQueryStore<'_>,
+    request: AssertionPointRequest<'_>,
+    slot: MultiValueSlot,
+    policy: &SecurityPolicySnapshot,
+    memory_reservations: &mut Vec<MemoryReservation>,
+) -> Result<ResolutionTimePlan, QueryEngineError> {
+    let context = request.context;
+    let principal = context.security().principal_id();
+    let mut timeline_edges = BTreeMap::<TimelineId, BTreeSet<i128>>::new();
+    let mut assertion_ids = BTreeSet::new();
+    let mut candidates = 0_u64;
+    let mut work_units = 0_u64;
+    for (stored_revision, owner_history_space_id, record) in store
+        .history
+        .iter_at(context.history_space(), context.recorded_as_of().revision())
+        .map_err(|_| QueryEngineError::CandidateHistory)?
+    {
+        match record {
+            AssertionHistoryRecord::Assertion(assertion) => {
+                if !assertion_candidate_is_authorized(
+                    policy,
+                    principal,
+                    owner_history_space_id,
+                    assertion,
+                ) || assertion.subject() != slot.subject()
+                    || assertion.predicate_id() != slot.predicate_id()
+                {
+                    continue;
+                }
+                if stored_revision != assertion.created_revision()
+                    || assertion.context().history_space_id() != owner_history_space_id
+                {
+                    return Err(QueryEngineError::CandidateHistory);
+                }
+                if assertion.context().perspective_scope() != context.perspective()
+                    || assertion.context().epistemic_mode() != context.epistemic_mode()
+                    || !context
+                        .layers()
+                        .resolved()
+                        .as_slice()
+                        .contains(&assertion.context().layer_id())
+                {
+                    continue;
+                }
+                ContextPrecedence::for_context(
+                    context.history_space(),
+                    owner_history_space_id,
+                    assertion.context().layer_id(),
+                    store.history.catalog(),
+                    store.layers,
+                )
+                .map_err(|_| QueryEngineError::CandidateHistory)?;
+                if candidates >= context.budget().max_candidates().get() {
+                    return Err(QueryEngineError::BudgetExceeded(
+                        BudgetDimension::Candidates,
+                    ));
+                }
+                candidates += 1;
+                count_preview_work(context, &mut work_units)?;
+                let archive_target = ArchiveTargetRef::Assertion(assertion.id());
+                let archive_record = store
+                    .archive
+                    .target_record(archive_target)
+                    .ok_or(QueryEngineError::CandidateHistory)?;
+                if archive_record.created_revision() != assertion.created_revision() {
+                    return Err(QueryEngineError::CandidateHistory);
+                }
+                if store
+                    .archive
+                    .state_at(archive_target, context.recorded_as_of())
+                    .map_err(|_| QueryEngineError::CandidateHistory)?
+                    != ArchiveState::Unarchived
+                {
+                    continue;
+                }
+                assertion_ids.insert(assertion.id());
+                add_interval_endpoints(
+                    context,
+                    &mut timeline_edges,
+                    assertion.validity().interval(),
+                    memory_reservations,
+                )?;
+            }
+            AssertionHistoryRecord::ValidityClosure(closure)
+                if assertion_ids.contains(&closure.assertion_id())
+                    && closure.created_revision() <= context.recorded_as_of().revision() =>
+            {
+                count_preview_work(context, &mut work_units)?;
+                add_endpoint_if_timeline_exists(
+                    context,
+                    &mut timeline_edges,
+                    closure.close_at_world_time(),
+                    memory_reservations,
+                )?;
+            }
+            AssertionHistoryRecord::ValidityClosure(_) | AssertionHistoryRecord::Retraction(_) => {}
+        }
+    }
+
+    if !assertion_ids.is_empty() {
+        let (source_masks, source_mask_closures, source_mask_retractions, archive_visible_masks) =
+            request.masks.records();
+        let mut mask_ids = BTreeSet::new();
+        for mask in source_masks {
+            if mask.created_revision() > context.recorded_as_of().revision()
+                || !archive_visible_masks.contains(&mask.id())
+                || !mask_is_authorized(policy, principal, mask)
+                || !record_context_is_relevant(store, context, mask.context())
+                || !mask_selector_is_relevant(mask, slot, context, &assertion_ids)
+            {
+                continue;
+            }
+            count_preview_work(context, &mut work_units)?;
+            mask_ids.insert(mask.id());
+            if let Some(validity) = mask.validity() {
+                add_interval_if_timeline_exists(
+                    context,
+                    &mut timeline_edges,
+                    validity.interval(),
+                    memory_reservations,
+                )?;
+            }
+        }
+        for closure in source_mask_closures {
+            if mask_ids.contains(&closure.mask_id())
+                && closure.created_revision() <= context.recorded_as_of().revision()
+            {
+                count_preview_work(context, &mut work_units)?;
+                add_endpoint_if_timeline_exists(
+                    context,
+                    &mut timeline_edges,
+                    closure.close_at_world_time(),
+                    memory_reservations,
+                )?;
+            }
+        }
+        for retraction in source_mask_retractions {
+            if mask_ids.contains(&retraction.mask_id())
+                && retraction.created_revision() <= context.recorded_as_of().revision()
+            {
+                count_preview_work(context, &mut work_units)?;
+            }
+        }
+    }
+
+    let boundary_source = request.boundaries;
+    let mut boundary_ids = BTreeSet::new();
+    for boundary in boundary_source.boundaries {
+        if boundary.created_revision() > context.recorded_as_of().revision()
+            || !boundary_source
+                .archive_visible_boundaries
+                .contains(&boundary.id())
+            || !boundary_is_authorized(policy, principal, boundary)
+            || boundary.subject() != slot.subject()
+            || boundary.predicate_id() != slot.predicate_id()
+            || !record_context_is_relevant(store, context, boundary.context())
+        {
+            continue;
+        }
+        count_preview_work(context, &mut work_units)?;
+        boundary_ids.insert(boundary.id());
+        if let Some(validity) = boundary.validity() {
+            add_interval_endpoints(
+                context,
+                &mut timeline_edges,
+                validity.interval(),
+                memory_reservations,
+            )?;
+        }
+    }
+    for closure in boundary_source.closures {
+        if boundary_ids.contains(&closure.replacement_boundary_id())
+            && closure.created_revision() <= context.recorded_as_of().revision()
+        {
+            count_preview_work(context, &mut work_units)?;
+            add_endpoint_if_timeline_exists(
+                context,
+                &mut timeline_edges,
+                closure.close_at_world_time(),
+                memory_reservations,
+            )?;
+        }
+    }
+    for retraction in boundary_source.retractions {
+        if boundary_ids.contains(&retraction.replacement_boundary_id())
+            && retraction.created_revision() <= context.recorded_as_of().revision()
+        {
+            count_preview_work(context, &mut work_units)?;
+        }
+    }
+
+    if timeline_edges.is_empty() {
+        return Ok(ResolutionTimePlan {
+            partitions: Vec::new(),
+            assertion_ids,
+        });
+    }
+
+    let partitions = build_resolution_partitions(context, &timeline_edges, memory_reservations)?;
+    Ok(ResolutionTimePlan {
+        partitions,
+        assertion_ids,
+    })
+}
+
+fn count_preview_work(
+    context: &QueryContext,
+    work_units: &mut u64,
+) -> Result<(), QueryEngineError> {
+    if *work_units >= context.budget().max_work_units().get() {
+        return Err(QueryEngineError::BudgetExceeded(BudgetDimension::WorkUnits));
+    }
+    *work_units += 1;
+    Ok(())
+}
+
+fn reserve_query_memory(
+    context: &QueryContext,
+    bytes: usize,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<(), QueryEngineError> {
+    reservations
+        .try_reserve(1)
+        .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+    let bytes = u64::try_from(bytes).map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+    reservations.push(
+        context
+            .resource_budget()
+            .reserve(ResourceClass::Query, bytes)
+            .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?,
+    );
+    Ok(())
+}
+
+fn add_timepoint(
+    context: &QueryContext,
+    timeline_edges: &mut BTreeMap<TimelineId, BTreeSet<i128>>,
+    point: WorldTime,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<(), QueryEngineError> {
+    let timeline_id = point.timeline().id();
+    if let std::collections::btree_map::Entry::Vacant(entry) = timeline_edges.entry(timeline_id) {
+        reserve_query_memory(
+            context,
+            size_of::<(TimelineId, BTreeSet<i128>)>(),
+            reservations,
+        )?;
+        entry.insert(BTreeSet::new());
+    }
+    let Some(edges) = timeline_edges.get_mut(&timeline_id) else {
+        return Err(QueryEngineError::ResourceBudgetExceeded);
+    };
+    if !edges.contains(&point.nanoseconds()) {
+        reserve_query_memory(context, size_of::<i128>(), reservations)?;
+        edges.insert(point.nanoseconds());
+    }
+    Ok(())
+}
+
+fn add_interval_endpoints(
+    context: &QueryContext,
+    timeline_edges: &mut BTreeMap<TimelineId, BTreeSet<i128>>,
+    interval: TimeInterval,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<(), QueryEngineError> {
+    let timeline_id = interval.timeline().id();
+    if let std::collections::btree_map::Entry::Vacant(entry) = timeline_edges.entry(timeline_id) {
+        reserve_query_memory(
+            context,
+            size_of::<(TimelineId, BTreeSet<i128>)>(),
+            reservations,
+        )?;
+        entry.insert(BTreeSet::new());
+    }
+    for endpoint in [interval.start(), interval.end()].into_iter().flatten() {
+        add_timepoint(context, timeline_edges, endpoint, reservations)?;
+    }
+    Ok(())
+}
+
+fn add_endpoint_if_timeline_exists(
+    context: &QueryContext,
+    timeline_edges: &mut BTreeMap<TimelineId, BTreeSet<i128>>,
+    point: WorldTime,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<(), QueryEngineError> {
+    if timeline_edges.contains_key(&point.timeline().id()) {
+        add_timepoint(context, timeline_edges, point, reservations)?;
+    }
+    Ok(())
+}
+
+fn add_interval_if_timeline_exists(
+    context: &QueryContext,
+    timeline_edges: &mut BTreeMap<TimelineId, BTreeSet<i128>>,
+    interval: TimeInterval,
+    reservations: &mut Vec<MemoryReservation>,
+) -> Result<(), QueryEngineError> {
+    if timeline_edges.contains_key(&interval.timeline().id()) {
+        for endpoint in [interval.start(), interval.end()].into_iter().flatten() {
+            add_timepoint(context, timeline_edges, endpoint, reservations)?;
+        }
+    }
+    Ok(())
+}
+
+fn build_resolution_partitions(
+    context: &QueryContext,
+    timeline_edges: &BTreeMap<TimelineId, BTreeSet<i128>>,
+    memory_reservations: &mut Vec<MemoryReservation>,
+) -> Result<Vec<ResolutionPartition>, QueryEngineError> {
+    let partition_capacity = timeline_edges.values().try_fold(0_usize, |total, edges| {
+        let count = match edges.first() {
+            Some(first) => edges
+                .len()
+                .checked_add(if *first > i128::MIN { 1 } else { 0 })?,
+            None => 1,
+        };
+        total.checked_add(count)
+    });
+    let partition_capacity = partition_capacity.ok_or(QueryEngineError::ResourceBudgetExceeded)?;
+    enforce_result_limit(context, partition_capacity)?;
+    let partition_bytes = partition_capacity
+        .checked_mul(size_of::<ResolutionPartition>())
+        .ok_or(QueryEngineError::ResourceBudgetExceeded)?;
+    reserve_query_memory(context, partition_bytes, memory_reservations)?;
+    let mut partitions = Vec::new();
+    partitions
+        .try_reserve_exact(partition_capacity)
+        .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+    for (timeline_id, edges) in timeline_edges {
+        let timeline = Timeline::new(*timeline_id);
+        if edges.is_empty() {
+            partitions.push(ResolutionPartition {
+                interval: TimeInterval::new(timeline, None, None)
+                    .map_err(|_| QueryEngineError::Context)?,
+                sample: WorldTime::from_nanoseconds(timeline, i128::MIN),
+            });
+            continue;
+        }
+        let mut points = Vec::new();
+        points
+            .try_reserve_exact(edges.len())
+            .map_err(|_| QueryEngineError::ResourceBudgetExceeded)?;
+        points.extend(edges.iter().copied());
+        let Some(first) = points.first().copied() else {
+            continue;
+        };
+        if first > i128::MIN {
+            partitions.push(ResolutionPartition {
+                interval: TimeInterval::new(
+                    timeline,
+                    None,
+                    Some(WorldTime::from_nanoseconds(timeline, first)),
+                )
+                .map_err(|_| QueryEngineError::Context)?,
+                sample: WorldTime::from_nanoseconds(timeline, i128::MIN),
+            });
+        }
+        for pair in points.windows(2) {
+            let (Some(start), Some(end)) = (pair.first().copied(), pair.get(1).copied()) else {
+                continue;
+            };
+            if start < end {
+                partitions.push(ResolutionPartition {
+                    interval: TimeInterval::new(
+                        timeline,
+                        Some(WorldTime::from_nanoseconds(timeline, start)),
+                        Some(WorldTime::from_nanoseconds(timeline, end)),
+                    )
+                    .map_err(|_| QueryEngineError::Context)?,
+                    sample: WorldTime::from_nanoseconds(timeline, start),
+                });
+            }
+        }
+        let last = points.last().copied().ok_or(QueryEngineError::Context)?;
+        partitions.push(ResolutionPartition {
+            interval: TimeInterval::new(
+                timeline,
+                Some(WorldTime::from_nanoseconds(timeline, last)),
+                None,
+            )
+            .map_err(|_| QueryEngineError::Context)?,
+            sample: WorldTime::from_nanoseconds(timeline, last),
+        });
+    }
+    Ok(partitions)
+}
+
+fn record_context_is_relevant(
+    store: AssertionQueryStore<'_>,
+    query_context: &QueryContext,
+    record_context: ContextKey,
+) -> bool {
+    record_context.perspective_scope() == query_context.perspective()
+        && record_context.epistemic_mode() == query_context.epistemic_mode()
+        && query_context
+            .layers()
+            .resolved()
+            .as_slice()
+            .contains(&record_context.layer_id())
+        && ContextPrecedence::for_context(
+            query_context.history_space(),
+            record_context.history_space_id(),
+            record_context.layer_id(),
+            store.history.catalog(),
+            store.layers,
+        )
+        .is_ok()
+}
+
+fn mask_selector_is_relevant(
+    mask: &Mask,
+    slot: MultiValueSlot,
+    context: &QueryContext,
+    assertion_ids: &BTreeSet<AssertionId>,
+) -> bool {
+    match mask.selector() {
+        MaskSelector::ExactAssertion(assertion_id) => assertion_ids.contains(assertion_id),
+        MaskSelector::Proposition(proposition) => {
+            proposition.subject() == slot.subject()
+                && proposition.predicate_id() == slot.predicate_id()
+        }
+        MaskSelector::Slot(selector) => {
+            selector.subject() == slot.subject()
+                && selector.predicate_id() == slot.predicate_id()
+                && selector.perspective_scope() == context.perspective()
+                && selector.epistemic_mode() == context.epistemic_mode()
+        }
+    }
+}
+
+fn masks_for_time(
+    store: AssertionQueryStore<'_>,
+    history: AuthorizedAssertionMaskHistory<'_>,
+    context: &QueryContext,
+    slot: MultiValueSlot,
+    assertion_ids: &BTreeSet<AssertionId>,
+    timeline_id: TimelineId,
+    policy: &SecurityPolicySnapshot,
+) -> OwnedMaskHistory {
+    let principal = context.security().principal_id();
+    let (source_masks, source_closures, source_retractions, archive_visible) = history.records();
+    let mut owned = OwnedMaskHistory::default();
+    let mut mask_ids = BTreeSet::new();
+    for mask in source_masks {
+        if mask.created_revision() > context.recorded_as_of().revision()
+            || !archive_visible.contains(&mask.id())
+            || !mask_is_authorized(policy, principal, mask)
+            || !record_context_is_relevant(store, context, mask.context())
+            || !mask_selector_is_relevant(mask, slot, context, assertion_ids)
+            || mask
+                .validity()
+                .is_some_and(|validity| validity.interval().timeline().id() != timeline_id)
+        {
+            continue;
+        }
+        mask_ids.insert(mask.id());
+        owned.archive_visible.insert(mask.id());
+        owned.masks.push(mask.clone());
+    }
+    for closure in source_closures {
+        if mask_ids.contains(&closure.mask_id())
+            && closure.created_revision() <= context.recorded_as_of().revision()
+            && closure.close_at_world_time().timeline().id() == timeline_id
+        {
+            owned.closures.push(*closure);
+        }
+    }
+    for retraction in source_retractions {
+        if mask_ids.contains(&retraction.mask_id())
+            && retraction.created_revision() <= context.recorded_as_of().revision()
+        {
+            owned.retractions.push(retraction.clone());
+        }
+    }
+    owned
+}
+
+fn boundaries_for_time(
+    store: AssertionQueryStore<'_>,
+    source: ReplacementBoundarySource<'_>,
+    context: &QueryContext,
+    slot: MultiValueSlot,
+    timeline_id: TimelineId,
+    policy: &SecurityPolicySnapshot,
+) -> OwnedBoundaryHistory {
+    let principal = context.security().principal_id();
+    let mut owned = OwnedBoundaryHistory::default();
+    let mut boundary_ids = BTreeSet::new();
+    for boundary in source.boundaries {
+        if boundary.created_revision() > context.recorded_as_of().revision()
+            || !source.archive_visible_boundaries.contains(&boundary.id())
+            || !boundary_is_authorized(policy, principal, boundary)
+            || boundary.subject() != slot.subject()
+            || boundary.predicate_id() != slot.predicate_id()
+            || !record_context_is_relevant(store, context, boundary.context())
+            || boundary
+                .validity()
+                .is_some_and(|validity| validity.interval().timeline().id() != timeline_id)
+        {
+            continue;
+        }
+        boundary_ids.insert(boundary.id());
+        owned.archive_visible.insert(boundary.id());
+        owned.boundaries.push(boundary.clone());
+    }
+    for closure in source.closures {
+        if boundary_ids.contains(&closure.replacement_boundary_id())
+            && closure.created_revision() <= context.recorded_as_of().revision()
+            && closure.close_at_world_time().timeline().id() == timeline_id
+        {
+            owned.closures.push(*closure);
+        }
+    }
+    for retraction in source.retractions {
+        if boundary_ids.contains(&retraction.replacement_boundary_id())
+            && retraction.created_revision() <= context.recorded_as_of().revision()
+        {
+            owned.retractions.push(retraction.clone());
+        }
+    }
+    owned
+}
+
+fn preview_contributors_are_visible(
+    preview: &ResolutionPreview,
+    visible_assertions: &BTreeSet<AssertionId>,
+) -> bool {
+    let all_visible = |view: &ResolvedView| {
+        view.contributors()
+            .iter()
+            .all(|assertion_id| visible_assertions.contains(assertion_id))
+    };
+    match preview {
+        ResolutionPreview::Point { resolved_view, .. } => all_visible(resolved_view),
+        ResolutionPreview::AllTimes { slices } => {
+            !slices.is_empty() && slices.iter().all(|slice| all_visible(&slice.resolved_view))
+        }
+        ResolutionPreview::CompleteEmpty => true,
+    }
 }
 
 fn point_access_plan(
@@ -1263,7 +2100,7 @@ impl From<AggregateError> for QueryEngineError {
 mod tests {
     use super::*;
     use crate::PageOperation;
-    use crate::archive::ArchiveTargetRef;
+    use crate::archive::{ArchiveAction, ArchiveState, ArchiveTargetRef, ArchiveTransition};
     use crate::archive_projection::ArchiveTargetRecord;
     use crate::assertions::{Assertion, AssertionDraft, Polarity, Subject};
     use crate::candidate_scan::full_scan_authorized_assertion_candidates;
@@ -1276,6 +2113,7 @@ mod tests {
     use crate::index_generation::{IndexGenerationMetadata, IndexRevisionCoverage};
     use crate::layers::{LayerDefinition, LayerSelection};
     use crate::masks::{Mask, MaskSelector, ReplacementBoundary};
+    use crate::multi_value_resolution::MultiValueOutcome;
     use crate::query_context::{
         AuthorizationMode, CancellationToken, QueryBudget, QueryBudgetLimits, QueryContextInput,
         SecurityContext, ValidatedLayerSelection,
@@ -1322,6 +2160,7 @@ mod tests {
         History(crate::history_model::HistorySpaceModelError),
         Assertion(crate::assertions::AssertionRecordError),
         Archive(crate::archive_projection::ArchiveProjectionError),
+        ArchiveTransition(crate::archive::ArchiveTransitionError),
         Index(crate::assertion_point_index::AssertionPointIndexError),
         IndexMetadata(crate::index_generation::IndexMetadataError),
         Temporal(crate::temporal::TemporalError),
@@ -1364,6 +2203,7 @@ mod tests {
                 Self::History(error) => Some(error),
                 Self::Assertion(error) => Some(error),
                 Self::Archive(error) => Some(error),
+                Self::ArchiveTransition(error) => Some(error),
                 Self::Index(error) => Some(error),
                 Self::IndexMetadata(error) => Some(error),
                 Self::Temporal(error) => Some(error),
@@ -1406,6 +2246,7 @@ mod tests {
     test_error_from!(crate::history_model::HistorySpaceModelError, History);
     test_error_from!(crate::assertions::AssertionRecordError, Assertion);
     test_error_from!(crate::archive_projection::ArchiveProjectionError, Archive);
+    test_error_from!(crate::archive::ArchiveTransitionError, ArchiveTransition);
     test_error_from!(
         crate::assertion_point_index::AssertionPointIndexError,
         Index
@@ -1915,6 +2756,291 @@ mod tests {
             ) => left_contributors == right_contributors,
             _ => false,
         }
+    }
+
+    #[test]
+    fn all_times_preview_partitions_validity_and_preserves_unknown_regions() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_world_time(&fixture.context, WorldTimeSelector::AllTimes)?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let preview = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+
+        let ResolutionPreview::AllTimes { slices } = preview.query().value() else {
+            return Err(
+                std::io::Error::other("visible assertion history must produce slices").into(),
+            );
+        };
+        assert_eq!(slices.len(), 3);
+        let mut slices = slices.iter();
+        let (Some(before), Some(during), Some(after)) =
+            (slices.next(), slices.next(), slices.next())
+        else {
+            return Err(std::io::Error::other("all expected time slices must be present").into());
+        };
+        assert!(slices.next().is_none());
+        assert_eq!(before.interval().start(), None);
+        assert_eq!(before.interval().end().map(WorldTime::nanoseconds), Some(0));
+        assert!(matches!(
+            before.resolved_view().outcome(),
+            ResolvedOutcome::Single(SingleValueOutcome::Unknown)
+        ));
+        assert_eq!(
+            during.interval().start().map(WorldTime::nanoseconds),
+            Some(0)
+        );
+        assert_eq!(
+            during.interval().end().map(WorldTime::nanoseconds),
+            Some(100)
+        );
+        assert!(matches!(
+            during.resolved_view().outcome(),
+            ResolvedOutcome::Single(SingleValueOutcome::Known { .. })
+        ));
+        assert_eq!(
+            after.interval().start().map(WorldTime::nanoseconds),
+            Some(100)
+        );
+        assert_eq!(after.interval().end(), None);
+        assert!(matches!(
+            after.resolved_view().outcome(),
+            ResolvedOutcome::Single(SingleValueOutcome::Unknown)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn all_times_preview_preserves_conflict_outcomes() -> TestResult {
+        let fixture = fixture_with_generated_assertions(1, 0x5eed)?;
+        let context = context_with_world_time(&fixture.context, WorldTimeSelector::AllTimes)?;
+        let slot = MultiValueSlot::new(
+            Subject::new(id::<EntityId>(40)?),
+            fixture.slot.predicate_id(),
+        );
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let preview = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+        let ResolutionPreview::AllTimes { slices } = preview.query().value() else {
+            return Err(
+                std::io::Error::other("seeded conflict history must produce slices").into(),
+            );
+        };
+        let Some(conflict_slice) = slices.get(1) else {
+            return Err(std::io::Error::other("conflict interval slice is missing").into());
+        };
+        assert!(matches!(
+            conflict_slice.resolved_view().outcome(),
+            ResolvedOutcome::Single(SingleValueOutcome::Conflict { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn all_times_preview_reports_boundary_defined_empty_set() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_world_time(&fixture.context, WorldTimeSelector::AllTimes)?;
+        let slot = MultiValueSlot::new(
+            Subject::new(id::<EntityId>(23)?),
+            fixture.multi_slot.predicate_id(),
+        );
+        let timeline = Timeline::new(id::<TimelineId>(5)?);
+        let validity = AssertionValidity::new(TimeInterval::new(
+            timeline,
+            Some(WorldTime::from_nanoseconds(timeline, 40)),
+            Some(WorldTime::from_nanoseconds(timeline, 60)),
+        )?);
+        let boundary_context = ContextKey::new(
+            fixture.context.history_space(),
+            id::<LayerId>(2)?,
+            PerspectiveScope::World,
+            EpistemicMode::WorldState,
+        )?;
+        let boundary = ReplacementBoundary::new(
+            id::<ReplacementBoundaryId>(21)?,
+            boundary_context,
+            slot.subject(),
+            &fixture.multi_predicate,
+            Some(validity),
+            revision(2)?,
+        )?;
+        let visible_boundaries = [boundary.id()].into_iter().collect();
+        let boundaries = ReplacementBoundarySource::new(
+            std::slice::from_ref(&boundary),
+            &[],
+            &[],
+            &visible_boundaries,
+        );
+        let (masks, _) = empty_mask_and_boundary_sources();
+        let preview = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            slot,
+            &fixture.multi_predicate,
+            |_, _| Ok(false),
+        )?;
+
+        let ResolutionPreview::AllTimes { slices } = preview.query().value() else {
+            return Err(std::io::Error::other("boundary history must produce time slices").into());
+        };
+        assert_eq!(slices.len(), 3);
+        let Some(empty_set_slice) = slices.get(1) else {
+            return Err(std::io::Error::other("boundary interval slice is missing").into());
+        };
+        assert_eq!(
+            empty_set_slice
+                .interval()
+                .start()
+                .map(WorldTime::nanoseconds),
+            Some(40)
+        );
+        assert_eq!(
+            empty_set_slice.interval().end().map(WorldTime::nanoseconds),
+            Some(60)
+        );
+        assert!(matches!(
+            empty_set_slice.resolved_view().outcome(),
+            ResolvedOutcome::Multi(MultiValueOutcome::Known { values }) if values.is_empty()
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn complete_empty_history_is_distinct_from_point_unknown_and_budget_errors() -> TestResult {
+        let fixture = fixture()?;
+        let unasserted_subject = Subject::new(id::<EntityId>(23)?);
+        let slot = MultiValueSlot::new(unasserted_subject, fixture.slot.predicate_id());
+        let all_times_context =
+            context_with_world_time(&fixture.context, WorldTimeSelector::AllTimes)?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let preview = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &all_times_context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+        assert!(matches!(
+            preview.query().value(),
+            ResolutionPreview::CompleteEmpty
+        ));
+
+        let point_context = context_with_world_time(
+            &fixture.context,
+            WorldTimeSelector::At(WorldTime::from_nanoseconds(
+                Timeline::new(id::<TimelineId>(5)?),
+                50,
+            )),
+        )?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let point = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &point_context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+        assert!(matches!(
+            point.query().value(),
+            ResolutionPreview::Point { resolved_view, .. }
+                if matches!(resolved_view.outcome(), ResolvedOutcome::Single(SingleValueOutcome::Unknown))
+        ));
+
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let error = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &all_times_context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Exceeded(BudgetDimension::Candidates),
+            ),
+            slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            error,
+            Err(QueryEngineError::FullScanBudgetExceeded(
+                BudgetDimension::Candidates
+            ))
+        ));
+
+        let profile = crate::ProcessResourceProfile::new(
+            1,
+            1,
+            1,
+            crate::ResourceClassLimits::new(1, 1, 1, 1, 1),
+        )
+        .map_err(std::io::Error::other)?;
+        let memory_budget = profile.memory_budget();
+        let memory_limited_context =
+            context_with_process_memory_budget(&all_times_context, memory_budget.clone())?;
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let memory_error = ProductiveQueryEngine::resolution_preview(
+            query_store(&fixture, &fixture.policies),
+            point_request(
+                &memory_limited_context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        );
+        assert!(matches!(
+            memory_error,
+            Err(QueryEngineError::ResourceBudgetExceeded)
+        ));
+        assert_eq!(
+            memory_budget
+                .reserved_bytes()
+                .map_err(std::io::Error::other)?,
+            0
+        );
+        Ok(())
     }
 
     #[test]
@@ -2693,6 +3819,26 @@ mod tests {
         })?)
     }
 
+    fn context_with_world_time(
+        context: &QueryContext,
+        world_time: WorldTimeSelector,
+    ) -> TestResult<QueryContext> {
+        Ok(QueryContext::new(QueryContextInput {
+            snapshot: context.snapshot(),
+            snapshot_revision: context.snapshot_revision(),
+            recorded_as_of: context.recorded_as_of(),
+            history_space: context.history_space(),
+            layers: context.layers().clone(),
+            world_time,
+            perspective: context.perspective(),
+            epistemic_mode: context.epistemic_mode(),
+            schema_binding: context.schema_binding(),
+            security: context.security(),
+            budget: context.budget(),
+            cancellation: context.cancellation().clone(),
+        })?)
+    }
+
     fn context_with_candidate_budget(
         context: &QueryContext,
         max_candidates: u64,
@@ -2809,6 +3955,63 @@ mod tests {
                 .query_context_binding()
                 .matches(&fixture.context)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn all_times_preview_excludes_archived_assertion_timelines() -> TestResult {
+        let fixture = fixture()?;
+        let context = context_with_world_time(&fixture.context, WorldTimeSelector::AllTimes)?;
+        let transitions = vec![
+            ArchiveTransition::new(
+                id::<crate::ArchiveTransitionId>(24)?,
+                ArchiveTargetRef::Assertion(fixture.visible_id),
+                ArchiveAction::Archive,
+                ArchiveState::Unarchived,
+                revision(2)?,
+            )?,
+            ArchiveTransition::new(
+                id::<crate::ArchiveTransitionId>(25)?,
+                ArchiveTargetRef::Assertion(fixture.second_visible_id),
+                ArchiveAction::Archive,
+                ArchiveState::Unarchived,
+                revision(2)?,
+            )?,
+            ArchiveTransition::new(
+                id::<crate::ArchiveTransitionId>(26)?,
+                ArchiveTargetRef::Assertion(fixture.hidden_id),
+                ArchiveAction::Archive,
+                ArchiveState::Unarchived,
+                revision(2)?,
+            )?,
+        ];
+        let archive =
+            ArchiveHistoryReferenceModel::new(fixture.archive.targets().to_vec(), transitions)?;
+        let store = AssertionQueryStore::new(
+            &fixture.history,
+            &archive,
+            &fixture.layers,
+            &fixture.policies,
+        );
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let preview = ProductiveQueryEngine::resolution_preview(
+            store,
+            point_request(
+                &context,
+                masks,
+                boundaries,
+                AssertionPointIndexAccess::missing(),
+                FullScanBudget::Available,
+            ),
+            fixture.slot,
+            &fixture.predicate,
+            |_, _| Ok(false),
+        )?;
+
+        assert!(matches!(
+            preview.query().value(),
+            ResolutionPreview::CompleteEmpty
+        ));
         Ok(())
     }
 

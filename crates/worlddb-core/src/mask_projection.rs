@@ -59,6 +59,7 @@ impl<'a> AssertionMaskContext<'a> {
 }
 
 /// Complete Mask and lifecycle history input for one authorized projection.
+#[derive(Clone, Copy)]
 pub struct AuthorizedAssertionMaskHistory<'a> {
     masks: &'a [Mask],
     validity_closures: &'a [MaskValidityClosure],
@@ -103,6 +104,22 @@ impl<'a> AuthorizedAssertionMaskHistory<'a> {
             retractions,
             archive_visible_masks,
         }
+    }
+
+    pub(crate) const fn records(
+        self,
+    ) -> (
+        &'a [Mask],
+        &'a [MaskValidityClosure],
+        &'a [MaskRetraction],
+        &'a BTreeSet<MaskId>,
+    ) {
+        (
+            self.masks,
+            self.validity_closures,
+            self.retractions,
+            self.archive_visible_masks,
+        )
     }
 }
 
@@ -303,8 +320,57 @@ pub fn apply_authorized_assertion_masks_with_trace<F>(
 where
     F: FnMut(&Value, &Value) -> Result<bool, ()>,
 {
+    apply_authorized_assertion_masks_with_trace_internal(
+        candidates,
+        history,
+        context,
+        policy,
+        query_context,
+        false,
+        temporal_value_equal,
+    )
+}
+
+pub(crate) fn apply_authorized_assertion_masks_with_trace_all_times<F>(
+    candidates: &[AssertionCandidate],
+    history: AuthorizedAssertionMaskHistory<'_>,
+    context: AssertionMaskContext<'_>,
+    policy: &SecurityPolicySnapshot,
+    query_context: &QueryContext,
+    temporal_value_equal: F,
+) -> Result<AssertionMaskProjection, MaskProjectionError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
+    apply_authorized_assertion_masks_with_trace_internal(
+        candidates,
+        history,
+        context,
+        policy,
+        query_context,
+        true,
+        temporal_value_equal,
+    )
+}
+
+fn apply_authorized_assertion_masks_with_trace_internal<F>(
+    candidates: &[AssertionCandidate],
+    history: AuthorizedAssertionMaskHistory<'_>,
+    context: AssertionMaskContext<'_>,
+    policy: &SecurityPolicySnapshot,
+    query_context: &QueryContext,
+    allow_all_times: bool,
+    temporal_value_equal: F,
+) -> Result<AssertionMaskProjection, MaskProjectionError>
+where
+    F: FnMut(&Value, &Value) -> Result<bool, ()>,
+{
+    let world_time_matches = match query_context.world_time() {
+        WorldTimeSelector::AllTimes => allow_all_times,
+        WorldTimeSelector::At(value) => value == context.world_time,
+    };
     if query_context.recorded_as_of() != context.recorded_as_of
-        || query_context.world_time() != WorldTimeSelector::At(context.world_time)
+        || !world_time_matches
         || query_context.layers().schema_revision() != context.layers.revision()
         || context.query_history_space != Some(query_context.history_space())
         || candidates
@@ -344,7 +410,7 @@ where
     )
 }
 
-fn mask_is_authorized(
+pub(crate) fn mask_is_authorized(
     policy: &SecurityPolicySnapshot,
     principal: PrincipalId,
     mask: &Mask,

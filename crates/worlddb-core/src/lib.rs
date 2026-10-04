@@ -1190,7 +1190,7 @@ pub use query_context::{
 pub use query_engine::{
     AssertionPointIndexAccess, AssertionPointRequest, AssertionQueryStore, ProductiveQueryEngine,
     QueryEngineError, QueryEngineOutput, QueryExecutionPath, ReplacementBoundarySource,
-    ResolutionFailure,
+    ResolutionFailure, ResolutionPreview, ResolutionTimeSlice,
 };
 pub use query_graph::{
     GraphCandidateSet, GraphCyclePolicy, GraphDirection, GraphEdge, GraphError, GraphNode,

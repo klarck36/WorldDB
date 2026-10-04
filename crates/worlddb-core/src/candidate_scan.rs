@@ -121,6 +121,7 @@ struct CandidateScanLimits {
     candidate_limit: Option<u64>,
     work_unit_limit: Option<u64>,
     memory_budget: Option<ProcessMemoryBudget>,
+    allow_all_times_point: bool,
 }
 
 impl CandidateScanLimits {
@@ -129,6 +130,7 @@ impl CandidateScanLimits {
             candidate_limit: Some(context.budget().max_candidates().get()),
             work_unit_limit: Some(context.budget().max_work_units().get()),
             memory_budget: Some(context.resource_budget().clone()),
+            allow_all_times_point: false,
         }
     }
 }
@@ -246,7 +248,7 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
     point_filter: AssertionPointCandidateFilter,
 ) -> Result<Vec<AssertionCandidate>, CandidateScanError> {
     let AssertionCandidateSecurityContext { policy, context } = security;
-    validate_authorized_query_context(query, context, layers)?;
+    validate_authorized_query_context(query, context, layers, true)?;
     if policy.authorize(
         context.security().principal_id(),
         Capability::QueryResolve,
@@ -255,6 +257,8 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
     {
         return Ok(Vec::new());
     }
+    let mut limits = CandidateScanLimits::from_context(context);
+    limits.allow_all_times_point = matches!(context.world_time(), WorldTimeSelector::AllTimes);
     full_scan_assertion_candidates_with_security(
         history,
         archive,
@@ -262,7 +266,7 @@ pub(crate) fn full_scan_authorized_point_assertion_candidates(
         layers,
         Some((policy, context.security().principal_id())),
         Some(point_filter),
-        CandidateScanLimits::from_context(context),
+        limits,
     )
 }
 
@@ -280,7 +284,7 @@ pub(crate) fn indexed_authorized_assertion_candidates(
     point_filter: AssertionPointCandidateFilter,
 ) -> Result<Result<Vec<AssertionCandidate>, CandidateScanError>, AssertionPointIndexError> {
     let AssertionCandidateSecurityContext { policy, context } = security;
-    if let Err(error) = validate_authorized_query_context(query, context, layers) {
+    if let Err(error) = validate_authorized_query_context(query, context, layers, false) {
         return Ok(Err(error));
     }
     if policy.authorize(
@@ -466,14 +470,19 @@ fn validate_authorized_query_context(
     query: &AssertionCandidateQuery,
     context: &QueryContext,
     layers: &LayerSchemaSnapshot,
+    allow_all_times: bool,
 ) -> Result<(), CandidateScanError> {
+    let world_time_matches = match context.world_time() {
+        WorldTimeSelector::AllTimes => allow_all_times,
+        WorldTimeSelector::At(time) => time == query.world_time,
+    };
     if context.history_space() != query.history_space_id
         || context.recorded_as_of() != query.recorded_as_of
         || context.layers().requested() != &query.layer_selection
         || context.layers().schema_revision() != layers.revision()
         || context.perspective() != query.perspective_scope
         || context.epistemic_mode() != query.epistemic_mode
-        || context.world_time() != WorldTimeSelector::At(query.world_time)
+        || !world_time_matches
     {
         Err(CandidateScanError::QueryContextMismatch)
     } else {
@@ -535,6 +544,11 @@ fn full_scan_assertion_candidates_with_security(
                     assertion.subject() != filter.subject
                         || assertion.predicate_id() != filter.predicate_id
                 }) {
+                    continue;
+                }
+                if limits.allow_all_times_point
+                    && assertion.validity().interval().timeline() != query.world_time.timeline()
+                {
                     continue;
                 }
                 let record_revision = record.created_revision();
@@ -736,7 +750,7 @@ fn validate_stored_record_revision(
     }
 }
 
-fn assertion_candidate_is_authorized(
+pub(crate) fn assertion_candidate_is_authorized(
     policy: &SecurityPolicySnapshot,
     principal_id: PrincipalId,
     owner_history_space_id: HistorySpaceId,
