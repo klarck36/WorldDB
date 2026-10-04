@@ -127,6 +127,44 @@
         <p id="backup-status" class="muted" role="status" aria-live="polite"></p>
         <div id="backup-result" hidden></div>
       </section>
+      <section id="export-import-panel" class="card" aria-labelledby="export-import-heading" hidden>
+        <h2 id="export-import-heading">Export und Import vorbereiten</h2>
+        <p class="muted">Diese Abläufe verwenden native Datei- und Ordnerdialoge bei geschlossenem Projekt. Logical Export enthält ein vollständiges Auslassmanifest. Teilen-Export filtert nach den aktuellen Rechten, legt Auditnachweise im Quellprojekt an und zeigt keine ausgelassenen Mengen. Importplan und Prepare prüfen einen typisierten ID-Remap; Prepare schreibt noch keine Records in die Zieldatenbank.</p>
+        <fieldset>
+          <legend>Export</legend>
+          <div class="grid">
+            <div>
+              <label for="export-kind">Exportformat</label>
+              <select id="export-kind">
+                <option value="logical">Logical Export · vollständiges Scope- und Auslassmanifest</option>
+                <option value="sharing">Teilen-Export · aktuelle Rechte, ohne Auslasszahlen</option>
+              </select>
+            </div>
+            <div><label for="export-from-revision">Von Revision (inklusive)</label><input id="export-from-revision" inputmode="numeric" autocomplete="off" placeholder="z. B. 1" /></div>
+            <div><label for="export-through-revision">Bis Revision (inklusive)</label><input id="export-through-revision" inputmode="numeric" autocomplete="off" placeholder="z. B. 25" /></div>
+          </div>
+          <label for="export-history-spaces">HistorySpace-UUIDs (eine kanonische UUID pro Zeile)</label>
+          <textarea id="export-history-spaces" rows="3" spellcheck="false" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></textarea>
+          <fieldset>
+            <legend>Recordklassen auswählen</legend>
+            <p class="muted">Logical Export benötigt zusätzlich die Klasse HistorySpaceDefinition. Migrationsplan- und Run-Records sind nicht exportierbar.</p>
+            <div id="export-record-classes" class="grid"></div>
+          </fieldset>
+          <div class="actions"><button id="export-run" type="button" disabled>Export erstellen</button></div>
+        </fieldset>
+        <fieldset>
+          <legend>Logischen Import planen und validieren</legend>
+          <p class="muted">Wähle bei jedem Schritt das Zielprojekt und dasselbe Logical-Export-Artefakt. Jeder Remap muss dieselbe Identitätsfamilie behalten; IDs müssen kanonische kleingeschriebene UUIDs sein. Unterstützte Familien: history-space, layer, perspective, timeline, entity, entity-type, predicate, event-kind, event-role, event-attribute und typisierte record-Referenzen.</p>
+          <label for="import-remappings">Explizite ID-Remaps (eine Zuordnung pro Zeile; Quelle=Ziel)</label>
+          <textarea id="import-remappings" rows="4" spellcheck="false" placeholder="entity:00000000-0000-0000-0000-000000000000=entity:00000000-0000-0000-0000-000000000001"></textarea>
+          <div class="actions">
+            <button id="import-plan-create" type="button" disabled>Kanonischen Importplan erstellen</button>
+            <button id="import-prepare" type="button" disabled>Importplan gegen Ziel prüfen</button>
+          </div>
+        </fieldset>
+        <p id="export-import-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="export-import-result" hidden></div>
+      </section>
       <section id="recovery-panel" class="card" aria-labelledby="recovery-heading">
         <h2 id="recovery-heading">Projekt prüfen und wiederherstellen</h2>
         <p class="muted">Die Prüfung liest den verifizierten WAL-Präfix und die referenzierten Inventare. Sie repariert nichts. Bei Schäden bleiben Verify, read-only, journalisierte Recovery, Restore und Salvage getrennte Entscheidungen.</p>

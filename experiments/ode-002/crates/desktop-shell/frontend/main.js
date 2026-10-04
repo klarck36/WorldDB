@@ -37,6 +37,18 @@ const backupVerifyButton = document.querySelector("#backup-verify");
 const backupRestoreButton = document.querySelector("#backup-restore");
 const backupStatus = document.querySelector("#backup-status");
 const backupResult = document.querySelector("#backup-result");
+const exportImportPanel = document.querySelector("#export-import-panel");
+const exportKind = document.querySelector("#export-kind");
+const exportFromRevision = document.querySelector("#export-from-revision");
+const exportThroughRevision = document.querySelector("#export-through-revision");
+const exportHistorySpaces = document.querySelector("#export-history-spaces");
+const exportRecordClasses = document.querySelector("#export-record-classes");
+const exportRunButton = document.querySelector("#export-run");
+const importRemappings = document.querySelector("#import-remappings");
+const importPlanButton = document.querySelector("#import-plan-create");
+const importPrepareButton = document.querySelector("#import-prepare");
+const exportImportStatus = document.querySelector("#export-import-status");
+const exportImportResult = document.querySelector("#export-import-result");
 const migrationPanel = document.querySelector("#migration-panel");
 const migrationSelectPlanButton = document.querySelector("#migration-select-plan");
 const migrationPreviewButton = document.querySelector("#migration-preview");
@@ -324,6 +336,44 @@ const factsQueryContinueButton = document.querySelector("#facts-query-continue")
 const factsPreviewStatus = document.querySelector("#facts-preview-status");
 const factsPreviewResults = document.querySelector("#facts-preview-results");
 
+const EXPORTABLE_RECORD_CLASSES = [
+  "HistorySpaceDefinition",
+  "Entity",
+  "EntityRetirement",
+  "PerspectiveDefinitionRevision",
+  "PerspectiveRetirement",
+  "LayerDefinition",
+  "LayerSchemaSnapshot",
+  "EntityTypeDefinition",
+  "PredicateDefinition",
+  "EventKindDefinition",
+  "TimelineDefinition",
+  "TimeUnitDefinition",
+  "Assertion",
+  "AssertionValidityClosure",
+  "AssertionRetraction",
+  "Mask",
+  "MaskValidityClosure",
+  "MaskRetraction",
+  "ReplacementBoundary",
+  "ReplacementBoundaryValidityClosure",
+  "ReplacementBoundaryRetraction",
+  "ArchiveTransition",
+  "Event",
+  "EventMask",
+  "EventSpanClosure",
+  "EventRetraction",
+  "EventMaskRetraction",
+  "EventRelation",
+  "EventRelationRetraction",
+  "Source",
+  "Evidence",
+  "Provenance",
+  "EvidenceRetraction",
+  "ProvenanceRetraction",
+  "TransferLineage",
+];
+
 const userMessages = {
   project_already_exists: "An diesem Ort gibt es bereits ein Projekt.",
   project_already_open: "Es ist bereits ein anderes Projekt geöffnet. Schließe es zuerst.",
@@ -365,6 +415,7 @@ let jobsBusy = false;
 let recoveryBusy = false;
 let currentRecoveryReport = null;
 let backupBusy = false;
+let exportImportBusy = false;
 let migrationBusy = false;
 let currentMigrationState = null;
 let schemaBusy = false;
@@ -974,28 +1025,30 @@ function updateProjectControls() {
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
   const migrationSelected = Boolean(currentMigrationState?.plan) || migrationBusy;
-  createButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
-  openButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
-  closeButton.disabled = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
+  createButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || hasUnresolvedProjectCreation || migrationSelected;
+  openButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || projectOpen || migrationSelected;
+  closeButton.disabled = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
   jobsRefreshButton.disabled = jobsBusy || !projectOpen;
   jobsCloseProjectButton.disabled = closeButton.disabled;
   updateMigrationControls();
   updateRecoveryControls();
   updateBackupControls();
+  updateExportImportControls();
 }
 
 function updateRecoveryControls() {
-  const blocked = recoveryBusy || backupBusy || migrationBusy || projectBusy || projectOpen;
+  const blocked = recoveryBusy || backupBusy || exportImportBusy || migrationBusy || projectBusy || projectOpen;
   recoveryInspectButton.disabled = blocked;
   recoveryKeepReadOnlyButton.disabled = blocked || !currentRecoveryReport;
   recoveryRunButton.disabled = blocked || !currentRecoveryReport?.can_run_journaled_recovery;
   recoveryRestoreButton.disabled = blocked || !currentRecoveryReport?.can_restore_verified_backup;
   recoverySalvageButton.disabled = blocked || !currentRecoveryReport?.can_salvage;
   recoveryOpenCleanButton.disabled = blocked || currentRecoveryReport?.disposition !== "clean";
+  updateExportImportControls();
 }
 
 function updateBackupControls() {
-  const blocked = backupBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen;
+  const blocked = backupBusy || exportImportBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen;
   backupProfile.disabled = blocked;
   backupCreateButton.disabled = blocked;
   backupVerifyButton.disabled = blocked;
@@ -1052,7 +1105,7 @@ function renderBackupResult(result) {
 }
 
 async function runBackupAction(action) {
-  if (!sessionId || projectOpen || backupBusy || migrationBusy || recoveryBusy) return;
+  if (!sessionId || projectOpen || backupBusy || exportImportBusy || migrationBusy || recoveryBusy) return;
   const profile = backupProfile.value;
   const profileName = backupProfileLabel(profile);
   if (action === "restore" && !window.confirm(
@@ -1091,6 +1144,214 @@ async function runBackupAction(action) {
     backupStatus.textContent = backupErrorText(error);
   } finally {
     backupBusy = false;
+    updateProjectControls();
+  }
+}
+
+function selectedRecordClasses() {
+  return [...exportRecordClasses.querySelectorAll("input[data-export-class]:checked")]
+    .map((input) => input.value);
+}
+
+function selectedHistorySpaces() {
+  return exportHistorySpaces.value
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function isCanonicalRevisionInput(value) {
+  if (!/^(0|[1-9][0-9]{0,19})$/u.test(value)) return false;
+  try {
+    return BigInt(value) <= 18446744073709551615n;
+  } catch {
+    return false;
+  }
+}
+
+function importMappingLines() {
+  return importRemappings.value
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function updateExportImportControls() {
+  if (!exportImportPanel) return;
+  const blocked = exportImportBusy || backupBusy || migrationBusy || recoveryBusy || projectBusy || projectOpen || !sessionId;
+  const historySpaces = selectedHistorySpaces();
+  const recordClasses = selectedRecordClasses();
+  const canonicalUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+  let revisionsValid = isCanonicalRevisionInput(exportFromRevision.value)
+    && isCanonicalRevisionInput(exportThroughRevision.value);
+  if (revisionsValid) revisionsValid = BigInt(exportFromRevision.value) <= BigInt(exportThroughRevision.value);
+  const historySpacesValid = historySpaces.length > 0
+    && historySpaces.length <= 65536
+    && historySpaces.every((value) => canonicalUuid.test(value))
+    && new Set(historySpaces).size === historySpaces.length;
+  const classesValid = recordClasses.length > 0
+    && new Set(recordClasses).size === recordClasses.length
+    && (exportKind.value !== "logical" || recordClasses.includes("HistorySpaceDefinition"));
+  const mappings = importMappingLines();
+  const mappingsValid = mappings.length <= 4096
+    && mappings.every((mapping) => mapping.length <= 256
+      && (mapping.match(/=/gu) ?? []).length === 1
+      && !/[\u0000-\u001f]/u.test(mapping));
+  exportRunButton.disabled = blocked || !revisionsValid || !historySpacesValid || !classesValid;
+  importPlanButton.disabled = blocked || !mappingsValid;
+  importPrepareButton.disabled = blocked;
+}
+
+function initializeExportClassChoices() {
+  exportRecordClasses.replaceChildren();
+  for (const name of EXPORTABLE_RECORD_CLASSES) {
+    const label = document.createElement("label");
+    label.className = "inline";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = name;
+    checkbox.dataset.exportClass = "true";
+    checkbox.checked = name === "HistorySpaceDefinition";
+    const text = document.createElement("span");
+    text.textContent = name;
+    label.append(checkbox, text);
+    exportRecordClasses.append(label);
+  }
+}
+
+function exportImportErrorText(error) {
+  const code = errorCode(error);
+  if (code === "selection_cancelled") return "Auswahl abgebrochen; es wurde kein Export und keine Importaktion ausgeführt.";
+  if (code === "export_import_rejected" && typeof error?.detail === "string") {
+    return `Export/Import abgelehnt: ${error.detail}`;
+  }
+  return showError(error);
+}
+
+function renderExportImportResult(result) {
+  exportImportResult.replaceChildren();
+  exportImportResult.hidden = !result;
+  if (!result) return;
+  if (result.action === "completed") {
+    if (result.format === "SharingExport") {
+      if (result.omission_counts_disclosed !== false || result.omission_manifest || !result.source_audit_committed) {
+        throw new Error("Sharing-Export-Ergebnis verletzt den geschlossenen Umfangsvertrag.");
+      }
+      migrationEntry(exportImportResult, "Exportformat", "Teilen-Export · keine exakte Sicherung");
+      migrationEntry(exportImportResult, "Scope", `Revisionen ${result.from_revision}–${result.through_revision} · ${result.history_spaces.length} HistorySpaces · ${result.record_classes.length} angeforderte Recordklassen`);
+      migrationEntry(exportImportResult, "Enthaltene Records", result.included_record_count ?? "unbekannt");
+      migrationEntry(exportImportResult, "Ausgelassene Mengen", "Werden im Teilen-Export nicht offengelegt.");
+      migrationEntry(exportImportResult, "Audit", "Autorisierung und Abschluss wurden im Quellprojekt dauerhaft protokolliert.");
+      migrationEntry(exportImportResult, "Quellprojekt", result.source_modified ? "Durch die Auditnachweise geändert" : "Nicht geändert");
+    } else {
+      if (result.format !== "LogicalExport" || !result.omission_manifest?.complete || result.source_modified) {
+        throw new Error("Logical-Export-Ergebnis ist unvollständig oder unerwartet.");
+      }
+      migrationEntry(exportImportResult, "Exportformat", "Logical Export · kein Exact Backup");
+      migrationEntry(exportImportResult, "Quelle und Snapshot", `${result.database_id ?? "–"} · Revision ${result.snapshot_revision ?? "–"}`);
+      migrationEntry(exportImportResult, "Scope", `Revisionen ${result.from_revision}–${result.through_revision} · ${result.history_spaces.length} HistorySpaces · ${result.record_classes.length} Recordklassen`);
+      migrationEntry(exportImportResult, "Enthaltene Records", result.record_count ?? "unbekannt");
+      migrationEntry(exportImportResult, "Vollständiges Auslassmanifest", `${result.omission_manifest.record_classes_omitted} nicht ausgewählte Recordklassen · ${result.omission_manifest.storage_classes_omitted} ausgelassene Storageklassen`);
+      migrationEntry(exportImportResult, "Quellprojekt", "Nicht geändert");
+    }
+    migrationEntry(exportImportResult, "Artefakt", result.output_name);
+    return;
+  }
+  if (result.action === "plan_created") {
+    if (result.writes_database !== false) throw new Error("Die Planerstellung meldete unerwartete Datenbankschreibvorgänge.");
+    migrationEntry(exportImportResult, "Aktion", "Kanonischer Importplan erstellt; Zieldatenbank nicht geändert.");
+    migrationEntry(exportImportResult, "Quelle → Ziel", `${result.source_database_id} → ${result.destination_database_id}`);
+    migrationEntry(exportImportResult, "ID-Remaps", result.mapping_count);
+    migrationEntry(exportImportResult, "Plan-Digest", result.plan_digest);
+    migrationEntry(exportImportResult, "Plan-Datei", result.plan_name);
+    return;
+  }
+  if (result.action === "prepared") {
+    if (result.writes_database !== false || !result.omission_manifest?.complete) {
+      throw new Error("Prepare meldete einen unerwarteten Schreibvorgang oder ein unvollständiges Manifest.");
+    }
+    migrationEntry(exportImportResult, "Aktion", "Import vorbereitet und gegen Zielbestand geprüft; es wurden keine Records geschrieben.");
+    migrationEntry(exportImportResult, "Quelle → Ziel", `${result.source_database_id} → ${result.destination_database_id}`);
+    migrationEntry(exportImportResult, "Zu übertragende Records", result.record_count);
+    migrationEntry(exportImportResult, "ID-Remaps", result.mapping_count);
+    migrationEntry(exportImportResult, "Scope", `Revisionen ${result.from_revision}–${result.through_revision} · ${result.history_space_count} HistorySpaces · ${result.record_class_count} Recordklassen`);
+    migrationEntry(exportImportResult, "Vollständiges Auslassmanifest", `${result.omission_manifest.record_classes_omitted} nicht ausgewählte Recordklassen · ${result.omission_manifest.storage_classes_omitted} ausgelassene Storageklassen`);
+    migrationEntry(exportImportResult, "Stream-Fingerprint", result.stream_fingerprint);
+    return;
+  }
+  throw new Error("Unbekanntes Export-/Import-Ergebnis.");
+}
+
+async function runExportAction() {
+  if (!sessionId || projectOpen || exportImportBusy || backupBusy || migrationBusy || recoveryBusy) return;
+  const request = {
+    protocol_version: 1,
+    kind: exportKind.value,
+    from_revision: exportFromRevision.value.trim(),
+    through_revision: exportThroughRevision.value.trim(),
+    history_spaces: selectedHistorySpaces(),
+    record_classes: selectedRecordClasses(),
+  };
+  exportImportBusy = true;
+  exportImportResult.hidden = true;
+  exportImportStatus.textContent = "Wähle im nativen Dialog das Quellprojekt und anschließend den neuen Speicherort für das Exportartefakt …";
+  updateProjectControls();
+  try {
+    const response = await invoke("export_data", { sessionId, request });
+    if (response.protocol_version !== 1 || response.result?.action !== "completed") {
+      throw new Error("unsupported_protocol");
+    }
+    renderExportImportResult(response.result);
+    exportImportStatus.textContent = response.result.format === "SharingExport"
+      ? "Teilen-Export erstellt. Er ist keine Sicherung; das Quellprojekt enthält die erforderlichen Auditnachweise."
+      : "Logical Export erstellt. Das vollständige Scope- und Auslassmanifest ist im Artefakt enthalten.";
+  } catch (error) {
+    exportImportStatus.textContent = exportImportErrorText(error);
+  } finally {
+    exportImportBusy = false;
+    updateProjectControls();
+  }
+}
+
+async function runImportPlanAction() {
+  if (!sessionId || projectOpen || exportImportBusy || backupBusy || migrationBusy || recoveryBusy) return;
+  const request = { protocol_version: 1, mappings: importMappingLines() };
+  exportImportBusy = true;
+  exportImportResult.hidden = true;
+  exportImportStatus.textContent = "Wähle das Zielprojekt, das Logical-Export-Artefakt und den neuen Speicherort für den Importplan …";
+  updateProjectControls();
+  try {
+    const response = await invoke("create_import_plan", { sessionId, request });
+    if (response.protocol_version !== 1 || response.result?.action !== "plan_created") {
+      throw new Error("unsupported_protocol");
+    }
+    renderExportImportResult(response.result);
+    exportImportStatus.textContent = "Importplan erstellt. Die Zieldatenbank wurde nicht geändert; führe danach Prepare aus, um Zielbestand und Referenzen zu prüfen.";
+  } catch (error) {
+    exportImportStatus.textContent = exportImportErrorText(error);
+  } finally {
+    exportImportBusy = false;
+    updateProjectControls();
+  }
+}
+
+async function runImportPrepareAction() {
+  if (!sessionId || projectOpen || exportImportBusy || backupBusy || migrationBusy || recoveryBusy) return;
+  exportImportBusy = true;
+  exportImportResult.hidden = true;
+  exportImportStatus.textContent = "Wähle das Zielprojekt, dasselbe Logical-Export-Artefakt und den zugehörigen kanonischen Importplan …";
+  updateProjectControls();
+  try {
+    const response = await invoke("prepare_import", { sessionId, request: { protocol_version: 1 } });
+    if (response.protocol_version !== 1 || response.result?.action !== "prepared") {
+      throw new Error("unsupported_protocol");
+    }
+    renderExportImportResult(response.result);
+    exportImportStatus.textContent = "Prepare bestanden. Es wurden keine Records in die Zieldatenbank geschrieben.";
+  } catch (error) {
+    exportImportStatus.textContent = exportImportErrorText(error);
+  } finally {
+    exportImportBusy = false;
     updateProjectControls();
   }
 }
@@ -1205,8 +1466,8 @@ function renderMigrationState(state) {
 
 function updateMigrationControls() {
   const state = currentMigrationState;
-  const blocked = migrationBusy || backupBusy || projectBusy || projectOpen;
-  const otherBusy = projectBusy || backupBusy || schemaBusy || entityBusy || perspectiveBusy
+  const blocked = migrationBusy || backupBusy || exportImportBusy || projectBusy || projectOpen;
+  const otherBusy = projectBusy || backupBusy || exportImportBusy || schemaBusy || entityBusy || perspectiveBusy
     || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
   const hasUnresolvedProjectCreation = projectCreationJournalUnavailable
     || loadPendingProjectCreations().length > 0;
@@ -1221,6 +1482,7 @@ function updateMigrationControls() {
   migrationRunButton.disabled = blocked || state?.can_execute !== true;
   migrationResumeButton.hidden = state?.can_resume !== true;
   migrationResumeButton.disabled = blocked || state?.can_resume !== true;
+  updateExportImportControls();
 }
 
 async function refreshMigrationState(activeSessionId = sessionId) {
@@ -1269,6 +1531,7 @@ function setBusy(busy) {
   updateSchemaControls();
   updateMigrationControls();
   updateBackupControls();
+  updateExportImportControls();
 }
 
 function renderProject(project) {
@@ -1301,6 +1564,7 @@ function renderProject(project) {
   recoveryPanel.hidden = projectOpen;
   migrationPanel.hidden = projectOpen;
   backupPanel.hidden = projectOpen;
+  exportImportPanel.hidden = projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -1734,11 +1998,14 @@ function runRecoveryRendererSmoke() {
 }
 
 async function runRecoverySmoke(activeSessionId) {
-  const rendererPathCanary = "C:/renderer/selected/backup-path";
+  const rendererPathCanary = "C:/renderer/selected/operation-path";
   for (const [command, fields] of [
     ["create_backup", { source_path: rendererPathCanary, output_path: rendererPathCanary }],
     ["verify_backup", { backup_path: rendererPathCanary }],
     ["restore_backup", { backup_path: rendererPathCanary, authorization_path: rendererPathCanary, output_path: rendererPathCanary }],
+    ["export_data", { kind: "logical", from_revision: "1", through_revision: "1", history_spaces: ["00000000-0000-0000-0000-000000000000"], record_classes: ["HistorySpaceDefinition"], source_path: rendererPathCanary, output_path: rendererPathCanary }],
+    ["create_import_plan", { mappings: [], destination_path: rendererPathCanary, input_path: rendererPathCanary, output_path: rendererPathCanary }],
+    ["prepare_import", { destination_path: rendererPathCanary, input_path: rendererPathCanary, plan_path: rendererPathCanary }],
   ]) {
     let rejected = false;
     try {
@@ -1749,9 +2016,10 @@ async function runRecoverySmoke(activeSessionId) {
     } catch {
       rejected = true;
     }
-    if (!rejected) throw new Error("Ein Backup-IPC-Befehl hat einen Rendererpfad angenommen.");
+    if (!rejected) throw new Error("Ein Datei- oder Export-/Import-IPC-Befehl hat einen Rendererpfad angenommen.");
   }
   await recordFactsSmokeStage("backup-renderer-paths:rejected");
+  await recordFactsSmokeStage("export-import-renderer-paths:rejected");
 
   const response = await invoke("inspect_recovery", {
     sessionId: activeSessionId,
@@ -6273,6 +6541,17 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   backupCreateButton.addEventListener("click", () => { void runBackupAction("create"); });
   backupVerifyButton.addEventListener("click", () => { void runBackupAction("verify"); });
   backupRestoreButton.addEventListener("click", () => { void runBackupAction("restore"); });
+  initializeExportClassChoices();
+  exportKind.addEventListener("change", updateExportImportControls);
+  exportFromRevision.addEventListener("input", updateExportImportControls);
+  exportThroughRevision.addEventListener("input", updateExportImportControls);
+  exportHistorySpaces.addEventListener("input", updateExportImportControls);
+  exportRecordClasses.addEventListener("change", updateExportImportControls);
+  importRemappings.addEventListener("input", updateExportImportControls);
+  exportRunButton.addEventListener("click", () => { void runExportAction(); });
+  importPlanButton.addEventListener("click", () => { void runImportPlanAction(); });
+  importPrepareButton.addEventListener("click", () => { void runImportPrepareAction(); });
+  updateExportImportControls();
 
   closeButton.addEventListener("click", async () => {
     if (!sessionId) return;

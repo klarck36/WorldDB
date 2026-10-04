@@ -25,6 +25,7 @@ use worlddb_ode_engine::{
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
 mod backup;
+mod export_import;
 mod host_session;
 mod migration;
 mod transfer;
@@ -188,6 +189,9 @@ fn run() -> Result<(), String> {
             create_backup,
             verify_backup,
             restore_backup,
+            export_data,
+            create_import_plan,
+            prepare_import,
             create_project,
             open_project,
             close_project,
@@ -554,6 +558,16 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code: "backup_rejected",
+            detail: Some(detail),
+            operation_id: None,
+            database_id: None,
+        }
+    }
+
+    fn export_import_rejected(detail: String) -> Self {
+        Self {
+            protocol_version: IPC_PROTOCOL_VERSION,
+            code: "export_import_rejected",
             detail: Some(detail),
             operation_id: None,
             database_id: None,
@@ -1231,6 +1245,192 @@ async fn restore_backup(
 }
 
 #[tauri::command]
+async fn export_data(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: export_import::ExportRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<export_import::ExportResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    export_import::validate_export_request(&request).map_err(IpcErrorV1::export_import_rejected)?;
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("export_import_unavailable"))?;
+    let outcome = async {
+        let source = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Quellprojekt für den Export auswählen",
+        )
+        .await?;
+        let (filter, extensions, default_name) = if request.kind == "sharing" {
+            (
+                "WorldDB Sharing Export",
+                &(["wdbshare"][..]),
+                "WorldDB-Sharing.wdbshare",
+            )
+        } else {
+            (
+                "WorldDB Logical Export",
+                &(["wdblex"][..]),
+                "WorldDB-Logical.wdblex",
+            )
+        };
+        let output = pick_output_file(
+            app.clone(),
+            window.clone(),
+            "Neues Exportartefakt speichern",
+            filter,
+            extensions,
+            default_name,
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            export_import::export(&source, &output, request)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::export_import_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("export-import-state-changed", ());
+    Ok(export_import::ExportResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn create_import_plan(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: export_import::ImportPlanRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<export_import::ImportPlanResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    export_import::validate_plan_request(&request).map_err(IpcErrorV1::export_import_rejected)?;
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("export_import_unavailable"))?;
+    let outcome = async {
+        let destination = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Zielprojekt für den Importplan auswählen",
+        )
+        .await?;
+        let input = pick_worlddb_file(
+            app.clone(),
+            window.clone(),
+            "Logisches Exportartefakt für den Importplan auswählen",
+            "WorldDB Logical Export",
+            &["wdblex", "bin"],
+        )
+        .await?;
+        let output = pick_output_file(
+            app.clone(),
+            window.clone(),
+            "Neuen kanonischen Importplan speichern",
+            "WorldDB Import Plan",
+            &["wdbplan"],
+            "WorldDB-Import.wdbplan",
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            export_import::create_import_plan(&destination, &input, &output, request)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::export_import_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("export-import-state-changed", ());
+    Ok(export_import::ImportPlanResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn prepare_import(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: export_import::ImportPrepareRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<export_import::ImportPrepareResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    backend
+        .begin_backup_operation()
+        .map_err(|_| IpcErrorV1::new("export_import_unavailable"))?;
+    let outcome = async {
+        let destination = pick_project_folder(
+            app.clone(),
+            window.clone(),
+            "Zielprojekt für die Importvorbereitung auswählen",
+        )
+        .await?;
+        let input = pick_worlddb_file(
+            app.clone(),
+            window.clone(),
+            "Logisches Exportartefakt zur Vorbereitung auswählen",
+            "WorldDB Logical Export",
+            &["wdblex", "bin"],
+        )
+        .await?;
+        let plan = pick_worlddb_file(
+            app.clone(),
+            window.clone(),
+            "Zugehörigen kanonischen Importplan auswählen",
+            "WorldDB Import Plan",
+            &["wdbplan"],
+        )
+        .await?;
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            export_import::prepare_import(&destination, &input, &plan, request)
+        })
+        .await
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+        .map_err(IpcErrorV1::export_import_rejected)?;
+        Ok::<_, IpcErrorV1>(result)
+    }
+    .await;
+    backend.cancel_migration_dialog();
+    let result = outcome?;
+    let _ = app.emit("export-import-state-changed", ());
+    Ok(export_import::ImportPrepareResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
 async fn create_project(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
@@ -1690,6 +1890,54 @@ async fn pick_project_folder(
             .set_title(title)
             .blocking_pick_folders()
             .and_then(|mut paths| paths.pop())
+            .and_then(|path| path.into_path().ok())
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    selected.ok_or_else(|| IpcErrorV1::new("selection_cancelled"))
+}
+
+async fn pick_worlddb_file(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    title: &'static str,
+    filter_name: &'static str,
+    extensions: &'static [&'static str],
+) -> Result<PathBuf, IpcErrorV1> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .add_filter(filter_name, extensions)
+            .blocking_pick_file()
+            .and_then(|path| path.into_path().ok())
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    selected.ok_or_else(|| IpcErrorV1::new("selection_cancelled"))
+}
+
+async fn pick_output_file(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    title: &'static str,
+    filter_name: &'static str,
+    extensions: &'static [&'static str],
+    default_name: &'static str,
+) -> Result<PathBuf, IpcErrorV1> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_parent(&window)
+            .set_title(title)
+            .set_file_name(default_name)
+            .add_filter(filter_name, extensions)
+            .blocking_save_file()
             .and_then(|path| path.into_path().ok())
     })
     .await
