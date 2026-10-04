@@ -581,6 +581,14 @@ fn schema_definition(record: &Record) -> Option<(Revision, SchemaDefinition)> {
             value.created_revision(),
             SchemaDefinition::EventKind(value.clone()),
         )),
+        Record::TimelineDefinition(value) => Some((
+            value.created_revision(),
+            SchemaDefinition::Timeline(value.clone()),
+        )),
+        Record::TimeUnitDefinition(value) => Some((
+            value.created_revision(),
+            SchemaDefinition::TimeUnit(value.clone()),
+        )),
         _ => None,
     }
 }

@@ -316,8 +316,10 @@ impl SchemaIdRevisionIndex {
                 let added = match definition {
                     SchemaDefinition::Layer(_)
                     | SchemaDefinition::EntityType(_)
-                    | SchemaDefinition::Predicate(_) => 1,
+                    | SchemaDefinition::Predicate(_)
+                    | SchemaDefinition::Timeline(_) => 1,
                     SchemaDefinition::LayerSnapshot(_) => 0,
+                    SchemaDefinition::TimeUnit(_) => 0,
                     SchemaDefinition::EventKind(value) => 1_usize
                         .checked_add(value.roles().len())?
                         .checked_add(value.attributes().len())?,
@@ -379,6 +381,14 @@ impl SchemaIdRevisionIndex {
                         ));
                     }
                 }
+                SchemaDefinition::Timeline(value) => {
+                    entries.push(SchemaIdRevisionIndexEntry::new(
+                        SchemaRecordRef::Timeline(value.timeline_id()),
+                        SchemaRevision::from_published_revision(value.created_revision()),
+                        location,
+                    ));
+                }
+                SchemaDefinition::TimeUnit(_) => {}
             }
         }
         Self::build_with_reservation(entries, reservation)
@@ -636,6 +646,8 @@ impl LifecycleIndex {
             | Record::EntityTypeDefinition(_)
             | Record::PredicateDefinition(_)
             | Record::EventKindDefinition(_)
+            | Record::TimelineDefinition(_)
+            | Record::TimeUnitDefinition(_)
             | Record::MigrationPlan(_)
             | Record::MigrationRun(_)
             | Record::MigrationStepCommitIdentity(_)

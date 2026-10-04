@@ -9,8 +9,8 @@ use crate::{
     EntityTypeDefinition, EventAttributeDefinition, EventKindDefinition, EventRoleDefinition,
     EventTimeConstraint, EventTimeForm, InclusiveRange, Lifecycle, NonEmptySet,
     PredicateDefinition, PredicateDefinitionSpec, RecordCodecError, RecordKind, ResolutionPolicy,
-    RoleCardinality, SchemaDefinitionError, Symbol, TimeRange, UInt, Value, ValueConstraint,
-    ValueKind,
+    RoleCardinality, SchemaDefinitionError, Symbol, TimeRange, TimeUnitDefinition,
+    TimelineCalendarProfile, TimelineDefinition, UInt, Value, ValueConstraint, ValueKind,
 };
 
 use super::{
@@ -761,6 +761,82 @@ pub(super) fn decode_event_kind(
             _ => invalid_field(kind, 5),
         },
     )
+}
+
+pub(super) fn encode_timeline(value: &TimelineDefinition) -> Result<Vec<u8>, RecordCodecError> {
+    let calendar = match value.calendar() {
+        TimelineCalendarProfile::None => vec![0],
+        TimelineCalendarProfile::ProlepticGregorianUtc {
+            epoch_unix_nanoseconds,
+        } => {
+            let mut bytes = vec![1];
+            bytes.extend(crate::Int::new(epoch_unix_nanoseconds).to_canonical_bytes());
+            bytes
+        }
+    };
+    encode_fields(
+        RecordKind::TimelineDefinition,
+        vec![
+            (1, encode_id(value.timeline_id()).to_vec()),
+            (2, symbol_bytes(value.symbol())),
+            (3, calendar),
+            (4, vec![lifecycle(value.lifecycle())]),
+            (5, encode_revision(value.created_revision())),
+        ],
+    )
+}
+
+pub(super) fn decode_timeline(
+    bytes: &[u8],
+    limits: &DecoderLimits,
+) -> Result<TimelineDefinition, RecordCodecError> {
+    let kind = RecordKind::TimelineDefinition;
+    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3, 4, 5], limits)?;
+    let id = decode_id(required_field(kind, &fields, 1)?).map_err(RecordCodecError::Wire)?;
+    let symbol = read_symbol(kind, 2, required_field(kind, &fields, 2)?, limits)?;
+    let calendar = match required_field(kind, &fields, 3)? {
+        [0] => TimelineCalendarProfile::None,
+        [1, value @ ..] => TimelineCalendarProfile::ProlepticGregorianUtc {
+            epoch_unix_nanoseconds: crate::Int::from_canonical_bytes(value)
+                .map(crate::Int::value)
+                .map_err(|_| invalid_field(kind, 3))?,
+        },
+        _ => return Err(invalid_field(kind, 3)),
+    };
+    let lifecycle = read_lifecycle(kind, 4, required_field(kind, &fields, 4)?)?;
+    let revision = decode_revision(kind, 5, required_field(kind, &fields, 5)?)?;
+    Ok(TimelineDefinition::new(
+        id, symbol, calendar, lifecycle, revision,
+    ))
+}
+
+pub(super) fn encode_time_unit(value: &TimeUnitDefinition) -> Result<Vec<u8>, RecordCodecError> {
+    encode_fields(
+        RecordKind::TimeUnitDefinition,
+        vec![
+            (1, symbol_bytes(value.symbol())),
+            (
+                2,
+                UInt::new(u128::from(value.nanoseconds_per_tick().get())).to_canonical_bytes(),
+            ),
+            (3, vec![lifecycle(value.lifecycle())]),
+            (4, encode_revision(value.created_revision())),
+        ],
+    )
+}
+
+pub(super) fn decode_time_unit(
+    bytes: &[u8],
+    limits: &DecoderLimits,
+) -> Result<TimeUnitDefinition, RecordCodecError> {
+    let kind = RecordKind::TimeUnitDefinition;
+    let fields = decode_fields_with_limits(kind, bytes, &[1, 2, 3, 4], limits)?;
+    let symbol = read_symbol(kind, 1, required_field(kind, &fields, 1)?, limits)?;
+    let scale = read_uleb(kind, 2, required_field(kind, &fields, 2)?)?;
+    let scale = u64::try_from(scale).map_err(|_| invalid_field(kind, 2))?;
+    let lifecycle = read_lifecycle(kind, 3, required_field(kind, &fields, 3)?)?;
+    let revision = decode_revision(kind, 4, required_field(kind, &fields, 4)?)?;
+    TimeUnitDefinition::new(symbol, scale, lifecycle, revision).map_err(|_| invalid_field(kind, 2))
 }
 
 fn encode_role(value: &EventRoleDefinition) -> Result<Vec<u8>, RecordCodecError> {

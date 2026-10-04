@@ -28,3 +28,9 @@ Prüfbelege vom 4. Oktober 2026:
 Die erste Planfassung wurde in 65f4bf0b428b4caf0e24352358f79cb889c9b195 erfasst. Die Dokumentation des Pushs steht in 9cd251b; die Policy-required-Audit-Klarstellung in 9aae209.
 
 Die ADR-032-Erweiterung wurde in Commit d50016d (docs: add ADR-032 time registry prerequisite to M8-14) gespeichert und nach origin/codex/worlddb-project-integration gepusht.
+
+## M8-14a-Abnahme
+
+M8-14a ist am 4. Oktober 2026 auf Windows abgeschlossen. Die beiden revisionierten Register-Records, Schemahistorie, persistente Wiederöffnung, exakte Nanosekunden-Normalisierung und die Schreibreferenzprüfung bestehen ihre gezielten Tests. Weil das Logical-Export-Klassenmanifest geschlossen ist und nun 38 Recordvarianten umfasst, wurde das Vor-Alpha-Envelope auf v2 gehoben; die v2-Fixture aktualisiert nur die abgeleiteten Logical-Export-Dateien und erhält den eingefrorenen physischen Storage-/Backup-Snapshot. Der vollständige Windows-Nachweis steht in `docs/M8-14a-verification.md`.
+
+`cargo xtask verify` besteht mit 39 PASS, einem erwarteten M0-14-`ci-matrix`-SKIP und 0 FAIL. Plancheck, Sourcecheck und `git diff --check HEAD` bestehen ebenfalls. M8-14b ist READY; Linux/macOS bleiben bis M9-07 zurückgestellt.

@@ -1222,10 +1222,12 @@ pub use schema::{
     EntityTypeDefinition, EventAttributeDefinition, EventKindDefinition, EventRoleDefinition,
     EventTimeConstraint, EventTimeForm, InclusiveRange, Lifecycle, NonEmptySet,
     PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, RoleCardinality,
-    SchemaDefinitionError, TimeRange, ValueConstraint, ValueKind,
+    SchemaDefinitionError, TimeRange, TimeUnitDefinition, TimelineCalendarProfile,
+    TimelineDefinition, ValueConstraint, ValueKind,
 };
 pub use schema_history::{
     SchemaDefinition, SchemaHistoryError, SchemaHistoryReferenceModel, SchemaMode, SchemaSnapshot,
+    TimeResolutionError,
 };
 pub use schema_write_validation::{
     DeprecatedSchemaWriteWarning, SchemaWriteValidationError, ValidatedAssertionBatch,

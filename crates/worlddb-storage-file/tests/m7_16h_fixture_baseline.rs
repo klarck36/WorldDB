@@ -27,9 +27,10 @@ use worlddb_storage_file::{
     StorageVerifier, WalPrepareLog, verify_exact_backup,
 };
 
-const MANIFEST_BLAKE3: &str = "41c7925b797c2851cba24da7be57e18bc93954f1e910690229b857a0b403e353";
+const MANIFEST_BLAKE3: &str = "e055937e2cc6a7613fc9d8c40a5a2e6ea9e18910c727d4eb6b3fcaa99cadea33";
 const CAPTURE_ENV: &str = "WORLDDB_M7_16H_CAPTURE_FIXTURES";
-const FIXTURE_MANIFEST_HEADER: &str = "worlddb-m7-16h-fixtures-v1";
+const REFRESH_MANIFEST_ENV: &str = "WORLDDB_M7_16H_REFRESH_MANIFEST";
+const FIXTURE_MANIFEST_HEADER: &str = "worlddb-m7-16h-fixtures-v2";
 const FIXTURE_N1_STATUS: &str = "n1-applicability=not-applicable-before-first-alpha";
 const STORAGE_PREFIX: &str = "storage/";
 const BACKUP_PREFIX: &str = "exact-backup/";
@@ -71,6 +72,16 @@ struct FixtureFile {
 fn versioned_pre_alpha_fixture_baseline() -> Result<(), String> {
     if env::var_os(CAPTURE_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
         capture_fixture_assets()?;
+        return Ok(());
+    }
+    if env::var_os(REFRESH_MANIFEST_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+        let root = fixture_root();
+        write_fixture_manifest(&root)?;
+        let manifest = fs::read(root.join("manifest.tsv")).map_err(|error| error.to_string())?;
+        println!(
+            "M7-16h fixture manifest BLAKE3: {}",
+            blake3::hash(&manifest).to_hex()
+        );
         return Ok(());
     }
 

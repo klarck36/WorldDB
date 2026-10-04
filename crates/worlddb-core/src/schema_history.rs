@@ -3,9 +3,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use crate::ids::{EntityTypeId, EventKindId, LayerId, PredicateId, Revision, SchemaRevision};
+use crate::ids::{
+    EntityTypeId, EventKindId, LayerId, PredicateId, Revision, SchemaRevision, TimelineId,
+};
 use crate::layers::{LayerDefinition, LayerSchemaSnapshot};
-use crate::schema::{EntityTypeDefinition, EventKindDefinition, PredicateDefinition};
+use crate::schema::{
+    EntityTypeDefinition, EventKindDefinition, Lifecycle, PredicateDefinition, TimeUnitDefinition,
+    TimelineDefinition,
+};
+use crate::temporal::{Timeline, WorldTime};
+use crate::values::{Symbol, Time};
 use crate::wire_records::{Record, RecordCodecError, encode_record};
 
 /// Requested interpretation of the project-wide schema history.
@@ -38,15 +45,21 @@ pub enum SchemaDefinition {
     Predicate(PredicateDefinition),
     /// One revision of an EventKind definition.
     EventKind(EventKindDefinition),
+    /// One revision of a project-wide Timeline definition.
+    Timeline(TimelineDefinition),
+    /// One revision of a project-wide TimeUnit definition.
+    TimeUnit(TimeUnitDefinition),
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SchemaDefinitionKey {
     Layer(LayerId),
     LayerSnapshot,
     EntityType(EntityTypeId),
     Predicate(PredicateId),
     EventKind(EventKindId),
+    Timeline(TimelineId),
+    TimeUnit(Symbol),
 }
 
 impl SchemaDefinition {
@@ -57,6 +70,8 @@ impl SchemaDefinition {
             Self::EntityType(value) => SchemaDefinitionKey::EntityType(value.entity_type_id()),
             Self::Predicate(value) => SchemaDefinitionKey::Predicate(value.predicate_id()),
             Self::EventKind(value) => SchemaDefinitionKey::EventKind(value.event_kind_id()),
+            Self::Timeline(value) => SchemaDefinitionKey::Timeline(value.timeline_id()),
+            Self::TimeUnit(value) => SchemaDefinitionKey::TimeUnit(value.symbol().clone()),
         }
     }
 
@@ -67,6 +82,8 @@ impl SchemaDefinition {
             Self::EntityType(value) => value.created_revision(),
             Self::Predicate(value) => value.created_revision(),
             Self::EventKind(value) => value.created_revision(),
+            Self::Timeline(value) => value.created_revision(),
+            Self::TimeUnit(value) => value.created_revision(),
         }
     }
 
@@ -77,6 +94,8 @@ impl SchemaDefinition {
             Self::EntityType(value) => Record::EntityTypeDefinition(value.clone()),
             Self::Predicate(value) => Record::PredicateDefinition(value.clone()),
             Self::EventKind(value) => Record::EventKindDefinition(value.clone()),
+            Self::Timeline(value) => Record::TimelineDefinition(value.clone()),
+            Self::TimeUnit(value) => Record::TimeUnitDefinition(value.clone()),
         };
         encode_record(&record)
     }
@@ -87,6 +106,8 @@ impl SchemaDefinition {
             Self::EntityType(value) => Some((1, value.symbol().as_str())),
             Self::Predicate(value) => Some((2, value.symbol().as_str())),
             Self::EventKind(value) => Some((3, value.symbol().as_str())),
+            Self::Timeline(value) => Some((4, value.symbol().as_str())),
+            Self::TimeUnit(value) => Some((5, value.symbol().as_str())),
             Self::LayerSnapshot(_) => None,
         }
     }
@@ -151,6 +172,78 @@ impl SchemaSnapshot {
         &self.definitions
     }
 
+    /// Returns the Timeline revision effective in this snapshot, if registered.
+    #[must_use]
+    pub fn timeline(&self, id: TimelineId) -> Option<&TimelineDefinition> {
+        self.definitions
+            .iter()
+            .find_map(|definition| match definition {
+                SchemaDefinition::Timeline(value) if value.timeline_id() == id => Some(value),
+                _ => None,
+            })
+    }
+
+    /// Returns the TimeUnit revision effective in this snapshot, if registered.
+    #[must_use]
+    pub fn time_unit(&self, symbol: &Symbol) -> Option<&TimeUnitDefinition> {
+        self.definitions
+            .iter()
+            .find_map(|definition| match definition {
+                SchemaDefinition::TimeUnit(value) if value.symbol() == symbol => Some(value),
+                _ => None,
+            })
+    }
+
+    /// Resolves a Time representation through this exact schema snapshot.
+    ///
+    /// The returned coordinate is the checked `ticks * nanoseconds_per_tick`
+    /// value on the same Timeline. Deprecated definitions are rejected unless
+    /// the caller has already applied the explicit deprecated-use policy.
+    pub fn resolve_time(
+        &self,
+        value: &Time,
+        allow_deprecated: bool,
+    ) -> Result<WorldTime, TimeResolutionError> {
+        let timeline = self
+            .timeline(value.timeline_id())
+            .ok_or(TimeResolutionError::UnknownTimeline(value.timeline_id()))?;
+        match timeline.lifecycle() {
+            Lifecycle::Active => {}
+            Lifecycle::Deprecated if allow_deprecated => {}
+            Lifecycle::Deprecated => {
+                return Err(TimeResolutionError::DeprecatedTimeline(value.timeline_id()));
+            }
+            Lifecycle::Retired => {
+                return Err(TimeResolutionError::RetiredTimeline(value.timeline_id()));
+            }
+        }
+
+        let unit = self
+            .time_unit(value.unit())
+            .ok_or_else(|| TimeResolutionError::UnknownTimeUnit(value.unit().clone()))?;
+        match unit.lifecycle() {
+            Lifecycle::Active => {}
+            Lifecycle::Deprecated if allow_deprecated => {}
+            Lifecycle::Deprecated => {
+                return Err(TimeResolutionError::DeprecatedTimeUnit(
+                    value.unit().clone(),
+                ));
+            }
+            Lifecycle::Retired => {
+                return Err(TimeResolutionError::RetiredTimeUnit(value.unit().clone()));
+            }
+        }
+
+        let nanoseconds = value
+            .ticks()
+            .checked_mul(i128::from(unit.nanoseconds_per_tick().get()))
+            .ok_or(TimeResolutionError::Overflow)?;
+        Ok(WorldTime::from_nanoseconds(
+            Timeline::new(value.timeline_id()),
+            nanoseconds,
+        ))
+    }
+
     /// Fails closed when a persisted/cached fingerprint does not match this view.
     pub fn verify_fingerprint(&self, expected: [u8; 32]) -> Result<(), SchemaHistoryError> {
         if self.fingerprint != expected {
@@ -161,6 +254,48 @@ impl SchemaSnapshot {
         Ok(())
     }
 }
+
+/// Failure while resolving one stored Time through a selected schema snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TimeResolutionError {
+    /// The Time names no registered Timeline.
+    UnknownTimeline(TimelineId),
+    /// The Time names a retired Timeline.
+    RetiredTimeline(TimelineId),
+    /// The Time names a deprecated Timeline without the explicit opt-in path.
+    DeprecatedTimeline(TimelineId),
+    /// The Time names no registered TimeUnit symbol.
+    UnknownTimeUnit(Symbol),
+    /// The Time names a retired TimeUnit.
+    RetiredTimeUnit(Symbol),
+    /// The Time names a deprecated TimeUnit without the explicit opt-in path.
+    DeprecatedTimeUnit(Symbol),
+    /// Tick multiplication exceeded signed i128 nanoseconds.
+    Overflow,
+}
+
+impl fmt::Display for TimeResolutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownTimeline(id) => write!(formatter, "unknown Timeline {id}"),
+            Self::RetiredTimeline(id) => write!(formatter, "Timeline {id} is retired"),
+            Self::DeprecatedTimeline(id) => {
+                write!(formatter, "Timeline {id} requires deprecated-use opt-in")
+            }
+            Self::UnknownTimeUnit(symbol) => write!(formatter, "unknown TimeUnit {symbol}"),
+            Self::RetiredTimeUnit(symbol) => write!(formatter, "TimeUnit {symbol} is retired"),
+            Self::DeprecatedTimeUnit(symbol) => {
+                write!(
+                    formatter,
+                    "TimeUnit {symbol} requires deprecated-use opt-in"
+                )
+            }
+            Self::Overflow => formatter.write_str("Time nanosecond normalization overflowed"),
+        }
+    }
+}
+
+impl std::error::Error for TimeResolutionError {}
 
 /// Index-free immutable schema history over the shared Revision axis.
 pub struct SchemaHistoryReferenceModel {
@@ -193,6 +328,15 @@ impl SchemaHistoryReferenceModel {
                     expected: Revision::GENESIS,
                     actual: definition.created_revision(),
                 });
+            }
+            match definition {
+                SchemaDefinition::Timeline(value) if value.lifecycle() != Lifecycle::Active => {
+                    return Err(SchemaHistoryError::InvalidTimeRegistryLifecycle);
+                }
+                SchemaDefinition::TimeUnit(value) if value.lifecycle() != Lifecycle::Active => {
+                    return Err(SchemaHistoryError::InvalidTimeRegistryLifecycle);
+                }
+                _ => {}
             }
             if !batch_keys.insert(definition.key()) {
                 return Err(SchemaHistoryError::DuplicateDefinition {
@@ -254,6 +398,8 @@ impl SchemaHistoryReferenceModel {
                 return Err(SchemaHistoryError::DuplicateDefinition { revision });
             }
         }
+        let previous = materialize(&self.history, self.latest_published)?;
+        validate_time_registry_transitions(&previous, &definitions, revision)?;
         let mut staged = self.history.clone();
         staged.insert(revision, definitions);
         let latest_snapshot = materialize(&staged, revision)?;
@@ -301,6 +447,47 @@ impl Default for SchemaHistoryReferenceModel {
     }
 }
 
+fn validate_time_registry_transitions(
+    previous: &SchemaSnapshot,
+    definitions: &[SchemaDefinition],
+    revision: Revision,
+) -> Result<(), SchemaHistoryError> {
+    for next in definitions {
+        match next {
+            SchemaDefinition::Timeline(next) => {
+                if let Some(prior) = previous.timeline(next.timeline_id()) {
+                    let expected = prior
+                        .revise_lifecycle(next.lifecycle(), revision)
+                        .map_err(|_| SchemaHistoryError::InvalidTimeRegistryLifecycle)?;
+                    if prior.lifecycle() == next.lifecycle() || expected != *next {
+                        return Err(SchemaHistoryError::ImmutableTimelineMapping(
+                            next.timeline_id(),
+                        ));
+                    }
+                } else if next.lifecycle() != Lifecycle::Active {
+                    return Err(SchemaHistoryError::InvalidTimeRegistryLifecycle);
+                }
+            }
+            SchemaDefinition::TimeUnit(next) => {
+                if let Some(prior) = previous.time_unit(next.symbol()) {
+                    let expected = prior
+                        .revise_lifecycle(next.lifecycle(), revision)
+                        .map_err(|_| SchemaHistoryError::InvalidTimeRegistryLifecycle)?;
+                    if prior.lifecycle() == next.lifecycle() || expected != *next {
+                        return Err(SchemaHistoryError::ImmutableTimeUnitScale(
+                            next.symbol().clone(),
+                        ));
+                    }
+                } else if next.lifecycle() != Lifecycle::Active {
+                    return Err(SchemaHistoryError::InvalidTimeRegistryLifecycle);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn materialize(
     history: &BTreeMap<Revision, Vec<SchemaDefinition>>,
     requested: Revision,
@@ -333,6 +520,12 @@ pub enum SchemaHistoryError {
     },
     /// One batch repeats the same typed schema definition identity.
     DuplicateDefinition { revision: Revision },
+    /// A Timeline identity cannot change its symbol or calendar mapping.
+    ImmutableTimelineMapping(TimelineId),
+    /// A TimeUnit symbol cannot change its nanosecond scale.
+    ImmutableTimeUnitScale(Symbol),
+    /// A new time registry entry must be Active and lifecycle revisions must advance legally.
+    InvalidTimeRegistryLifecycle,
     /// Two effective definitions in one schema family use one symbol.
     DuplicateSymbol { family: u8, symbol: String },
     /// The requested revision is later than the latest published shared revision.
@@ -369,6 +562,18 @@ impl fmt::Display for SchemaHistoryError {
                 formatter,
                 "schema batch at {revision} repeats one definition identity"
             ),
+            Self::ImmutableTimelineMapping(id) => {
+                write!(
+                    formatter,
+                    "Timeline {id} identity and calendar mapping are immutable"
+                )
+            }
+            Self::ImmutableTimeUnitScale(symbol) => {
+                write!(formatter, "TimeUnit {symbol} scale is immutable")
+            }
+            Self::InvalidTimeRegistryLifecycle => {
+                formatter.write_str("time registry lifecycle transition is invalid")
+            }
             Self::DuplicateSymbol { family, symbol } => {
                 write!(formatter, "schema family {family} repeats symbol {symbol}")
             }
@@ -409,13 +614,17 @@ impl std::error::Error for SchemaHistoryError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{SchemaDefinition, SchemaHistoryError, SchemaHistoryReferenceModel, SchemaMode};
-    use crate::Symbol;
-    use crate::ids::{DomainId, EntityTypeId, PredicateId, Revision};
+    use super::{
+        SchemaDefinition, SchemaHistoryError, SchemaHistoryReferenceModel, SchemaMode,
+        TimeResolutionError,
+    };
+    use crate::ids::{DomainId, EntityTypeId, PredicateId, Revision, TimelineId};
     use crate::schema::{
         Cardinality, ConstraintSet, EntityTypeConstraint, EntityTypeDefinition, Lifecycle,
-        PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, ValueKind,
+        PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, SchemaDefinitionError,
+        TimeUnitDefinition, TimelineCalendarProfile, TimelineDefinition, ValueKind,
     };
+    use crate::{Symbol, Time, WorldTime};
 
     fn id<T: DomainId>(tail: u8) -> Result<T, crate::IdValidationError> {
         let mut bytes = [0_u8; 16];
@@ -455,6 +664,153 @@ mod tests {
         })
         .ok()
         .map(SchemaDefinition::Predicate)
+    }
+
+    #[test]
+    fn timeline_and_time_unit_records_resolve_exact_checked_nanoseconds() {
+        let (Ok(timeline_id), Ok(second_unit), Ok(double_unit), Ok(project_clock)) = (
+            id::<TimelineId>(51),
+            Symbol::new("second"),
+            Symbol::new("double"),
+            Symbol::new("project_clock"),
+        ) else {
+            return;
+        };
+        let first = Revision::FIRST_COMMIT;
+        let timeline = TimelineDefinition::new(
+            timeline_id,
+            project_clock,
+            TimelineCalendarProfile::ProlepticGregorianUtc {
+                epoch_unix_nanoseconds: 123,
+            },
+            Lifecycle::Active,
+            first,
+        );
+        let (Ok(seconds), Ok(doubles)) = (
+            TimeUnitDefinition::new(second_unit.clone(), 1_000_000_000, Lifecycle::Active, first),
+            TimeUnitDefinition::new(double_unit.clone(), 2, Lifecycle::Active, first),
+        ) else {
+            return;
+        };
+        let mut history = SchemaHistoryReferenceModel::new();
+        let published = history.publish(
+            first,
+            vec![
+                SchemaDefinition::Timeline(timeline),
+                SchemaDefinition::TimeUnit(seconds),
+                SchemaDefinition::TimeUnit(doubles),
+            ],
+        );
+        assert!(published.is_ok());
+        let snapshot = history.schema_at(SchemaMode::Current, first);
+        assert!(snapshot.is_ok());
+        if let Ok(snapshot) = snapshot {
+            let second_time = Time::new(timeline_id, -3, second_unit);
+            let normalized = snapshot.resolve_time(&second_time, false);
+            assert_eq!(normalized.map(WorldTime::nanoseconds), Ok(-3_000_000_000));
+
+            let overflowing_time = Time::new(timeline_id, i128::MAX, double_unit);
+            assert_eq!(
+                snapshot.resolve_time(&overflowing_time, false).err(),
+                Some(TimeResolutionError::Overflow)
+            );
+        }
+    }
+
+    #[test]
+    fn time_registry_mappings_are_immutable_and_lifecycle_is_monotone() {
+        let (Ok(timeline_id), Ok(clock), Ok(unit)) = (
+            id::<TimelineId>(52),
+            Symbol::new("clock"),
+            Symbol::new("tick"),
+        ) else {
+            return;
+        };
+        let first = Revision::FIRST_COMMIT;
+        let Ok(revision) = first.next_commit() else {
+            return;
+        };
+        let Ok(third_revision) = revision.next_commit() else {
+            return;
+        };
+        let timeline = TimelineDefinition::new(
+            timeline_id,
+            clock.clone(),
+            TimelineCalendarProfile::None,
+            Lifecycle::Active,
+            first,
+        );
+        let Ok(active_unit) = TimeUnitDefinition::new(unit.clone(), 10, Lifecycle::Active, first)
+        else {
+            return;
+        };
+        let mut history = SchemaHistoryReferenceModel::new();
+        assert!(
+            history
+                .publish(
+                    first,
+                    vec![
+                        SchemaDefinition::Timeline(timeline.clone()),
+                        SchemaDefinition::TimeUnit(active_unit.clone()),
+                    ],
+                )
+                .is_ok()
+        );
+
+        let changed_timeline = TimelineDefinition::new(
+            timeline_id,
+            clock,
+            TimelineCalendarProfile::ProlepticGregorianUtc {
+                epoch_unix_nanoseconds: 1,
+            },
+            Lifecycle::Deprecated,
+            revision,
+        );
+        assert!(matches!(
+            history.publish(revision, vec![SchemaDefinition::Timeline(changed_timeline)]),
+            Err(SchemaHistoryError::ImmutableTimelineMapping(id)) if id == timeline_id
+        ));
+
+        let changed_unit =
+            TimeUnitDefinition::new(unit.clone(), 11, Lifecycle::Deprecated, revision);
+        assert!(changed_unit.is_ok());
+        if let Ok(changed_unit) = changed_unit {
+            assert!(matches!(
+                history.publish(revision, vec![SchemaDefinition::TimeUnit(changed_unit)]),
+                Err(SchemaHistoryError::ImmutableTimeUnitScale(symbol)) if symbol == unit
+            ));
+        }
+
+        let deprecated_unit = active_unit.revise_lifecycle(Lifecycle::Deprecated, revision);
+        assert!(deprecated_unit.is_ok());
+        if let Ok(deprecated_unit) = deprecated_unit {
+            let changed = history.publish(
+                revision,
+                vec![SchemaDefinition::TimeUnit(deprecated_unit.clone())],
+            );
+            assert!(changed.is_ok());
+            let snapshot = history.schema_at(SchemaMode::Current, revision);
+            assert!(snapshot.is_ok());
+            if let Ok(snapshot) = snapshot {
+                let value = Time::new(timeline_id, 3, unit);
+                assert!(matches!(
+                    snapshot.resolve_time(&value, false),
+                    Err(TimeResolutionError::DeprecatedTimeUnit(_))
+                ));
+                assert_eq!(
+                    snapshot
+                        .resolve_time(&value, true)
+                        .map(WorldTime::nanoseconds),
+                    Ok(30)
+                );
+            }
+            assert_eq!(
+                deprecated_unit
+                    .revise_lifecycle(Lifecycle::Active, third_revision)
+                    .err(),
+                Some(SchemaDefinitionError::LifecycleRegression)
+            );
+        }
     }
 
     #[test]

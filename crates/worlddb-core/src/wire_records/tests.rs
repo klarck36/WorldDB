@@ -28,9 +28,10 @@ use crate::{
     ReplacementBoundary, ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure,
     ResolutionPolicy, Revision, RoleCardinality, SchemaDefinitionId, SchemaIdentityTransition,
     SchemaRevision, Source, SourceContentDigest, SourceLocator, SourceMetadata,
-    SourceMetadataEntry, SourceSchemaPrecondition, Subject, Symbol, Time, TimeInterval, Timeline,
-    TimelineId, TlvDecoder, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint,
-    ValueKind, WorldTime, decode_frame, encode_frame, encode_id,
+    SourceMetadataEntry, SourceSchemaPrecondition, Subject, Symbol, Time, TimeInterval,
+    TimeUnitDefinition, Timeline, TimelineCalendarProfile, TimelineDefinition, TimelineId,
+    TlvDecoder, TlvEncoder, TransferLineage, TransferLineageId, Value, ValueConstraint, ValueKind,
+    WorldTime, decode_frame, encode_frame, encode_id,
 };
 
 fn id<T: DomainId>(tail: u8) -> Option<T> {
@@ -94,6 +95,7 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
     let perspective_id = id(13)?;
     let retirement_id = id(14)?;
     let perspective_retirement_id = id(15)?;
+    let timeline_id = id(17)?;
 
     let history = HistorySpaceDefinition::new(history_id, None, revision).ok()?;
     let layer = LayerDefinition::new(
@@ -258,6 +260,30 @@ fn fixtures() -> Option<Vec<(&'static str, Record)>> {
         (
             "event_kind_definition",
             Record::EventKindDefinition(event_kind),
+        ),
+        (
+            "timeline_definition",
+            Record::TimelineDefinition(TimelineDefinition::new(
+                timeline_id,
+                symbol("project_time")?,
+                TimelineCalendarProfile::ProlepticGregorianUtc {
+                    epoch_unix_nanoseconds: -123_456_789,
+                },
+                Lifecycle::Active,
+                revision,
+            )),
+        ),
+        (
+            "time_unit_definition",
+            Record::TimeUnitDefinition(
+                TimeUnitDefinition::new(
+                    symbol("tick")?,
+                    1_000_000_000,
+                    Lifecycle::Active,
+                    revision,
+                )
+                .ok()?,
+            ),
         ),
         ("migration_plan", Record::MigrationPlan(migration_plan)),
         (
@@ -951,7 +977,7 @@ fn runtime_record_assignments_match_the_policy_registry() {
             assert!(assignments.insert(number, *name).is_none());
         }
     }
-    assert_eq!(assignments.len(), 36);
+    assert_eq!(assignments.len(), 38);
     for (kind, name) in [
         (RecordKind::HistorySpaceDefinition, "HistorySpaceDefinition"),
         (RecordKind::Entity, "Entity"),
@@ -966,6 +992,8 @@ fn runtime_record_assignments_match_the_policy_registry() {
         (RecordKind::EntityTypeDefinition, "EntityTypeDefinition"),
         (RecordKind::PredicateDefinition, "PredicateDefinition"),
         (RecordKind::EventKindDefinition, "EventKindDefinition"),
+        (RecordKind::TimelineDefinition, "TimelineDefinition"),
+        (RecordKind::TimeUnitDefinition, "TimeUnitDefinition"),
         (RecordKind::MigrationPlan, "MigrationPlan"),
         (RecordKind::MigrationRun, "MigrationRun"),
         (
@@ -1014,6 +1042,45 @@ fn runtime_record_assignments_match_the_policy_registry() {
 }
 
 #[test]
+fn time_schema_codecs_reject_zero_scale_and_unknown_calendar_profile() {
+    let zero_scale_payload = super::encode_fields(
+        RecordKind::TimeUnitDefinition,
+        vec![
+            (1, super::encode_string("zero")),
+            (2, crate::numbers::encode_u128_varint(0)),
+            (3, vec![1]),
+            (4, super::encode_revision(Revision::GENESIS)),
+        ],
+    );
+    assert!(zero_scale_payload.is_ok());
+    if let Ok(payload) = zero_scale_payload {
+        assert!(
+            super::schema::decode_time_unit(&payload, &crate::DecoderLimits::default()).is_err()
+        );
+    }
+
+    let Some(timeline_id) = id::<TimelineId>(88) else {
+        return;
+    };
+    let unknown_calendar_payload = super::encode_fields(
+        RecordKind::TimelineDefinition,
+        vec![
+            (1, encode_id(timeline_id).to_vec()),
+            (2, super::encode_string("unknown_profile")),
+            (3, vec![2]),
+            (4, vec![1]),
+            (5, super::encode_revision(Revision::GENESIS)),
+        ],
+    );
+    assert!(unknown_calendar_payload.is_ok());
+    if let Ok(payload) = unknown_calendar_payload {
+        assert!(
+            super::schema::decode_timeline(&payload, &crate::DecoderLimits::default()).is_err()
+        );
+    }
+}
+
+#[test]
 fn every_registered_record_kind_has_a_fixed_roundtrip_golden_vector() {
     let mut registered = std::collections::BTreeSet::new();
     for (line_number, line) in include_str!("../../../../policy/record-wire-kinds.tsv")
@@ -1055,7 +1122,7 @@ fn every_registered_record_kind_has_a_fixed_roundtrip_golden_vector() {
             golden_kinds.insert(kind);
         }
     }
-    assert_eq!(registered.len(), 36);
+    assert_eq!(registered.len(), 38);
     assert_eq!(golden_kinds, registered);
 }
 

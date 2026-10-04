@@ -4317,6 +4317,8 @@ fn record_kind_label(kind: RecordKind) -> &'static str {
         RecordKind::MigrationPlan => "MigrationPlan",
         RecordKind::MigrationRun => "MigrationRun",
         RecordKind::MigrationStepCommitIdentity => "MigrationStepCommitIdentity",
+        RecordKind::TimelineDefinition => "TimelineDefinition",
+        RecordKind::TimeUnitDefinition => "TimeUnitDefinition",
         RecordKind::Assertion => "Assertion",
         RecordKind::AssertionValidityClosure => "AssertionValidityClosure",
         RecordKind::AssertionRetraction => "AssertionRetraction",

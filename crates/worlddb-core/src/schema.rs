@@ -2,8 +2,11 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::num::NonZeroU64;
 
-use crate::ids::{EntityTypeId, EventAttributeId, EventKindId, EventRoleId, PredicateId, Revision};
+use crate::ids::{
+    EntityTypeId, EventAttributeId, EventKindId, EventRoleId, PredicateId, Revision, TimelineId,
+};
 use crate::temporal::Duration;
 use crate::values::{Symbol, Time, Value};
 use crate::{Decimal, Int, UInt};
@@ -101,6 +104,176 @@ impl Lifecycle {
             Self::Deprecated => matches!(next, Self::Deprecated | Self::Retired),
             Self::Retired => matches!(next, Self::Retired),
         }
+    }
+}
+
+/// Closed calendar mapping assigned to a project Timeline.
+///
+/// The profile and epoch are immutable for a Timeline identity. A different
+/// mapping requires a new `TimelineId` and an explicit migration.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum TimelineCalendarProfile {
+    /// The Timeline has no civil-calendar interpretation.
+    None,
+    /// Proleptic Gregorian UTC coordinates relative to this Unix epoch.
+    ProlepticGregorianUtc {
+        /// Timeline zero expressed as signed nanoseconds from the Unix epoch.
+        epoch_unix_nanoseconds: i128,
+    },
+}
+
+/// Immutable project-wide Timeline identity and calendar mapping revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimelineDefinition {
+    timeline_id: TimelineId,
+    symbol: Symbol,
+    calendar: TimelineCalendarProfile,
+    lifecycle: Lifecycle,
+    created_revision: Revision,
+}
+
+impl TimelineDefinition {
+    /// Creates one Timeline schema state.
+    #[must_use]
+    pub const fn new(
+        timeline_id: TimelineId,
+        symbol: Symbol,
+        calendar: TimelineCalendarProfile,
+        lifecycle: Lifecycle,
+        created_revision: Revision,
+    ) -> Self {
+        Self {
+            timeline_id,
+            symbol,
+            calendar,
+            lifecycle,
+            created_revision,
+        }
+    }
+
+    /// Appends a lifecycle-only revision without changing identity or mapping.
+    pub fn revise_lifecycle(
+        &self,
+        lifecycle: Lifecycle,
+        created_revision: Revision,
+    ) -> Result<Self, SchemaDefinitionError> {
+        validate_lifecycle_revision(
+            self.lifecycle,
+            lifecycle,
+            self.created_revision,
+            created_revision,
+        )?;
+        Ok(Self {
+            timeline_id: self.timeline_id,
+            symbol: self.symbol.clone(),
+            calendar: self.calendar,
+            lifecycle,
+            created_revision,
+        })
+    }
+
+    /// Returns the stable Timeline identity.
+    #[must_use]
+    pub const fn timeline_id(&self) -> TimelineId {
+        self.timeline_id
+    }
+
+    /// Returns the project-wide Timeline symbol.
+    #[must_use]
+    pub fn symbol(&self) -> &Symbol {
+        &self.symbol
+    }
+
+    /// Returns the immutable calendar mapping.
+    #[must_use]
+    pub const fn calendar(&self) -> TimelineCalendarProfile {
+        self.calendar
+    }
+
+    /// Returns the lifecycle state at this revision.
+    #[must_use]
+    pub const fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    /// Returns the revision that introduced this definition state.
+    #[must_use]
+    pub const fn created_revision(&self) -> Revision {
+        self.created_revision
+    }
+}
+
+/// Immutable project-wide nanosecond scale and lifecycle revision for a unit.
+///
+/// The symbol is the stable identity; 1.0 deliberately defines no TimeUnitId.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimeUnitDefinition {
+    symbol: Symbol,
+    nanoseconds_per_tick: NonZeroU64,
+    lifecycle: Lifecycle,
+    created_revision: Revision,
+}
+
+impl TimeUnitDefinition {
+    /// Creates one TimeUnit schema state with a positive integer scale.
+    pub fn new(
+        symbol: Symbol,
+        nanoseconds_per_tick: u64,
+        lifecycle: Lifecycle,
+        created_revision: Revision,
+    ) -> Result<Self, SchemaDefinitionError> {
+        let nanoseconds_per_tick = NonZeroU64::new(nanoseconds_per_tick)
+            .ok_or(SchemaDefinitionError::ZeroNanosecondsPerTick)?;
+        Ok(Self {
+            symbol,
+            nanoseconds_per_tick,
+            lifecycle,
+            created_revision,
+        })
+    }
+
+    /// Appends a lifecycle-only revision without changing symbol or scale.
+    pub fn revise_lifecycle(
+        &self,
+        lifecycle: Lifecycle,
+        created_revision: Revision,
+    ) -> Result<Self, SchemaDefinitionError> {
+        validate_lifecycle_revision(
+            self.lifecycle,
+            lifecycle,
+            self.created_revision,
+            created_revision,
+        )?;
+        Ok(Self {
+            symbol: self.symbol.clone(),
+            nanoseconds_per_tick: self.nanoseconds_per_tick,
+            lifecycle,
+            created_revision,
+        })
+    }
+
+    /// Returns the stable TimeUnit symbol.
+    #[must_use]
+    pub fn symbol(&self) -> &Symbol {
+        &self.symbol
+    }
+
+    /// Returns the immutable positive nanosecond scale.
+    #[must_use]
+    pub const fn nanoseconds_per_tick(&self) -> NonZeroU64 {
+        self.nanoseconds_per_tick
+    }
+
+    /// Returns the lifecycle state at this revision.
+    #[must_use]
+    pub const fn lifecycle(&self) -> Lifecycle {
+        self.lifecycle
+    }
+
+    /// Returns the revision that introduced this definition state.
+    #[must_use]
+    pub const fn created_revision(&self) -> Revision {
+        self.created_revision
     }
 }
 
@@ -1071,6 +1244,8 @@ pub enum SchemaDefinitionError {
     DuplicateEventAttributeId,
     /// An EventKind declares the same attribute symbol twice.
     DuplicateEventAttributeSymbol,
+    /// A TimeUnit must use a positive nanosecond scale.
+    ZeroNanosecondsPerTick,
     /// A lifecycle update would reactivate a deprecated or retired schema item.
     LifecycleRegression,
     /// A new schema definition state must use a later published revision.
@@ -1125,6 +1300,9 @@ impl fmt::Display for SchemaDefinitionError {
             Self::DuplicateEventAttributeSymbol => {
                 formatter.write_str("duplicate EventAttribute symbol")
             }
+            Self::ZeroNanosecondsPerTick => {
+                formatter.write_str("TimeUnit nanoseconds_per_tick must be positive")
+            }
             Self::LifecycleRegression => {
                 formatter.write_str("schema lifecycle cannot move backward")
             }
@@ -1144,7 +1322,7 @@ mod tests {
         EntityTypeDefinition, EventAttributeDefinition, EventKindDefinition, EventRoleDefinition,
         EventTimeConstraint, EventTimeForm, InclusiveRange, Lifecycle, NonEmptySet,
         PredicateDefinition, PredicateDefinitionSpec, ResolutionPolicy, RoleCardinality,
-        SchemaDefinitionError, ValueConstraint, ValueKind,
+        SchemaDefinitionError, TimeUnitDefinition, ValueConstraint, ValueKind,
     };
     use crate::ids::{
         DomainId, EntityTypeId, EventAttributeId, EventKindId, EventRoleId, PredicateId, Revision,
@@ -1158,6 +1336,21 @@ mod tests {
         bytes[8] = 0x80;
         bytes[15] = 1;
         T::try_from_bytes(bytes).ok()
+    }
+
+    #[test]
+    fn time_unit_scale_must_be_positive() {
+        let symbol = Symbol::new("tick");
+        assert!(symbol.is_ok());
+        if let Ok(symbol) = symbol {
+            assert_eq!(
+                TimeUnitDefinition::new(symbol.clone(), 0, Lifecycle::Active, Revision::GENESIS)
+                    .err(),
+                Some(SchemaDefinitionError::ZeroNanosecondsPerTick)
+            );
+            let valid = TimeUnitDefinition::new(symbol, 1, Lifecycle::Active, Revision::GENESIS);
+            assert!(valid.is_ok());
+        }
     }
 
     #[test]

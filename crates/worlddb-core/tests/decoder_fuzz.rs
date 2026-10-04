@@ -143,9 +143,9 @@ fn inventory() -> Result<Vec<Target<'static>>, String> {
             targets.push(target);
         }
     }
-    if targets.len() != 77 {
+    if targets.len() != 79 {
         return Err(format!(
-            "expected 77 decoder targets, found {}",
+            "expected 79 decoder targets, found {}",
             targets.len()
         ));
     }

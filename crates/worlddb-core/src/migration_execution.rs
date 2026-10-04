@@ -2844,6 +2844,8 @@ mod tests {
             }
             Record::PredicateDefinition(value) => Some(SchemaDefinition::Predicate(value.clone())),
             Record::EventKindDefinition(value) => Some(SchemaDefinition::EventKind(value.clone())),
+            Record::TimelineDefinition(value) => Some(SchemaDefinition::Timeline(value.clone())),
+            Record::TimeUnitDefinition(value) => Some(SchemaDefinition::TimeUnit(value.clone())),
             _ => None,
         }
     }

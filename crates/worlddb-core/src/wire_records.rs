@@ -16,7 +16,7 @@ use crate::{
     PerspectiveDefinitionRevision, PerspectiveRetirement, PredicateDefinition, ProvenanceEdge,
     ProvenanceRetraction, RecordRef, RecordRefWireTag, ReplacementBoundary,
     ReplacementBoundaryRetraction, ReplacementBoundaryValidityClosure, Revision, Source,
-    TransferLineage,
+    TimeUnitDefinition, TimelineDefinition, TransferLineage,
 };
 use std::collections::BTreeMap;
 
@@ -60,6 +60,10 @@ pub enum RecordKind {
     MigrationRun = 0x100c,
     /// Identity binding for one migration step commit.
     MigrationStepCommitIdentity = 0x100d,
+    /// One revision of a project-wide Timeline definition.
+    TimelineDefinition = 0x100e,
+    /// One revision of a project-wide TimeUnit definition.
+    TimeUnitDefinition = 0x100f,
     /// Immutable assertion proposition and validity.
     Assertion = 0x1101,
     /// Assertion world-time validity closure.
@@ -110,7 +114,7 @@ pub enum RecordKind {
 
 impl RecordKind {
     /// Every record kind in canonical numeric order.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 38] = [
         Self::HistorySpaceDefinition,
         Self::Entity,
         Self::EntityRetirement,
@@ -124,6 +128,8 @@ impl RecordKind {
         Self::MigrationPlan,
         Self::MigrationRun,
         Self::MigrationStepCommitIdentity,
+        Self::TimelineDefinition,
+        Self::TimeUnitDefinition,
         Self::Assertion,
         Self::AssertionValidityClosure,
         Self::AssertionRetraction,
@@ -169,6 +175,8 @@ impl RecordKind {
             Record::EntityTypeDefinition(_) => Self::EntityTypeDefinition,
             Record::PredicateDefinition(_) => Self::PredicateDefinition,
             Record::EventKindDefinition(_) => Self::EventKindDefinition,
+            Record::TimelineDefinition(_) => Self::TimelineDefinition,
+            Record::TimeUnitDefinition(_) => Self::TimeUnitDefinition,
             Record::MigrationPlan(_) => Self::MigrationPlan,
             Record::MigrationRun(_) => Self::MigrationRun,
             Record::MigrationStepCommitIdentity(_) => Self::MigrationStepCommitIdentity,
@@ -215,6 +223,8 @@ impl RecordKind {
             0x100b => Some(Self::MigrationPlan),
             0x100c => Some(Self::MigrationRun),
             0x100d => Some(Self::MigrationStepCommitIdentity),
+            0x100e => Some(Self::TimelineDefinition),
+            0x100f => Some(Self::TimeUnitDefinition),
             0x1101 => Some(Self::Assertion),
             0x1102 => Some(Self::AssertionValidityClosure),
             0x1103 => Some(Self::AssertionRetraction),
@@ -266,6 +276,10 @@ pub enum Record {
     PredicateDefinition(PredicateDefinition),
     /// One EventKind schema revision, including roles and attributes.
     EventKindDefinition(EventKindDefinition),
+    /// One project-wide Timeline schema revision.
+    TimelineDefinition(TimelineDefinition),
+    /// One project-wide TimeUnit schema revision.
+    TimeUnitDefinition(TimeUnitDefinition),
     /// Immutable migration plan outline.
     MigrationPlan(MigrationPlan),
     /// Snapshot of a concrete migration run state.
@@ -895,6 +909,14 @@ fn encode_payload(record: &Record) -> Result<(RecordKind, Vec<u8>), RecordCodecE
             RecordKind::EventKindDefinition,
             schema::encode_event_kind(value)?,
         )),
+        Record::TimelineDefinition(value) => Ok((
+            RecordKind::TimelineDefinition,
+            schema::encode_timeline(value)?,
+        )),
+        Record::TimeUnitDefinition(value) => Ok((
+            RecordKind::TimeUnitDefinition,
+            schema::encode_time_unit(value)?,
+        )),
         Record::MigrationPlan(value) => {
             Ok((RecordKind::MigrationPlan, migrations::encode_plan(value)?))
         }
@@ -1016,6 +1038,12 @@ fn decode_payload(
         }
         RecordKind::EventKindDefinition => {
             schema::decode_event_kind(payload, limits).map(Record::EventKindDefinition)
+        }
+        RecordKind::TimelineDefinition => {
+            schema::decode_timeline(payload, limits).map(Record::TimelineDefinition)
+        }
+        RecordKind::TimeUnitDefinition => {
+            schema::decode_time_unit(payload, limits).map(Record::TimeUnitDefinition)
         }
         RecordKind::MigrationPlan => {
             migrations::decode_plan(payload, limits).map(Record::MigrationPlan)

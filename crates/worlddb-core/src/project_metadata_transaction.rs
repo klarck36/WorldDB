@@ -454,7 +454,9 @@ fn authorize_metadata_records(
             }
             Record::EntityTypeDefinition(_)
             | Record::PredicateDefinition(_)
-            | Record::EventKindDefinition(_) => (Capability::SchemaManage, PolicyTarget::default()),
+            | Record::EventKindDefinition(_)
+            | Record::TimelineDefinition(_)
+            | Record::TimeUnitDefinition(_) => (Capability::SchemaManage, PolicyTarget::default()),
             _ => continue,
         };
         require(policy, principal, capability, target)?;
@@ -559,6 +561,8 @@ fn is_project_metadata_record(record: &Record) -> bool {
             | Record::EntityTypeDefinition(_)
             | Record::PredicateDefinition(_)
             | Record::EventKindDefinition(_)
+            | Record::TimelineDefinition(_)
+            | Record::TimeUnitDefinition(_)
     )
 }
 
@@ -569,6 +573,10 @@ fn schema_key(definition: &SchemaDefinition) -> SchemaKey {
         SchemaDefinition::EntityType(value) => SchemaKey::EntityType(value.entity_type_id()),
         SchemaDefinition::Predicate(value) => SchemaKey::Predicate(value.predicate_id()),
         SchemaDefinition::EventKind(value) => SchemaKey::EventKind(value.event_kind_id()),
+        SchemaDefinition::Timeline(value) => SchemaKey::Timeline(value.timeline_id()),
+        SchemaDefinition::TimeUnit(value) => {
+            SchemaKey::TimeUnit(value.symbol().as_str().to_owned())
+        }
     }
 }
 
@@ -579,6 +587,8 @@ fn schema_definition_revision(definition: &SchemaDefinition) -> Revision {
         SchemaDefinition::EntityType(value) => value.created_revision(),
         SchemaDefinition::Predicate(value) => value.created_revision(),
         SchemaDefinition::EventKind(value) => value.created_revision(),
+        SchemaDefinition::Timeline(value) => value.created_revision(),
+        SchemaDefinition::TimeUnit(value) => value.created_revision(),
     }
 }
 
@@ -591,6 +601,8 @@ fn encode_schema_definition(
         SchemaDefinition::EntityType(value) => Record::EntityTypeDefinition(value.clone()),
         SchemaDefinition::Predicate(value) => Record::PredicateDefinition(value.clone()),
         SchemaDefinition::EventKind(value) => Record::EventKindDefinition(value.clone()),
+        SchemaDefinition::Timeline(value) => Record::TimelineDefinition(value.clone()),
+        SchemaDefinition::TimeUnit(value) => Record::TimeUnitDefinition(value.clone()),
     };
     Ok(encode_record(&record)?)
 }
@@ -608,13 +620,15 @@ fn require(
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SchemaKey {
     Layer(LayerId),
     LayerSnapshot,
     EntityType(EntityTypeId),
     Predicate(PredicateId),
     EventKind(crate::ids::EventKindId),
+    Timeline(crate::ids::TimelineId),
+    TimeUnit(String),
 }
 
 /// Invalid metadata authorization, history preservation, or shared post-state.
@@ -1075,6 +1089,8 @@ mod tests {
                     SchemaDefinition::EventKind(value) => {
                         Record::EventKindDefinition(value.clone())
                     }
+                    SchemaDefinition::Timeline(value) => Record::TimelineDefinition(value.clone()),
+                    SchemaDefinition::TimeUnit(value) => Record::TimeUnitDefinition(value.clone()),
                 }),
         );
         records

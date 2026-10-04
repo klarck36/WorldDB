@@ -469,6 +469,8 @@ fn schema_definition(record: &Record) -> Option<SchemaDefinition> {
         Record::EntityTypeDefinition(value) => Some(SchemaDefinition::EntityType(value.clone())),
         Record::PredicateDefinition(value) => Some(SchemaDefinition::Predicate(value.clone())),
         Record::EventKindDefinition(value) => Some(SchemaDefinition::EventKind(value.clone())),
+        Record::TimelineDefinition(value) => Some(SchemaDefinition::Timeline(value.clone())),
+        Record::TimeUnitDefinition(value) => Some(SchemaDefinition::TimeUnit(value.clone())),
         _ => None,
     }
 }
@@ -480,6 +482,8 @@ fn definition_revision(definition: &SchemaDefinition) -> Revision {
         SchemaDefinition::EntityType(value) => value.created_revision(),
         SchemaDefinition::Predicate(value) => value.created_revision(),
         SchemaDefinition::EventKind(value) => value.created_revision(),
+        SchemaDefinition::Timeline(value) => value.created_revision(),
+        SchemaDefinition::TimeUnit(value) => value.created_revision(),
     }
 }
 
@@ -527,6 +531,25 @@ fn normalize_definition_revision(
             .map_err(|_| SchemaManagementError::InvalidCandidate("event schema is invalid"))?;
             SchemaDefinition::EventKind(rebuilt)
         }
+        Record::TimelineDefinition(value) => {
+            SchemaDefinition::Timeline(worlddb_core::TimelineDefinition::new(
+                value.timeline_id(),
+                value.symbol().clone(),
+                value.calendar(),
+                value.lifecycle(),
+                revision,
+            ))
+        }
+        Record::TimeUnitDefinition(value) => {
+            let rebuilt = worlddb_core::TimeUnitDefinition::new(
+                value.symbol().clone(),
+                value.nanoseconds_per_tick().get(),
+                value.lifecycle(),
+                revision,
+            )
+            .map_err(|_| SchemaManagementError::InvalidCandidate("TimeUnit scale is invalid"))?;
+            SchemaDefinition::TimeUnit(rebuilt)
+        }
         _ => {
             return Err(SchemaManagementError::InvalidCandidate(
                 "only EntityType, Predicate, and EventKind definitions can be managed here",
@@ -541,6 +564,8 @@ fn definition_record(definition: &SchemaDefinition) -> Result<Record, SchemaMana
         SchemaDefinition::EntityType(value) => Ok(Record::EntityTypeDefinition(value.clone())),
         SchemaDefinition::Predicate(value) => Ok(Record::PredicateDefinition(value.clone())),
         SchemaDefinition::EventKind(value) => Ok(Record::EventKindDefinition(value.clone())),
+        SchemaDefinition::Timeline(value) => Ok(Record::TimelineDefinition(value.clone())),
+        SchemaDefinition::TimeUnit(value) => Ok(Record::TimeUnitDefinition(value.clone())),
         SchemaDefinition::Layer(_) | SchemaDefinition::LayerSnapshot(_) => {
             Err(SchemaManagementError::InvalidCandidate(
                 "layer definitions are managed by Branch/Layer management",
@@ -564,6 +589,8 @@ fn validate_symbol_grammar(definition: &SchemaDefinition) -> Result<(), SchemaMa
             );
             symbols
         }
+        SchemaDefinition::Timeline(value) => vec![value.symbol()],
+        SchemaDefinition::TimeUnit(value) => vec![value.symbol()],
         SchemaDefinition::Layer(_) | SchemaDefinition::LayerSnapshot(_) => Vec::new(),
     };
     for symbol in symbols {
@@ -607,6 +634,20 @@ fn validate_identity_changes(
                     *item,
                     SchemaDefinition::EventKind(found)
                         if found.event_kind_id() == value.event_kind_id()
+                )
+            }),
+            SchemaDefinition::Timeline(value) => base.definitions().iter().find(|item| {
+                matches!(
+                    *item,
+                    SchemaDefinition::Timeline(found)
+                        if found.timeline_id() == value.timeline_id()
+                )
+            }),
+            SchemaDefinition::TimeUnit(value) => base.definitions().iter().find(|item| {
+                matches!(
+                    *item,
+                    SchemaDefinition::TimeUnit(found)
+                        if found.symbol() == value.symbol()
                 )
             }),
             SchemaDefinition::Layer(_) | SchemaDefinition::LayerSnapshot(_) => None,
@@ -660,6 +701,20 @@ fn revise_lifecycle(
                 |_| SchemaManagementError::InvalidCandidate("lifecycle cannot move backward"),
             )?)
         }
+        (SchemaDefinition::Timeline(old), SchemaDefinition::Timeline(new))
+            if old.timeline_id() == new.timeline_id() =>
+        {
+            SchemaDefinition::Timeline(old.revise_lifecycle(lifecycle, revision).map_err(|_| {
+                SchemaManagementError::InvalidCandidate("lifecycle cannot move backward")
+            })?)
+        }
+        (SchemaDefinition::TimeUnit(old), SchemaDefinition::TimeUnit(new))
+            if old.symbol() == new.symbol() =>
+        {
+            SchemaDefinition::TimeUnit(old.revise_lifecycle(lifecycle, revision).map_err(|_| {
+                SchemaManagementError::InvalidCandidate("lifecycle cannot move backward")
+            })?)
+        }
         _ => {
             return Err(SchemaManagementError::InvalidCandidate(
                 "schema family or stable identity does not match",
@@ -674,6 +729,8 @@ fn lifecycle(definition: &SchemaDefinition) -> Lifecycle {
         SchemaDefinition::EntityType(value) => value.lifecycle(),
         SchemaDefinition::Predicate(value) => value.lifecycle(),
         SchemaDefinition::EventKind(value) => value.lifecycle(),
+        SchemaDefinition::Timeline(value) => value.lifecycle(),
+        SchemaDefinition::TimeUnit(value) => value.lifecycle(),
         SchemaDefinition::Layer(_) | SchemaDefinition::LayerSnapshot(_) => Lifecycle::Retired,
     }
 }
@@ -716,7 +773,10 @@ fn validate_references(snapshot: &SchemaSnapshot) -> Result<(), SchemaManagement
             SchemaDefinition::EntityType(_) => {}
             // Layer records remain part of the shared SchemaSnapshot, but this
             // manager never writes or validates their domain-specific rules.
-            SchemaDefinition::Layer(_) | SchemaDefinition::LayerSnapshot(_) => {}
+            SchemaDefinition::Layer(_)
+            | SchemaDefinition::LayerSnapshot(_)
+            | SchemaDefinition::Timeline(_)
+            | SchemaDefinition::TimeUnit(_) => {}
         }
     }
     Ok(())
@@ -852,7 +912,8 @@ mod tests {
         ConstraintSet, DomainId, EntityTypeConstraint, EntityTypeDefinition, EntityTypeId,
         GrantEffect, Lifecycle, PolicyRuleId, PolicyScope, PolicySubject, PredicateDefinition,
         PredicateDefinitionSpec, PredicateId, Principal, Record, ResolutionPolicy, SchemaRevision,
-        SecurityPolicyChange, SecurityPolicyRecord, SecurityPolicySnapshot, Symbol, ValueKind,
+        SecurityPolicyChange, SecurityPolicyRecord, SecurityPolicySnapshot, Symbol,
+        TimeUnitDefinition, TimelineCalendarProfile, TimelineDefinition, TimelineId, ValueKind,
     };
 
     use crate::{
@@ -1094,6 +1155,193 @@ mod tests {
             .map_err(|error| error.to_string())?;
         if !report.is_clean() {
             return Err("schema publication failed storage verification".to_owned());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn time_registry_publication_is_persistent_and_mappings_are_immutable() -> Result<(), String> {
+        let area = TempArea::create()?;
+        let database = area.database();
+        let principal = create_project(
+            &database,
+            &[
+                worlddb_core::Capability::SchemaRead,
+                worlddb_core::Capability::SchemaManage,
+            ],
+        )?;
+        let layout = DatabaseLayout::open(&database).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let mut manager = FileSchemaManager::open(layout.clone(), &lock, principal)
+            .map_err(|error| error.to_string())?;
+        let base = manager.revision();
+        let timeline_id = id::<TimelineId>(80)?;
+        let timeline_symbol = Symbol::new("project_clock").map_err(|error| error.to_string())?;
+        let unit_symbol = Symbol::new("tick").map_err(|error| error.to_string())?;
+        let timeline = TimelineDefinition::new(
+            timeline_id,
+            timeline_symbol.clone(),
+            TimelineCalendarProfile::ProlepticGregorianUtc {
+                epoch_unix_nanoseconds: -500,
+            },
+            Lifecycle::Active,
+            worlddb_core::Revision::GENESIS,
+        );
+        let unit = TimeUnitDefinition::new(
+            unit_symbol.clone(),
+            1_000_000_000,
+            Lifecycle::Active,
+            worlddb_core::Revision::GENESIS,
+        )
+        .map_err(|error| error.to_string())?;
+        let published = manager
+            .publish(
+                base,
+                id::<worlddb_core::OperationId>(81)?,
+                vec![
+                    Record::TimelineDefinition(timeline),
+                    Record::TimeUnitDefinition(unit),
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        let schema = manager
+            .schema_at(worlddb_core::SchemaMode::Current, published.revision())
+            .map_err(|error| error.to_string())?;
+        let time = worlddb_core::Time::new(timeline_id, 3, unit_symbol.clone());
+        if schema
+            .resolve_time(&time, false)
+            .map(|value| value.nanoseconds())
+            != Ok(3_000_000_000)
+        {
+            return Err("persisted time registry did not normalize the Time value".to_owned());
+        }
+
+        let lifecycle_revision = manager.next_revision().map_err(|error| error.to_string())?;
+        let revised_timeline = schema
+            .timeline(timeline_id)
+            .ok_or_else(|| String::from("published Timeline is missing"))?
+            .revise_lifecycle(Lifecycle::Deprecated, lifecycle_revision)
+            .map_err(|error| error.to_string())?;
+        let revised_unit = schema
+            .time_unit(&unit_symbol)
+            .ok_or_else(|| String::from("published TimeUnit is missing"))?
+            .revise_lifecycle(Lifecycle::Deprecated, lifecycle_revision)
+            .map_err(|error| error.to_string())?;
+        let lifecycle_receipt = manager
+            .publish(
+                manager.revision(),
+                id::<worlddb_core::OperationId>(82)?,
+                vec![
+                    Record::TimelineDefinition(revised_timeline),
+                    Record::TimeUnitDefinition(revised_unit),
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        let historical = manager
+            .schema_at(
+                worlddb_core::SchemaMode::Explicit(SchemaRevision::from_published_revision(
+                    published.revision(),
+                )),
+                lifecycle_receipt.revision(),
+            )
+            .map_err(|error| error.to_string())?;
+        let current = manager
+            .schema_at(
+                worlddb_core::SchemaMode::Current,
+                lifecycle_receipt.revision(),
+            )
+            .map_err(|error| error.to_string())?;
+        if historical
+            .timeline(timeline_id)
+            .is_none_or(|definition| definition.lifecycle() != Lifecycle::Active)
+            || current
+                .timeline(timeline_id)
+                .is_none_or(|definition| definition.lifecycle() != Lifecycle::Deprecated)
+        {
+            return Err("Timeline lifecycle history was not preserved".to_owned());
+        }
+
+        drop(manager);
+        let mut reopened = FileSchemaManager::open(layout.clone(), &lock, principal)
+            .map_err(|error| error.to_string())?;
+        let reopened_schema = reopened
+            .schema_at(worlddb_core::SchemaMode::Current, reopened.revision())
+            .map_err(|error| error.to_string())?;
+        if reopened_schema
+            .time_unit(&unit_symbol)
+            .is_none_or(|definition| {
+                definition.lifecycle() != Lifecycle::Deprecated
+                    || definition.nanoseconds_per_tick().get() != 1_000_000_000
+            })
+        {
+            return Err("TimeUnit mapping did not survive storage reload".to_owned());
+        }
+        if reopened_schema.resolve_time(&time, false)
+            != Err(worlddb_core::TimeResolutionError::DeprecatedTimeline(
+                timeline_id,
+            ))
+            || reopened_schema
+                .resolve_time(&time, true)
+                .map(|value| value.nanoseconds())
+                != Ok(3_000_000_000)
+        {
+            return Err("current time resolution did not preserve lifecycle policy".to_owned());
+        }
+        let reopened_historical = reopened
+            .schema_at(
+                worlddb_core::SchemaMode::Explicit(SchemaRevision::from_published_revision(
+                    published.revision(),
+                )),
+                reopened.revision(),
+            )
+            .map_err(|error| error.to_string())?;
+        if reopened_historical
+            .timeline(timeline_id)
+            .is_none_or(|definition| definition.lifecycle() != Lifecycle::Active)
+            || reopened_historical
+                .time_unit(&unit_symbol)
+                .is_none_or(|definition| definition.lifecycle() != Lifecycle::Active)
+            || reopened_historical
+                .resolve_time(&time, false)
+                .map(|value| value.nanoseconds())
+                != Ok(3_000_000_000)
+        {
+            return Err("explicit historical time snapshot did not survive reopen".to_owned());
+        }
+
+        let changed_timeline = TimelineDefinition::new(
+            timeline_id,
+            timeline_symbol,
+            TimelineCalendarProfile::ProlepticGregorianUtc {
+                epoch_unix_nanoseconds: -499,
+            },
+            Lifecycle::Deprecated,
+            worlddb_core::Revision::GENESIS,
+        );
+        let rejected = reopened.publish(
+            reopened.revision(),
+            id::<worlddb_core::OperationId>(83)?,
+            vec![Record::TimelineDefinition(changed_timeline)],
+        );
+        if !matches!(rejected, Err(SchemaManagementError::InvalidCandidate(_))) {
+            return Err("Timeline calendar mapping change was accepted".to_owned());
+        }
+        let changed_unit = TimeUnitDefinition::new(
+            unit_symbol,
+            2_000_000_000,
+            Lifecycle::Deprecated,
+            worlddb_core::Revision::GENESIS,
+        )
+        .map_err(|error| error.to_string())?;
+        let rejected = reopened.publish(
+            reopened.revision(),
+            id::<worlddb_core::OperationId>(84)?,
+            vec![Record::TimeUnitDefinition(changed_unit)],
+        );
+        if !matches!(rejected, Err(SchemaManagementError::InvalidCandidate(_))) {
+            return Err("TimeUnit nanosecond scale change was accepted".to_owned());
         }
         Ok(())
     }

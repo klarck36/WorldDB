@@ -1336,6 +1336,8 @@ fn record_revision(record: &Record) -> Option<Revision> {
         Record::EntityTypeDefinition(value) => value.created_revision(),
         Record::PredicateDefinition(value) => value.created_revision(),
         Record::EventKindDefinition(value) => value.created_revision(),
+        Record::TimelineDefinition(value) => value.created_revision(),
+        Record::TimeUnitDefinition(value) => value.created_revision(),
         Record::MigrationPlan(_)
         | Record::MigrationRun(_)
         | Record::MigrationStepCommitIdentity(_) => {

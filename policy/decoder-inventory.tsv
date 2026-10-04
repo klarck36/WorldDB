@@ -9,6 +9,8 @@ record.layer_schema_snapshot	record	record/layer_schema_snapshot
 record.entity_type_definition	record	record/entity_type_definition
 record.predicate_definition	record	record/predicate_definition
 record.event_kind_definition	record	record/event_kind_definition
+record.timeline_definition	record	record/timeline_definition
+record.time_unit_definition	record	record/time_unit_definition
 record.migration_plan	record	record/migration_plan
 record.migration_run	record	record/migration_run
 record.migration_step_commit_identity	record	record/migration_step_commit

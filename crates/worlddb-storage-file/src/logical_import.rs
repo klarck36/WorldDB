@@ -526,6 +526,9 @@ fn collect_importable_identities(
                     LogicalImportIdentity::EventAttribute(attribute.event_attribute_id())
                 }));
             }
+            Record::TimelineDefinition(definition) => {
+                identities.insert(LogicalImportIdentity::Timeline(definition.timeline_id()));
+            }
             _ => {}
         }
         if let Some(reference) = record_ref(value) {
@@ -586,6 +589,9 @@ pub(crate) fn record_defined_identities(record: &Record) -> Vec<LogicalImportIde
             identities.extend(value.attributes().iter().map(|attribute| {
                 LogicalImportIdentity::EventAttribute(attribute.event_attribute_id())
             }));
+        }
+        Record::TimelineDefinition(value) => {
+            identities.insert(LogicalImportIdentity::Timeline(value.timeline_id()));
         }
         _ => {}
     }
@@ -875,6 +881,8 @@ pub(crate) fn record_references(record: &Record) -> Vec<LogicalImportIdentity> {
         Record::PerspectiveDefinitionRevision(_)
         | Record::LayerDefinition(_)
         | Record::EntityTypeDefinition(_)
+        | Record::TimelineDefinition(_)
+        | Record::TimeUnitDefinition(_)
         | Record::Source(_)
         | Record::MigrationPlan(_)
         | Record::MigrationRun(_)

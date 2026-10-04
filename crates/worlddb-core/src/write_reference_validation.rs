@@ -1,6 +1,5 @@
 //! Referential and context validation for atomic assertion/event write batches.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::assertions::AssertionDraft;
@@ -19,8 +18,8 @@ use crate::values::{Symbol, Value};
 /// Pinned project catalogs used by one write validation attempt.
 ///
 /// The caller supplies every view from the same post-transaction snapshot.
-/// Timeline lifecycle is passed separately until timeline definitions join the
-/// public schema record model.
+/// Timeline and TimeUnit definitions are resolved from the schema snapshot;
+/// callers cannot supply a registry that disagrees with persisted schema.
 pub struct WriteReferenceSnapshot<'a> {
     /// Complete retained HistorySpace ancestry at the selected snapshot.
     pub history_spaces: &'a HistorySpaceCatalog,
@@ -32,10 +31,6 @@ pub struct WriteReferenceSnapshot<'a> {
     pub perspectives: &'a PerspectiveCatalogSnapshot,
     /// Schema definitions at the selected post-transaction revision.
     pub schema: &'a SchemaSnapshot,
-    /// Lifecycle states for registered timelines in that same schema view.
-    pub timelines: &'a BTreeMap<TimelineId, Lifecycle>,
-    /// Lifecycle states for registered time units in that same schema view.
-    pub time_units: &'a BTreeMap<Symbol, Lifecycle>,
 }
 
 /// Assertion and Event drafts whose project references and contexts resolve.
@@ -122,25 +117,10 @@ pub fn validate_write_references(
             require_entity_type(*target, target_entity.entity_type_id(), constraint)?;
         }
         if let Value::Time(time) = assertion.value() {
-            require_timeline_id(snapshot, time.timeline_id())?;
-            match snapshot.time_units.get(time.unit()) {
-                None => {
-                    return Err(WriteReferenceValidationError::UnknownTimeUnit(
-                        time.unit().clone(),
-                    ));
-                }
-                Some(Lifecycle::Active) => {}
-                Some(Lifecycle::Deprecated) => {
-                    return Err(WriteReferenceValidationError::DeprecatedTimeUnit(
-                        time.unit().clone(),
-                    ));
-                }
-                Some(Lifecycle::Retired) => {
-                    return Err(WriteReferenceValidationError::RetiredTimeUnit(
-                        time.unit().clone(),
-                    ));
-                }
-            }
+            snapshot
+                .schema
+                .resolve_time(time, false)
+                .map_err(map_time_resolution_error)?;
         }
         require_timeline_id(snapshot, assertion.validity().interval().timeline().id())?;
     }
@@ -327,12 +307,42 @@ fn require_timeline_id(
     snapshot: &WriteReferenceSnapshot<'_>,
     id: TimelineId,
 ) -> Result<(), WriteReferenceValidationError> {
-    match snapshot.timelines.get(&id) {
+    match snapshot
+        .schema
+        .timeline(id)
+        .map(|definition| definition.lifecycle())
+    {
         None => Err(WriteReferenceValidationError::UnknownTimeline(id)),
         Some(Lifecycle::Retired) => Err(WriteReferenceValidationError::RetiredTimeline(id)),
         Some(Lifecycle::Active) => Ok(()),
         Some(Lifecycle::Deprecated) => {
             Err(WriteReferenceValidationError::DeprecatedTimelineOptInRequired(id))
+        }
+    }
+}
+
+fn map_time_resolution_error(error: crate::TimeResolutionError) -> WriteReferenceValidationError {
+    match error {
+        crate::TimeResolutionError::UnknownTimeline(id) => {
+            WriteReferenceValidationError::UnknownTimeline(id)
+        }
+        crate::TimeResolutionError::RetiredTimeline(id) => {
+            WriteReferenceValidationError::RetiredTimeline(id)
+        }
+        crate::TimeResolutionError::DeprecatedTimeline(id) => {
+            WriteReferenceValidationError::DeprecatedTimelineOptInRequired(id)
+        }
+        crate::TimeResolutionError::UnknownTimeUnit(symbol) => {
+            WriteReferenceValidationError::UnknownTimeUnit(symbol)
+        }
+        crate::TimeResolutionError::RetiredTimeUnit(symbol) => {
+            WriteReferenceValidationError::RetiredTimeUnit(symbol)
+        }
+        crate::TimeResolutionError::DeprecatedTimeUnit(symbol) => {
+            WriteReferenceValidationError::DeprecatedTimeUnit(symbol)
+        }
+        crate::TimeResolutionError::Overflow => {
+            WriteReferenceValidationError::TimeNormalizationOverflow
         }
     }
 }
@@ -439,6 +449,8 @@ pub enum WriteReferenceValidationError {
     DeprecatedTimeUnit(Symbol),
     /// A retired TimeUnit cannot be used for a new time value.
     RetiredTimeUnit(Symbol),
+    /// A Time value's ticks could not be normalized to signed i128 nanoseconds.
+    TimeNormalizationOverflow,
 }
 
 /// Versioned catalog family checked for snapshot alignment.
@@ -462,7 +474,7 @@ impl std::error::Error for WriteReferenceValidationError {}
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
     use std::error::Error;
     use std::fmt;
 
@@ -587,8 +599,6 @@ mod tests {
         entities: EntityCatalogSnapshot,
         perspectives: PerspectiveCatalogSnapshot,
         schema: crate::schema_history::SchemaSnapshot,
-        timelines: BTreeMap<TimelineId, Lifecycle>,
-        time_units: BTreeMap<Symbol, Lifecycle>,
         history_space_id: HistorySpaceId,
         perspective_id: PerspectiveId,
         layer_id: LayerId,
@@ -709,13 +719,22 @@ mod tests {
                 SchemaDefinition::EntityType(entity_type),
                 SchemaDefinition::Predicate(predicate),
                 SchemaDefinition::EventKind(event_kind.clone()),
+                SchemaDefinition::Timeline(crate::TimelineDefinition::new(
+                    timeline_id,
+                    take!(Symbol::new("project_time")),
+                    crate::TimelineCalendarProfile::None,
+                    Lifecycle::Active,
+                    revision,
+                )),
+                SchemaDefinition::TimeUnit(take!(crate::TimeUnitDefinition::new(
+                    take!(Symbol::new("tick")),
+                    2,
+                    Lifecycle::Active,
+                    revision,
+                ))),
             ],
         )?;
         let schema = take!(history.schema_at(SchemaMode::Current, revision));
-        let mut timelines = BTreeMap::new();
-        timelines.insert(timeline_id, Lifecycle::Active);
-        let mut time_units = BTreeMap::new();
-        time_units.insert(take!(Symbol::new("tick")), Lifecycle::Active);
 
         Ok(Fixture {
             history_spaces,
@@ -723,8 +742,6 @@ mod tests {
             entities,
             perspectives,
             schema,
-            timelines,
-            time_units,
             history_space_id,
             perspective_id,
             layer_id,
@@ -752,8 +769,6 @@ mod tests {
                 entities: &self.entities,
                 perspectives: &self.perspectives,
                 schema,
-                timelines: &self.timelines,
-                time_units: &self.time_units,
             }
         }
 
@@ -1112,7 +1127,7 @@ mod tests {
             Err(WriteReferenceValidationError::RetiredLayer(_))
         ));
 
-        fixture.timelines.clear();
+        fixture.timeline_id = take!(id::<TimelineId>(55));
         let assertion = fixture.assertion(fixture.layer_id)?;
         assert!(matches!(
             validate_write_references(vec![assertion], vec![], &fixture.snapshot()),
@@ -1284,6 +1299,12 @@ mod tests {
                 SchemaDefinition::EventKind(value) => {
                     crate::Record::EventKindDefinition(value.clone())
                 }
+                SchemaDefinition::Timeline(value) => {
+                    crate::Record::TimelineDefinition(value.clone())
+                }
+                SchemaDefinition::TimeUnit(value) => {
+                    crate::Record::TimeUnitDefinition(value.clone())
+                }
             });
         }
         records.extend([
@@ -1302,7 +1323,7 @@ mod tests {
             transaction.stage(record);
         }
         let committed = crate::commit_mixed_record_batch(transaction, |base, entries| {
-            if base != Revision::GENESIS || entries.len() != 8 {
+            if base != Revision::GENESIS || entries.len() != 10 {
                 return Err("mixed candidate was not complete".to_owned());
             }
             let mut family_counts = [0_usize; 6];
@@ -1310,7 +1331,9 @@ mod tests {
                 match record {
                     crate::Record::EntityTypeDefinition(_)
                     | crate::Record::PredicateDefinition(_)
-                    | crate::Record::EventKindDefinition(_) => family_counts[0] += 1,
+                    | crate::Record::EventKindDefinition(_)
+                    | crate::Record::TimelineDefinition(_)
+                    | crate::Record::TimeUnitDefinition(_) => family_counts[0] += 1,
                     crate::Record::Assertion(_) => family_counts[1] += 1,
                     crate::Record::Event(_) => family_counts[2] += 1,
                     crate::Record::Source(_) => family_counts[3] += 1,
@@ -1319,7 +1342,7 @@ mod tests {
                     _ => {}
                 }
             }
-            if family_counts != [3, 1, 1, 1, 1, 1] {
+            if family_counts != [5, 1, 1, 1, 1, 1] {
                 return Err("mixed batch did not contain each required record family".to_owned());
             }
             let staged_schema_definitions = entries
@@ -1339,6 +1362,12 @@ mod tests {
                     }
                     crate::Record::EventKindDefinition(value) => {
                         Some(SchemaDefinition::EventKind(value.clone()))
+                    }
+                    crate::Record::TimelineDefinition(value) => {
+                        Some(SchemaDefinition::Timeline(value.clone()))
+                    }
+                    crate::Record::TimeUnitDefinition(value) => {
+                        Some(SchemaDefinition::TimeUnit(value.clone()))
                     }
                     _ => None,
                 })
@@ -1427,7 +1456,7 @@ mod tests {
             .read_at(revision)
             .map_err(|error| TestError::Message(error.to_string()))?
             .collect::<Vec<_>>();
-        assert_eq!(committed_records.len(), 8);
+        assert_eq!(committed_records.len(), 10);
         assert!(
             committed_records
                 .iter()
@@ -1497,6 +1526,12 @@ mod tests {
                         crate::Record::EventKindDefinition(value) => {
                             Some(SchemaDefinition::EventKind(value.clone()))
                         }
+                        crate::Record::TimelineDefinition(value) => {
+                            Some(SchemaDefinition::Timeline(value.clone()))
+                        }
+                        crate::Record::TimeUnitDefinition(value) => {
+                            Some(SchemaDefinition::TimeUnit(value.clone()))
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>();
@@ -1542,23 +1577,62 @@ mod tests {
     #[test]
     fn time_values_require_active_registered_timeline_and_unit() -> Result<(), TestError> {
         let mut fixture = fixture()?;
-        fixture.time_units.clear();
+        let unknown_unit = take!(Symbol::new("unknown_tick"));
         let assertion = fixture.assertion_with_value(
             fixture.layer_id,
-            Value::Time(crate::Time::new(
-                fixture.timeline_id,
-                5,
-                take!(Symbol::new("tick")),
-            )),
+            Value::Time(crate::Time::new(fixture.timeline_id, 5, unknown_unit)),
         )?;
         assert!(matches!(
             validate_write_references(vec![assertion], vec![], &fixture.snapshot()),
             Err(WriteReferenceValidationError::UnknownTimeUnit(_))
         ));
 
-        fixture
-            .time_units
-            .insert(take!(Symbol::new("tick")), Lifecycle::Deprecated);
+        let assertion = fixture.assertion_with_value(
+            fixture.layer_id,
+            Value::Time(crate::Time::new(
+                fixture.timeline_id,
+                i128::MAX,
+                take!(Symbol::new("tick")),
+            )),
+        )?;
+        assert!(matches!(
+            validate_write_references(vec![assertion], vec![], &fixture.snapshot()),
+            Err(WriteReferenceValidationError::TimeNormalizationOverflow)
+        ));
+
+        let current_revision = fixture.schema.schema_revision().revision();
+        let deprecated_revision = current_revision
+            .next_commit()
+            .map_err(|error| TestError::Message(error.to_string()))?;
+        let mut history = SchemaHistoryReferenceModel::new();
+        history.publish(current_revision, fixture.schema.definitions().to_vec())?;
+        let tick_symbol = take!(Symbol::new("tick"));
+        let tick = fixture
+            .schema
+            .time_unit(&tick_symbol)
+            .ok_or_else(|| TestError::Message("fixture TimeUnit missing".to_owned()))?;
+        let deprecated_tick =
+            take!(tick.revise_lifecycle(Lifecycle::Deprecated, deprecated_revision,));
+        history.publish(
+            deprecated_revision,
+            vec![SchemaDefinition::TimeUnit(deprecated_tick)],
+        )?;
+        let deprecated_schema = take!(history.schema_at(SchemaMode::Current, deprecated_revision,));
+        fixture.layers = fixture.layers.revise(
+            SchemaRevision::from_published_revision(deprecated_revision),
+            fixture.layers.definitions().to_vec(),
+            fixture.layers.base_layer_id(),
+        )?;
+        fixture.entities = fixture.entities.revise(
+            deprecated_revision,
+            fixture.entities.entities().to_vec(),
+            fixture.entities.retirements().to_vec(),
+        )?;
+        fixture.perspectives = fixture.perspectives.revise(
+            deprecated_revision,
+            fixture.perspectives.definitions().to_vec(),
+            fixture.perspectives.retirements().to_vec(),
+        )?;
         let assertion = fixture.assertion_with_value(
             fixture.layer_id,
             Value::Time(crate::Time::new(
@@ -1567,10 +1641,19 @@ mod tests {
                 take!(Symbol::new("tick")),
             )),
         )?;
-        assert!(matches!(
-            validate_write_references(vec![assertion], vec![], &fixture.snapshot()),
-            Err(WriteReferenceValidationError::DeprecatedTimeUnit(_))
-        ));
+        let validation_error = validate_write_references(
+            vec![assertion],
+            vec![],
+            &fixture.snapshot_with_schema(&deprecated_schema),
+        )
+        .err();
+        assert!(
+            matches!(
+                validation_error,
+                Some(WriteReferenceValidationError::DeprecatedTimeUnit(_))
+            ),
+            "unexpected time reference failure: {validation_error:?}"
+        );
         Ok(())
     }
 }

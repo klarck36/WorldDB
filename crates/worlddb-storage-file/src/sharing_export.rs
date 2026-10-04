@@ -360,6 +360,8 @@ fn is_global_kind(kind: RecordKind) -> bool {
             | RecordKind::EntityTypeDefinition
             | RecordKind::PredicateDefinition
             | RecordKind::EventKindDefinition
+            | RecordKind::TimelineDefinition
+            | RecordKind::TimeUnitDefinition
             | RecordKind::MigrationPlan
             | RecordKind::MigrationRun
             | RecordKind::MigrationStepCommitIdentity
@@ -383,7 +385,9 @@ fn required_kind_capabilities(kind: RecordKind) -> Vec<Capability> {
         | RecordKind::LayerSchemaSnapshot
         | RecordKind::EntityTypeDefinition
         | RecordKind::PredicateDefinition
-        | RecordKind::EventKindDefinition => vec![Capability::SchemaRead],
+        | RecordKind::EventKindDefinition
+        | RecordKind::TimelineDefinition
+        | RecordKind::TimeUnitDefinition => vec![Capability::SchemaRead],
         RecordKind::MigrationPlan
         | RecordKind::MigrationRun
         | RecordKind::MigrationStepCommitIdentity => vec![Capability::MigrationPlan],
@@ -1206,6 +1210,8 @@ fn record_revision(record: &Record) -> Option<Revision> {
         Record::EntityTypeDefinition(value) => value.created_revision(),
         Record::PredicateDefinition(value) => value.created_revision(),
         Record::EventKindDefinition(value) => value.created_revision(),
+        Record::TimelineDefinition(value) => value.created_revision(),
+        Record::TimeUnitDefinition(value) => value.created_revision(),
         Record::MigrationPlan(_)
         | Record::MigrationRun(_)
         | Record::MigrationStepCommitIdentity(_) => return None,

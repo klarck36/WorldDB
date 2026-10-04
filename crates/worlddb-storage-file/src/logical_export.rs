@@ -15,8 +15,8 @@ use crate::{
     StorageVerifier, StorageVerifyError, WalError, WalPrepareLog, WriterLockError,
 };
 
-const LOGICAL_EXPORT_MAGIC: &[u8; 8] = b"WDBLEX\0\x01";
-const LOGICAL_EXPORT_CONTEXT: &[u8] = b"WorldDB.LogicalExport.v1\0";
+const LOGICAL_EXPORT_MAGIC: &[u8; 8] = b"WDBLEX\0\x02";
+const LOGICAL_EXPORT_CONTEXT: &[u8] = b"WorldDB.LogicalExport.v2\0";
 const LOGICAL_EXPORT_MAX_BYTES: usize = 512 * 1024 * 1024;
 const LOGICAL_EXPORT_MAX_RECORDS: usize = 1_000_000;
 const LOGICAL_EXPORT_MAX_SPACES: usize = 65_536;
@@ -1318,6 +1318,8 @@ pub(crate) fn record_revision(record: &Record) -> Option<Revision> {
         Record::EntityTypeDefinition(value) => value.created_revision(),
         Record::PredicateDefinition(value) => value.created_revision(),
         Record::EventKindDefinition(value) => value.created_revision(),
+        Record::TimelineDefinition(value) => value.created_revision(),
+        Record::TimeUnitDefinition(value) => value.created_revision(),
         Record::MigrationPlan(_)
         | Record::MigrationRun(_)
         | Record::MigrationStepCommitIdentity(_) => {
