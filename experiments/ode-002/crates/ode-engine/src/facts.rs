@@ -10,18 +10,22 @@ use worlddb_core::{
     AssertionValidity, Bytes, ContextKey, Decimal, DomainId, EntityId, EpistemicMode,
     EventAttributeId, EventAttributeValue, EventDraft, EventId, EventKindId, EventMaskId,
     EventMaskRetractionId, EventParticipant, EventRelationId, EventRelationInputKind,
-    EventRelationRetractionId, EventRetractionId, EventRoleId, EventSpanClosureId, EventTime,
-    EventRelationKind, HistorySpaceId, Int, LayerId, LayerSelection, MaskId, MaskRetractionId, MaskSelector,
-    MaskSlotSelector, MultiValueConflict, MultiValueEntry, MultiValueOutcome, NonEmptySet,
-    PerspectiveId, PerspectiveScope, Polarity, PredicateId, PropositionKey, ProvenanceId,
-    QueryEngineOutput, RecordRef, RecordedAsOf,
-    ReplacementBoundaryId, ReplacementBoundaryRetractionId, ResolutionPreview, ResolvedOutcome,
-    ResolvedView, Revision, SchemaDefinition, SchemaMode, Subject, Symbol, Time, TimeInterval,
-    Timeline, TimelineId, UInt, Value, WorldTime, WorldTimeSelector,
+    EventRelationKind, EventRelationRetractionId, EventRetractionId, EventRoleId,
+    EventSpanClosureId, EventTime, EvidenceId, EvidenceRelation, EvidenceRetractionId,
+    EvidenceTargetRef, HistorySpaceId, Int, LayerId, LayerSelection, MaskId, MaskRetractionId,
+    MaskSelector, MaskSlotSelector, MultiValueConflict, MultiValueEntry, MultiValueOutcome,
+    NonEmptySet, PerspectiveId, PerspectiveScope, Polarity, PredicateId, PropositionKey,
+    ProvenanceEndpointRef, ProvenanceId, ProvenanceRelation, ProvenanceRetractionId,
+    QueryEngineOutput, RecordRef, RecordedAsOf, ReplacementBoundaryId,
+    ReplacementBoundaryRetractionId, ResolutionPreview, ResolvedOutcome, ResolvedView, Revision,
+    SchemaDefinition, SchemaMode, SourceContentDigest, SourceId, SourceLocator, SourceMetadata,
+    SourceMetadataEntry, Subject, Symbol, Time, TimeInterval, Timeline, TimelineId, UInt, Value,
+    WorldTime, WorldTimeSelector,
 };
 use worlddb_storage_file::{
     AssertionCorrectionReceipt, EventCorrectionReceipt, FactResolutionPreviewRequest, FactSnapshot,
-    FileFactManager, FileSchemaManager, ReplacementBoundaryDraft,
+    FileFactManager, FileSchemaManager, ReplacementBoundaryDraft, SourceDraft,
+    SourceSupersessionDraft,
 };
 
 use crate::{EngineError, EngineHost, EpistemicModeInput};
@@ -32,6 +36,51 @@ use crate::{EngineError, EngineHost, EpistemicModeInput};
 pub enum FactCommand {
     /// Lists visible factual record identities and lifecycle state.
     Snapshot,
+    /// Creates a project-wide Source with typed fields and optional supersession lineage.
+    CreateSource {
+        expected_base_revision: u64,
+        source_kind: String,
+        locator: Option<String>,
+        content_digest_hex: Option<String>,
+        #[serde(default)]
+        metadata: Vec<SourceMetadataInput>,
+    },
+    /// Replaces Source metadata with a new Source and an explicit DerivedFrom edge.
+    SupersedeSource {
+        expected_base_revision: u64,
+        superseded_source_id: String,
+        source_kind: String,
+        locator: Option<String>,
+        content_digest_hex: Option<String>,
+        #[serde(default)]
+        metadata: Vec<SourceMetadataInput>,
+    },
+    /// Adds Evidence from a Source to one authorized closed target.
+    CreateEvidence {
+        expected_base_revision: u64,
+        source_id: String,
+        target: EndpointInput,
+        relation: EvidenceRelationInput,
+    },
+    /// Adds one typed Provenance edge between authorized closed endpoints.
+    CreateProvenance {
+        expected_base_revision: u64,
+        from: EndpointInput,
+        to: EndpointInput,
+        relation: ProvenanceRelationInput,
+    },
+    /// Explicitly retracts one Evidence edge.
+    RetractEvidence {
+        expected_base_revision: u64,
+        evidence_id: String,
+        reason: String,
+    },
+    /// Explicitly retracts one Provenance edge.
+    RetractProvenance {
+        expected_base_revision: u64,
+        provenance_id: String,
+        reason: String,
+    },
     /// Publishes one immutable Assertion.
     CreateAssertion {
         expected_base_revision: u64,
@@ -120,6 +169,67 @@ pub enum FactCommand {
         predicate_id: String,
         world_time: WorldTimeSelectorInput,
     },
+}
+
+/// One named typed metadata value for a Source.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceMetadataInput {
+    pub key: String,
+    pub value: FactValueInput,
+}
+
+/// Closed set of Source, Evidence, Provenance, and supported lifecycle endpoint families.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointFamilyInput {
+    Assertion,
+    Mask,
+    ReplacementBoundary,
+    Event,
+    EventMask,
+    Source,
+    Evidence,
+    Provenance,
+    AssertionValidityClosure,
+    AssertionRetraction,
+    MaskValidityClosure,
+    MaskRetraction,
+    ReplacementBoundaryValidityClosure,
+    ReplacementBoundaryRetraction,
+    EventSpanClosure,
+    EventRetraction,
+    EventMaskRetraction,
+    EventRelationRetraction,
+    EvidenceRetraction,
+    ProvenanceRetraction,
+    EntityRetirement,
+    PerspectiveRetirement,
+    ArchiveTransition,
+}
+
+/// Selects one closed endpoint family and typed UUID text.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EndpointInput {
+    pub family: EndpointFamilyInput,
+    pub record_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceRelationInput {
+    Supports,
+    Contradicts,
+    Documents,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceRelationInput {
+    Corrects,
+    DerivedFrom,
+    ResultedFrom,
 }
 
 /// Complete explicit replacement Assertion payload.
@@ -327,6 +437,55 @@ pub struct FactCatalogView {
     pub lifecycle_visible: bool,
     pub records: Vec<FactCatalogRecordView>,
     pub event_graph_guidance: Vec<String>,
+    pub sources: Vec<SourceView>,
+    pub evidence: Vec<EvidenceView>,
+    pub provenance: Vec<ProvenanceView>,
+    pub endpoint_options: Vec<EndpointOptionView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EndpointOptionView {
+    pub family: String,
+    pub record_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceView {
+    pub source_id: String,
+    pub created_revision: u64,
+    pub source_kind: String,
+    pub locator: Option<String>,
+    pub content_digest_hex: Option<String>,
+    pub metadata: Vec<SourceMetadataView>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SourceMetadataView {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EvidenceView {
+    pub evidence_id: String,
+    pub source_id: String,
+    pub target_family: String,
+    pub target_record_id: String,
+    pub relation: String,
+    pub created_revision: u64,
+    pub retracted: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ProvenanceView {
+    pub provenance_id: String,
+    pub from_family: String,
+    pub from_record_id: String,
+    pub to_family: String,
+    pub to_record_id: String,
+    pub relation: String,
+    pub created_revision: u64,
+    pub retracted: Option<bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -481,6 +640,167 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
             let snapshot = manager.snapshot_at(revision).map_err(fact_error)?;
             Ok(FactResponse::Catalog(fact_catalog_view(snapshot)?))
         }
+        FactCommand::CreateSource {
+            expected_base_revision,
+            source_kind,
+            locator,
+            content_digest_hex,
+            metadata,
+        } => {
+            let operation_id = operation_id()?;
+            let source_id = identity::<SourceId>("Source")?;
+            let draft = parse_source_fields(
+                source_id,
+                source_kind,
+                locator,
+                content_digest_hex,
+                metadata,
+            )?;
+            let receipt = manager
+                .create_source(revision(expected_base_revision)?, operation_id, draft)
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "source".to_owned(),
+                record_id: source_id.to_string(),
+            }))
+        }
+        FactCommand::SupersedeSource {
+            expected_base_revision,
+            superseded_source_id,
+            source_kind,
+            locator,
+            content_digest_hex,
+            metadata,
+        } => {
+            let operation_id = operation_id()?;
+            let source_id = identity::<SourceId>("replacement Source")?;
+            let provenance_id = identity::<ProvenanceId>("Source lineage")?;
+            let replacement = parse_source_fields(
+                source_id,
+                source_kind,
+                locator,
+                content_digest_hex,
+                metadata,
+            )?;
+            let receipt = manager
+                .supersede_source(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    SourceSupersessionDraft {
+                        replacement,
+                        provenance_id,
+                        superseded_source_id: parse_id::<SourceId>(
+                            &superseded_source_id,
+                            "Source",
+                        )?,
+                    },
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "source_superseded".to_owned(),
+                record_id: source_id.to_string(),
+            }))
+        }
+        FactCommand::CreateEvidence {
+            expected_base_revision,
+            source_id,
+            target,
+            relation,
+        } => {
+            let operation_id = operation_id()?;
+            let evidence_id = identity::<EvidenceId>("Evidence")?;
+            let receipt = manager
+                .create_evidence(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    evidence_id,
+                    parse_id::<SourceId>(&source_id, "Source")?,
+                    parse_evidence_target(target)?,
+                    relation.into(),
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "evidence".to_owned(),
+                record_id: evidence_id.to_string(),
+            }))
+        }
+        FactCommand::CreateProvenance {
+            expected_base_revision,
+            from,
+            to,
+            relation,
+        } => {
+            let operation_id = operation_id()?;
+            let provenance_id = identity::<ProvenanceId>("Provenance")?;
+            let receipt = manager
+                .create_provenance(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    provenance_id,
+                    parse_provenance_endpoint(from)?,
+                    parse_provenance_endpoint(to)?,
+                    relation.into(),
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "provenance".to_owned(),
+                record_id: provenance_id.to_string(),
+            }))
+        }
+        FactCommand::RetractEvidence {
+            expected_base_revision,
+            evidence_id,
+            reason,
+        } => {
+            let operation_id = operation_id()?;
+            let retraction_id = identity::<EvidenceRetractionId>("EvidenceRetraction")?;
+            let receipt = manager
+                .retract_evidence(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    retraction_id,
+                    parse_id::<EvidenceId>(&evidence_id, "Evidence")?,
+                    reason,
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "evidence_retraction".to_owned(),
+                record_id: retraction_id.to_string(),
+            }))
+        }
+        FactCommand::RetractProvenance {
+            expected_base_revision,
+            provenance_id,
+            reason,
+        } => {
+            let operation_id = operation_id()?;
+            let retraction_id = identity::<ProvenanceRetractionId>("ProvenanceRetraction")?;
+            let receipt = manager
+                .retract_provenance(
+                    revision(expected_base_revision)?,
+                    operation_id,
+                    retraction_id,
+                    parse_id::<ProvenanceId>(&provenance_id, "Provenance")?,
+                    reason,
+                )
+                .map_err(fact_error)?;
+            Ok(FactResponse::Published(FactPublicationView {
+                operation_id: receipt.operation_id().to_string(),
+                revision: receipt.revision().value(),
+                family: "provenance_retraction".to_owned(),
+                record_id: retraction_id.to_string(),
+            }))
+        }
         FactCommand::CreateAssertion {
             expected_base_revision,
             context,
@@ -633,13 +953,13 @@ fn execute(engine: &EngineHost, command: FactCommand) -> Result<FactResponse, En
             let operation_id = operation_id()?;
             let record_id = identity::<EventRelationId>("EventRelation")?;
             let receipt = match manager.create_event_relation(
-                    revision(expected_base_revision)?,
-                    operation_id,
-                    record_id,
-                    parse_id::<EventId>(&from_event_id, "source Event")?,
-                    parse_id::<EventId>(&to_event_id, "destination Event")?,
-                    relation_kind.into(),
-                ) {
+                revision(expected_base_revision)?,
+                operation_id,
+                record_id,
+                parse_id::<EventId>(&from_event_id, "source Event")?,
+                parse_id::<EventId>(&to_event_id, "destination Event")?,
+                relation_kind.into(),
+            ) {
                 Ok(receipt) => receipt,
                 Err(worlddb_storage_file::FactManagementError::EventGraphConflict(explanation)) => {
                     return Ok(FactResponse::EventGraphConflict(EventGraphConflictView {
@@ -1095,6 +1415,97 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             time_end_nanoseconds: Some(close_at.nanoseconds().to_string()),
         });
     }
+    let sources = snapshot
+        .sources()
+        .iter()
+        .map(|value| SourceView {
+            source_id: value.id().to_string(),
+            created_revision: value.created_revision().value(),
+            source_kind: value.source_kind().as_str().to_owned(),
+            locator: value.locator().map(|locator| locator.as_str().to_owned()),
+            content_digest_hex: value
+                .content_digest()
+                .map(|digest| bytes_hex(digest.as_bytes().as_slice())),
+            metadata: value
+                .metadata()
+                .as_slice()
+                .iter()
+                .map(|entry| SourceMetadataView {
+                    key: entry.key().as_str().to_owned(),
+                    value: format!("{:?}", entry.value()),
+                })
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let evidence = snapshot
+        .evidence()
+        .iter()
+        .map(|value| {
+            let (target_family, target_record_id) = evidence_target_view(value.target());
+            EvidenceView {
+                evidence_id: value.id().to_string(),
+                source_id: value.source_id().to_string(),
+                target_family: target_family.to_owned(),
+                target_record_id,
+                relation: evidence_relation_label(value.relation()).to_owned(),
+                created_revision: value.created_revision().value(),
+                retracted: lifecycle.then(|| {
+                    snapshot
+                        .evidence_retractions()
+                        .iter()
+                        .any(|item| item.evidence_id() == value.id())
+                }),
+            }
+        })
+        .collect::<Vec<_>>();
+    let provenance = snapshot
+        .provenance()
+        .iter()
+        .map(|value| {
+            let (from_family, from_record_id) = provenance_endpoint_view(value.from());
+            let (to_family, to_record_id) = provenance_endpoint_view(value.to());
+            ProvenanceView {
+                provenance_id: value.id().to_string(),
+                from_family: from_family.to_owned(),
+                from_record_id,
+                to_family: to_family.to_owned(),
+                to_record_id,
+                relation: provenance_relation_label(value.relation()).to_owned(),
+                created_revision: value.created_revision().value(),
+                retracted: lifecycle.then(|| {
+                    snapshot
+                        .provenance_retractions()
+                        .iter()
+                        .any(|item| item.provenance_id() == value.id())
+                }),
+            }
+        })
+        .collect::<Vec<_>>();
+    let endpoint_options = snapshot
+        .provenance_endpoints()
+        .iter()
+        .copied()
+        .map(|value| {
+            let (family, record_id) = provenance_endpoint_view(value);
+            EndpointOptionView {
+                family: family.to_owned(),
+                record_id,
+            }
+        })
+        .collect::<Vec<_>>();
+    records.extend(
+        sources
+            .iter()
+            .map(|value| catalog_meta_record("source", &value.source_id, value.created_revision)),
+    );
+    records.extend(
+        evidence.iter().map(|value| {
+            catalog_meta_record("evidence", &value.evidence_id, value.created_revision)
+        }),
+    );
+    records.extend(provenance.iter().map(|value| {
+        catalog_meta_record("provenance", &value.provenance_id, value.created_revision)
+    }));
     records.sort_by(|left, right| {
         left.family
             .cmp(&right.family)
@@ -1110,7 +1521,115 @@ fn fact_catalog_view(snapshot: FactSnapshot) -> Result<FactCatalogView, EngineEr
             "After wird als umgekehrtes Before gespeichert; SameTime wird als ungeordnetes Paar gespeichert.".to_owned(),
             "Before muss auch nach Zusammenfassen von SameTime-Gruppen azyklisch bleiben; Causes hat einen separaten azyklischen Graphen.".to_owned(),
         ],
+        sources,
+        evidence,
+        provenance,
+        endpoint_options,
     })
+}
+
+fn catalog_meta_record(
+    family: &str,
+    record_id: &str,
+    created_revision: u64,
+) -> FactCatalogRecordView {
+    FactCatalogRecordView {
+        family: family.to_owned(),
+        record_id: record_id.to_owned(),
+        created_revision,
+        retracted: None,
+        archived: None,
+        history_space_id: None,
+        layer_id: None,
+        perspective_id: None,
+        epistemic_mode: None,
+        subject_id: None,
+        predicate_id: None,
+        event_kind_id: None,
+        target_event_id: None,
+        from_event_id: None,
+        to_event_id: None,
+        relation_kind: None,
+        timeline_id: None,
+        time_start_nanoseconds: None,
+        time_end_nanoseconds: None,
+    }
+}
+
+fn evidence_relation_label(value: EvidenceRelation) -> &'static str {
+    match value {
+        EvidenceRelation::Supports => "supports",
+        EvidenceRelation::Contradicts => "contradicts",
+        EvidenceRelation::Documents => "documents",
+    }
+}
+
+fn provenance_relation_label(value: ProvenanceRelation) -> &'static str {
+    match value {
+        ProvenanceRelation::Corrects => "corrects",
+        ProvenanceRelation::DerivedFrom => "derived_from",
+        ProvenanceRelation::ResultedFrom => "resulted_from",
+    }
+}
+
+fn evidence_target_view(value: EvidenceTargetRef) -> (&'static str, String) {
+    use EvidenceTargetRef as E;
+    match value {
+        E::Assertion(id) => ("assertion", id.to_string()),
+        E::Mask(id) => ("mask", id.to_string()),
+        E::ReplacementBoundary(id) => ("replacement_boundary", id.to_string()),
+        E::Event(id) => ("event", id.to_string()),
+        E::EventMask(id) => ("event_mask", id.to_string()),
+        E::AssertionValidityClosure(id) => ("assertion_validity_closure", id.to_string()),
+        E::AssertionRetraction(id) => ("assertion_retraction", id.to_string()),
+        E::MaskValidityClosure(id) => ("mask_validity_closure", id.to_string()),
+        E::MaskRetraction(id) => ("mask_retraction", id.to_string()),
+        E::ReplacementBoundaryValidityClosure(id) => {
+            ("replacement_boundary_validity_closure", id.to_string())
+        }
+        E::ReplacementBoundaryRetraction(id) => ("replacement_boundary_retraction", id.to_string()),
+        E::EventSpanClosure(id) => ("event_span_closure", id.to_string()),
+        E::EventRetraction(id) => ("event_retraction", id.to_string()),
+        E::EventMaskRetraction(id) => ("event_mask_retraction", id.to_string()),
+        E::EventRelationRetraction(id) => ("event_relation_retraction", id.to_string()),
+        E::EvidenceRetraction(id) => ("evidence_retraction", id.to_string()),
+        E::ProvenanceRetraction(id) => ("provenance_retraction", id.to_string()),
+        E::EntityRetirement(id) => ("entity_retirement", id.to_string()),
+        E::PerspectiveRetirement(id) => ("perspective_retirement", id.to_string()),
+        E::Provenance(id) => ("provenance", id.to_string()),
+        E::ArchiveTransition(id) => ("archive_transition", id.to_string()),
+    }
+}
+
+fn provenance_endpoint_view(value: ProvenanceEndpointRef) -> (&'static str, String) {
+    use ProvenanceEndpointRef as P;
+    match value {
+        P::Assertion(id) => ("assertion", id.to_string()),
+        P::Mask(id) => ("mask", id.to_string()),
+        P::ReplacementBoundary(id) => ("replacement_boundary", id.to_string()),
+        P::Event(id) => ("event", id.to_string()),
+        P::EventMask(id) => ("event_mask", id.to_string()),
+        P::Source(id) => ("source", id.to_string()),
+        P::Evidence(id) => ("evidence", id.to_string()),
+        P::Provenance(id) => ("provenance", id.to_string()),
+        P::AssertionValidityClosure(id) => ("assertion_validity_closure", id.to_string()),
+        P::AssertionRetraction(id) => ("assertion_retraction", id.to_string()),
+        P::MaskValidityClosure(id) => ("mask_validity_closure", id.to_string()),
+        P::MaskRetraction(id) => ("mask_retraction", id.to_string()),
+        P::ReplacementBoundaryValidityClosure(id) => {
+            ("replacement_boundary_validity_closure", id.to_string())
+        }
+        P::ReplacementBoundaryRetraction(id) => ("replacement_boundary_retraction", id.to_string()),
+        P::EventSpanClosure(id) => ("event_span_closure", id.to_string()),
+        P::EventRetraction(id) => ("event_retraction", id.to_string()),
+        P::EventMaskRetraction(id) => ("event_mask_retraction", id.to_string()),
+        P::EventRelationRetraction(id) => ("event_relation_retraction", id.to_string()),
+        P::EvidenceRetraction(id) => ("evidence_retraction", id.to_string()),
+        P::ProvenanceRetraction(id) => ("provenance_retraction", id.to_string()),
+        P::EntityRetirement(id) => ("entity_retirement", id.to_string()),
+        P::PerspectiveRetirement(id) => ("perspective_retirement", id.to_string()),
+        P::ArchiveTransition(id) => ("archive_transition", id.to_string()),
+    }
 }
 
 fn event_relation_kind_label(kind: EventRelationKind) -> &'static str {
@@ -1179,23 +1698,22 @@ fn execute_lifecycle(
             }
             FactTargetInput::EventRelation { event_relation_id } => {
                 let id = parse_id::<EventRelationId>(&event_relation_id, "EventRelation")?;
-                let record_id =
-                    identity::<EventRelationRetractionId>("EventRelationRetraction")?;
-                let receipt = match manager
-                    .retract_event_relation(base, operation_id, record_id, id, reason)
-                {
-                    Ok(receipt) => receipt,
-                    Err(worlddb_storage_file::FactManagementError::EventGraphConflict(
-                        explanation,
-                    )) => {
-                        return Ok(FactResponse::EventGraphConflict(EventGraphConflictView {
+                let record_id = identity::<EventRelationRetractionId>("EventRelationRetraction")?;
+                let receipt =
+                    match manager.retract_event_relation(base, operation_id, record_id, id, reason)
+                    {
+                        Ok(receipt) => receipt,
+                        Err(worlddb_storage_file::FactManagementError::EventGraphConflict(
                             explanation,
-                            relation_saved: false,
-                            automatic_inference_applied: false,
-                        }));
-                    }
-                    Err(error) => return Err(fact_error(error)),
-                };
+                        )) => {
+                            return Ok(FactResponse::EventGraphConflict(EventGraphConflictView {
+                                explanation,
+                                relation_saved: false,
+                                automatic_inference_applied: false,
+                            }));
+                        }
+                        Err(error) => return Err(fact_error(error)),
+                    };
                 ("event_relation", id.to_string(), "retracted", receipt)
             }
         },
@@ -1284,6 +1802,181 @@ fn parse_archive_target(
         FactTargetInput::EventRelation { .. } => Err(EngineError::Fact(
             "EventRelations use explicit retraction and cannot be archived".to_owned(),
         )),
+    }
+}
+
+fn parse_source_fields(
+    source_id: SourceId,
+    source_kind: String,
+    locator: Option<String>,
+    content_digest_hex: Option<String>,
+    metadata: Vec<SourceMetadataInput>,
+) -> Result<SourceDraft, EngineError> {
+    let source_kind = Symbol::new(source_kind)
+        .map_err(|error| EngineError::Fact(format!("invalid Source kind: {error}")))?;
+    let locator = locator
+        .map(SourceLocator::new)
+        .transpose()
+        .map_err(|error| EngineError::Fact(error.to_string()))?;
+    let content_digest = content_digest_hex
+        .map(|hex| {
+            SourceContentDigest::new(Bytes::new(parse_hex(&hex)?))
+                .map_err(|error| EngineError::Fact(error.to_string()))
+        })
+        .transpose()?;
+    let metadata = metadata
+        .into_iter()
+        .map(|entry| {
+            let key = Symbol::new(entry.key).map_err(|error| {
+                EngineError::Fact(format!("invalid Source metadata key: {error}"))
+            })?;
+            Ok(SourceMetadataEntry::new(key, parse_value(entry.value)?))
+        })
+        .collect::<Result<Vec<_>, EngineError>>()?;
+    let metadata =
+        SourceMetadata::new(metadata).map_err(|error| EngineError::Fact(error.to_string()))?;
+    Ok(SourceDraft {
+        source_id,
+        source_kind,
+        locator,
+        content_digest,
+        metadata,
+    })
+}
+
+fn parse_evidence_target(input: EndpointInput) -> Result<EvidenceTargetRef, EngineError> {
+    EvidenceTargetRef::try_from(parse_endpoint_record_ref(input)?).map_err(|_| {
+        EngineError::Fact("the selected family cannot be an Evidence target".to_owned())
+    })
+}
+
+fn parse_provenance_endpoint(input: EndpointInput) -> Result<ProvenanceEndpointRef, EngineError> {
+    ProvenanceEndpointRef::try_from(parse_endpoint_record_ref(input)?).map_err(|_| {
+        EngineError::Fact("the selected family cannot be a Provenance endpoint".to_owned())
+    })
+}
+
+fn parse_endpoint_record_ref(input: EndpointInput) -> Result<RecordRef, EngineError> {
+    let id = input.record_id;
+    Ok(match input.family {
+        EndpointFamilyInput::Assertion => {
+            RecordRef::Assertion(parse_id::<AssertionId>(&id, "Assertion")?)
+        }
+        EndpointFamilyInput::Mask => RecordRef::Mask(parse_id::<MaskId>(&id, "Mask")?),
+        EndpointFamilyInput::ReplacementBoundary => {
+            RecordRef::ReplacementBoundary(parse_id::<ReplacementBoundaryId>(
+                &id,
+                "ReplacementBoundary",
+            )?)
+        }
+        EndpointFamilyInput::Event => RecordRef::Event(parse_id::<EventId>(&id, "Event")?),
+        EndpointFamilyInput::EventMask => {
+            RecordRef::EventMask(parse_id::<EventMaskId>(&id, "EventMask")?)
+        }
+        EndpointFamilyInput::Source => RecordRef::Source(parse_id::<SourceId>(&id, "Source")?),
+        EndpointFamilyInput::Evidence => {
+            RecordRef::Evidence(parse_id::<EvidenceId>(&id, "Evidence")?)
+        }
+        EndpointFamilyInput::Provenance => {
+            RecordRef::Provenance(parse_id::<ProvenanceId>(&id, "Provenance")?)
+        }
+        EndpointFamilyInput::AssertionValidityClosure => RecordRef::AssertionValidityClosure(
+            parse_id::<worlddb_core::AssertionValidityClosureId>(&id, "AssertionValidityClosure")?,
+        ),
+        EndpointFamilyInput::AssertionRetraction => {
+            RecordRef::AssertionRetraction(parse_id::<AssertionRetractionId>(
+                &id,
+                "AssertionRetraction",
+            )?)
+        }
+        EndpointFamilyInput::MaskValidityClosure => {
+            RecordRef::MaskValidityClosure(parse_id::<worlddb_core::MaskValidityClosureId>(
+                &id,
+                "MaskValidityClosure",
+            )?)
+        }
+        EndpointFamilyInput::MaskRetraction => {
+            RecordRef::MaskRetraction(parse_id::<MaskRetractionId>(&id, "MaskRetraction")?)
+        }
+        EndpointFamilyInput::ReplacementBoundaryValidityClosure => {
+            RecordRef::ReplacementBoundaryValidityClosure(parse_id::<
+                worlddb_core::ReplacementBoundaryValidityClosureId,
+            >(
+                &id,
+                "ReplacementBoundaryValidityClosure",
+            )?)
+        }
+        EndpointFamilyInput::ReplacementBoundaryRetraction => {
+            RecordRef::ReplacementBoundaryRetraction(parse_id::<ReplacementBoundaryRetractionId>(
+                &id,
+                "ReplacementBoundaryRetraction",
+            )?)
+        }
+        EndpointFamilyInput::EventSpanClosure => {
+            RecordRef::EventSpanClosure(parse_id::<EventSpanClosureId>(&id, "EventSpanClosure")?)
+        }
+        EndpointFamilyInput::EventRetraction => {
+            RecordRef::EventRetraction(parse_id::<EventRetractionId>(&id, "EventRetraction")?)
+        }
+        EndpointFamilyInput::EventMaskRetraction => {
+            RecordRef::EventMaskRetraction(parse_id::<EventMaskRetractionId>(
+                &id,
+                "EventMaskRetraction",
+            )?)
+        }
+        EndpointFamilyInput::EventRelationRetraction => RecordRef::EventRelationRetraction(
+            parse_id::<worlddb_core::EventRelationRetractionId>(&id, "EventRelationRetraction")?,
+        ),
+        EndpointFamilyInput::EvidenceRetraction => {
+            RecordRef::EvidenceRetraction(parse_id::<EvidenceRetractionId>(
+                &id,
+                "EvidenceRetraction",
+            )?)
+        }
+        EndpointFamilyInput::ProvenanceRetraction => {
+            RecordRef::ProvenanceRetraction(parse_id::<ProvenanceRetractionId>(
+                &id,
+                "ProvenanceRetraction",
+            )?)
+        }
+        EndpointFamilyInput::EntityRetirement => {
+            RecordRef::EntityRetirement(parse_id::<worlddb_core::EntityRetirementId>(
+                &id,
+                "EntityRetirement",
+            )?)
+        }
+        EndpointFamilyInput::PerspectiveRetirement => {
+            RecordRef::PerspectiveRetirement(parse_id::<worlddb_core::PerspectiveRetirementId>(
+                &id,
+                "PerspectiveRetirement",
+            )?)
+        }
+        EndpointFamilyInput::ArchiveTransition => {
+            RecordRef::ArchiveTransition(parse_id::<worlddb_core::ArchiveTransitionId>(
+                &id,
+                "ArchiveTransition",
+            )?)
+        }
+    })
+}
+
+impl From<EvidenceRelationInput> for EvidenceRelation {
+    fn from(value: EvidenceRelationInput) -> Self {
+        match value {
+            EvidenceRelationInput::Supports => Self::Supports,
+            EvidenceRelationInput::Contradicts => Self::Contradicts,
+            EvidenceRelationInput::Documents => Self::Documents,
+        }
+    }
+}
+
+impl From<ProvenanceRelationInput> for ProvenanceRelation {
+    fn from(value: ProvenanceRelationInput) -> Self {
+        match value {
+            ProvenanceRelationInput::Corrects => Self::Corrects,
+            ProvenanceRelationInput::DerivedFrom => Self::DerivedFrom,
+            ProvenanceRelationInput::ResultedFrom => Self::ResultedFrom,
+        }
     }
 }
 

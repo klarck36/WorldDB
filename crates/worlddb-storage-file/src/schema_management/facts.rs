@@ -39,6 +39,9 @@ use super::{
     next_audit_sequence,
 };
 
+mod meta_history;
+pub use meta_history::{SourceDraft, SourceSupersessionDraft};
+
 /// Receipt for one committed immutable factual record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FactPublicationReceipt {
@@ -273,6 +276,12 @@ pub struct FactSnapshot {
     event_relations: Vec<EventRelation>,
     event_relation_retractions: Vec<EventRelationRetraction>,
     archive_transitions: Vec<ArchiveTransition>,
+    sources: Vec<worlddb_core::Source>,
+    evidence: Vec<worlddb_core::Evidence>,
+    evidence_retractions: Vec<worlddb_core::EvidenceRetraction>,
+    provenance: Vec<worlddb_core::ProvenanceEdge>,
+    provenance_retractions: Vec<worlddb_core::ProvenanceRetraction>,
+    provenance_endpoints: Vec<worlddb_core::ProvenanceEndpointRef>,
     lifecycle_visible: bool,
 }
 
@@ -384,6 +393,42 @@ impl FactSnapshot {
     #[must_use]
     pub fn archive_transitions(&self) -> &[ArchiveTransition] {
         &self.archive_transitions
+    }
+
+    /// Authorized project-wide Source records whose complete fields are readable.
+    #[must_use]
+    pub fn sources(&self) -> &[worlddb_core::Source] {
+        &self.sources
+    }
+
+    /// Authorized historical Evidence links with both readable endpoints.
+    #[must_use]
+    pub fn evidence(&self) -> &[worlddb_core::Evidence] {
+        &self.evidence
+    }
+
+    /// Lifecycle records for Evidence links returned by this snapshot.
+    #[must_use]
+    pub fn evidence_retractions(&self) -> &[worlddb_core::EvidenceRetraction] {
+        &self.evidence_retractions
+    }
+
+    /// Authorized historical Provenance edges with both readable endpoints.
+    #[must_use]
+    pub fn provenance(&self) -> &[worlddb_core::ProvenanceEdge] {
+        &self.provenance
+    }
+
+    /// Lifecycle records for Provenance edges returned by this snapshot.
+    #[must_use]
+    pub fn provenance_retractions(&self) -> &[worlddb_core::ProvenanceRetraction] {
+        &self.provenance_retractions
+    }
+
+    /// Closed provenance endpoints that pass current endpoint and field authorization.
+    #[must_use]
+    pub fn provenance_endpoints(&self) -> &[worlddb_core::ProvenanceEndpointRef] {
+        &self.provenance_endpoints
     }
 
     /// Whether lifecycle state was readable at this snapshot.
@@ -2373,6 +2418,7 @@ impl<'a> FileFactManager<'a> {
                 }
             }
         }
+        let meta_history = meta_history::authorized_meta_history(self, &records)?;
         Ok(FactSnapshot {
             revision,
             assertions,
@@ -2389,6 +2435,12 @@ impl<'a> FileFactManager<'a> {
             event_relations,
             event_relation_retractions,
             archive_transitions,
+            sources: meta_history.sources,
+            evidence: meta_history.evidence,
+            evidence_retractions: meta_history.evidence_retractions,
+            provenance: meta_history.provenance,
+            provenance_retractions: meta_history.provenance_retractions,
+            provenance_endpoints: meta_history.provenance_endpoints,
             lifecycle_visible: may_read_lifecycle,
         })
     }
@@ -3493,10 +3545,13 @@ fn validate_validity(
 fn record_created_revision(record: &Record) -> Option<Revision> {
     match record {
         Record::Assertion(value) => Some(value.created_revision()),
+        Record::AssertionValidityClosure(value) => Some(value.created_revision()),
         Record::AssertionRetraction(value) => Some(value.created_revision()),
         Record::Mask(value) => Some(value.created_revision()),
+        Record::MaskValidityClosure(value) => Some(value.created_revision()),
         Record::MaskRetraction(value) => Some(value.created_revision()),
         Record::ReplacementBoundary(value) => Some(value.created_revision()),
+        Record::ReplacementBoundaryValidityClosure(value) => Some(value.created_revision()),
         Record::ReplacementBoundaryRetraction(value) => Some(value.created_revision()),
         Record::Event(value) => Some(value.created_revision()),
         Record::EventRetraction(value) => Some(value.created_revision()),
@@ -3505,7 +3560,13 @@ fn record_created_revision(record: &Record) -> Option<Revision> {
         Record::EventMaskRetraction(value) => Some(value.created_revision()),
         Record::EventRelation(value) => Some(value.created_revision()),
         Record::EventRelationRetraction(value) => Some(value.created_revision()),
+        Record::Source(value) => Some(value.created_revision()),
+        Record::Evidence(value) => Some(value.created_revision()),
+        Record::EvidenceRetraction(value) => Some(value.created_revision()),
         Record::Provenance(value) => Some(value.created_revision()),
+        Record::ProvenanceRetraction(value) => Some(value.created_revision()),
+        Record::EntityRetirement(value) => Some(value.created_revision()),
+        Record::PerspectiveRetirement(value) => Some(value.created_revision()),
         Record::ArchiveTransition(value) => Some(value.created_revision()),
         _ => None,
     }
@@ -3514,10 +3575,15 @@ fn record_created_revision(record: &Record) -> Option<Revision> {
 fn fact_record_ref(record: &Record) -> Option<RecordRef> {
     Some(match record {
         Record::Assertion(value) => RecordRef::Assertion(value.id()),
+        Record::AssertionValidityClosure(value) => RecordRef::AssertionValidityClosure(value.id()),
         Record::AssertionRetraction(value) => RecordRef::AssertionRetraction(value.id()),
         Record::Mask(value) => RecordRef::Mask(value.id()),
+        Record::MaskValidityClosure(value) => RecordRef::MaskValidityClosure(value.id()),
         Record::MaskRetraction(value) => RecordRef::MaskRetraction(value.id()),
         Record::ReplacementBoundary(value) => RecordRef::ReplacementBoundary(value.id()),
+        Record::ReplacementBoundaryValidityClosure(value) => {
+            RecordRef::ReplacementBoundaryValidityClosure(value.id())
+        }
         Record::ReplacementBoundaryRetraction(value) => {
             RecordRef::ReplacementBoundaryRetraction(value.id())
         }
@@ -3528,7 +3594,17 @@ fn fact_record_ref(record: &Record) -> Option<RecordRef> {
         Record::EventMaskRetraction(value) => RecordRef::EventMaskRetraction(value.id()),
         Record::EventRelation(value) => RecordRef::EventRelation(value.id()),
         Record::EventRelationRetraction(value) => RecordRef::EventRelationRetraction(value.id()),
+        Record::Source(value) => RecordRef::Source(value.id()),
+        Record::Evidence(value) => RecordRef::Evidence(value.id()),
+        Record::EvidenceRetraction(value) => RecordRef::EvidenceRetraction(value.id()),
         Record::Provenance(value) => RecordRef::Provenance(value.id()),
+        Record::ProvenanceRetraction(value) => RecordRef::ProvenanceRetraction(value.id()),
+        Record::EntityRetirement(value) => {
+            RecordRef::EntityRetirement(value.entity_retirement_id())
+        }
+        Record::PerspectiveRetirement(value) => {
+            RecordRef::PerspectiveRetirement(value.perspective_retirement_id())
+        }
         Record::ArchiveTransition(value) => RecordRef::ArchiveTransition(value.id()),
         _ => return None,
     })
@@ -3692,21 +3768,24 @@ mod tests {
         EventAttributeDefinition, EventAttributeId, EventAttributeValue, EventDraft,
         EventKindDefinition, EventKindId, EventParticipant, EventRelationInputKind,
         EventRoleDefinition, EventRoleId, EventTime, EventTimeConstraint, EventTimeForm,
-        LayerDefinition, LayerId, LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId,
-        Polarity, PredicateDefinition, PredicateDefinitionSpec, PredicateId, Record, RecordRef,
-        ResolutionPolicy, Revision, RoleCardinality, SchemaMode, SchemaRevision,
-        SecurityPolicyVersion, Subject, Symbol, TimeInterval, Timeline, TimelineCalendarProfile,
-        TimelineDefinition, TimelineId, Value, ValueKind, WorldTime,
+        EvidenceRelation, EvidenceTargetRef, GrantEffect, LayerDefinition, LayerId,
+        LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId, Polarity, PolicyRuleId,
+        PolicySubject, PredicateDefinition, PredicateDefinitionSpec, PredicateId,
+        ProvenanceEndpointRef, ProvenanceRelation, Record, RecordRef, ResolutionPolicy, Revision,
+        RoleCardinality, SchemaMode, SchemaRevision, SecurityPolicyVersion, SourceContentDigest,
+        SourceLocator, SourceMetadata, Subject, Symbol, TimeInterval, Timeline,
+        TimelineCalendarProfile, TimelineDefinition, TimelineId, Value, ValueKind, WorldTime,
     };
 
     use crate::{
         DatabaseLayout, FileEntityManager, FileProjectMetadataManager, FileSchemaManager,
-        HistorySegmentStore, ManifestSegmentKind, ManifestSegmentReference, ManifestStore,
-        RecoveryManager, SecurityPolicyHistoryStore, StorageVerifier, WalPrepareLog, WriterLock,
+        FileSecurityPolicyManager, HistorySegmentStore, ManifestSegmentKind,
+        ManifestSegmentReference, ManifestStore, RecoveryManager, SecurityPolicyHistoryStore,
+        StorageVerifier, WalPrepareLog, WriterLock,
     };
 
     use super::super::tests::{TempArea, create_project, id};
-    use super::{FactManagementError, FileFactManager as Manager};
+    use super::{FactManagementError, FileFactManager as Manager, SourceDraft};
 
     struct Fixture {
         _area: TempArea,
@@ -3775,6 +3854,15 @@ mod tests {
                 Capability::RelationshipRead,
                 Capability::RelationshipRetract,
                 Capability::HistorySpaceCreate,
+                Capability::SourceRead,
+                Capability::SourceCreate,
+                Capability::SourceSupersede,
+                Capability::EvidenceRead,
+                Capability::EvidenceCreate,
+                Capability::EvidenceRetract,
+                Capability::ProvenanceRead,
+                Capability::ProvenanceRetract,
+                Capability::SecurityPolicyManage,
             ]);
         }
         values
@@ -4345,6 +4433,181 @@ mod tests {
         if !report.is_clean() {
             return Err("corrected database did not verify cleanly".into());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn source_evidence_and_provenance_writes_validate_relation_targets_and_cycles()
+    -> Result<(), String> {
+        let fixture = build_fixture_with_correction_rights(true, true, true)?;
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let source_id = id::<worlddb_core::SourceId>(161)?;
+        manager
+            .create_source(
+                manager.revision(),
+                id::<OperationId>(162)?,
+                SourceDraft {
+                    source_id,
+                    source_kind: Symbol::new("book").map_err(|error| error.to_string())?,
+                    locator: Some(
+                        SourceLocator::new("https://example.invalid/source")
+                            .map_err(|error| error.to_string())?,
+                    ),
+                    content_digest: Some(
+                        SourceContentDigest::new(Bytes::new(vec![0x12, 0x34]))
+                            .map_err(|error| error.to_string())?,
+                    ),
+                    metadata: SourceMetadata::default(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
+
+        let context = make_context(&fixture)?;
+        let assertion_id = id::<worlddb_core::AssertionId>(163)?;
+        manager
+            .create_assertion(
+                manager.revision(),
+                id::<OperationId>(164)?,
+                assertion_id,
+                AssertionDraft::new(
+                    context,
+                    Subject::new(fixture.entity_id),
+                    fixture.predicate_id,
+                    Value::String("evidence target".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+
+        let evidence_id = id::<worlddb_core::EvidenceId>(165)?;
+        manager
+            .create_evidence(
+                manager.revision(),
+                id::<OperationId>(166)?,
+                evidence_id,
+                source_id,
+                EvidenceTargetRef::Assertion(assertion_id),
+                EvidenceRelation::Supports,
+            )
+            .map_err(|error| error.to_string())?;
+
+        let first_edge = id::<worlddb_core::ProvenanceId>(167)?;
+        manager
+            .create_provenance(
+                manager.revision(),
+                id::<OperationId>(168)?,
+                first_edge,
+                ProvenanceEndpointRef::Source(source_id),
+                ProvenanceEndpointRef::Assertion(assertion_id),
+                ProvenanceRelation::DerivedFrom,
+            )
+            .map_err(|error| error.to_string())?;
+        let before_rejections = manager.revision();
+        let forbidden_edge = id::<worlddb_core::ProvenanceId>(169)?;
+        assert!(matches!(
+            manager.create_provenance(
+                before_rejections,
+                id::<OperationId>(170)?,
+                forbidden_edge,
+                ProvenanceEndpointRef::Source(source_id),
+                ProvenanceEndpointRef::Assertion(assertion_id),
+                ProvenanceRelation::ResultedFrom,
+            ),
+            Err(FactManagementError::InvalidCandidate(_))
+        ));
+        let cycle_edge = id::<worlddb_core::ProvenanceId>(171)?;
+        assert!(matches!(
+            manager.create_provenance(
+                before_rejections,
+                id::<OperationId>(172)?,
+                cycle_edge,
+                ProvenanceEndpointRef::Assertion(assertion_id),
+                ProvenanceEndpointRef::Source(source_id),
+                ProvenanceRelation::DerivedFrom,
+            ),
+            Err(FactManagementError::InvalidCandidate(_))
+        ));
+        assert_eq!(manager.revision(), before_rejections);
+        let records = manager
+            .records_at_revision(before_rejections)
+            .map_err(|error| error.to_string())?;
+        assert!(
+            records
+                .iter()
+                .any(|record| matches!(record, Record::Source(value) if value.id() == source_id))
+        );
+        assert!(
+            records.iter().any(
+                |record| matches!(record, Record::Evidence(value) if value.id() == evidence_id)
+            )
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| matches!(record, Record::Provenance(_)))
+                .count(),
+            1
+        );
+
+        let visible = manager
+            .snapshot_at(before_rejections)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(visible.sources().len(), 1);
+        assert_eq!(visible.evidence().len(), 1);
+        assert_eq!(visible.provenance().len(), 1);
+        assert!(
+            visible
+                .provenance_endpoints()
+                .contains(&ProvenanceEndpointRef::Assertion(assertion_id))
+        );
+
+        drop(manager);
+        let mut security = FileSecurityPolicyManager::open(
+            fixture.layout.clone(),
+            &fixture.lock,
+            fixture.principal,
+        )
+        .map_err(|error| error.to_string())?;
+        security
+            .add_capability_rule(
+                security.revision(),
+                id::<OperationId>(173)?,
+                id::<PolicyRuleId>(174)?,
+                PolicySubject::Principal(fixture.principal),
+                Capability::AssertionRead,
+                GrantEffect::Deny,
+            )
+            .map_err(|error| error.to_string())?;
+        let mut denied_manager =
+            Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+                .map_err(|error| error.to_string())?;
+        let denied_base = denied_manager.revision();
+        assert!(matches!(
+            denied_manager.create_evidence(
+                denied_base,
+                id::<OperationId>(175)?,
+                id::<worlddb_core::EvidenceId>(176)?,
+                source_id,
+                EvidenceTargetRef::Assertion(assertion_id),
+                EvidenceRelation::Documents,
+            ),
+            Err(FactManagementError::Unauthorized(Capability::AssertionRead))
+        ));
+        assert_eq!(denied_manager.revision(), denied_base);
+        let redacted = denied_manager
+            .snapshot_at(denied_base)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(redacted.sources().len(), 1);
+        assert!(redacted.evidence().is_empty());
+        assert!(redacted.provenance().is_empty());
+        assert!(
+            !redacted
+                .provenance_endpoints()
+                .contains(&ProvenanceEndpointRef::Assertion(assertion_id))
+        );
         Ok(())
     }
 

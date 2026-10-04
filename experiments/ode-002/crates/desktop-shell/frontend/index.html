@@ -582,6 +582,49 @@
           <p class="muted">Die Liste zeigt nur Datensätze, die dein aktueller Zugriff freigibt. Lebenszyklusstatus werden nur angezeigt, wenn du sie lesen darfst.</p>
           <div id="facts-record-catalog" aria-live="polite"></div>
         </fieldset>
+        <fieldset id="facts-source-fields">
+          <legend>Source erfassen</legend>
+          <p class="muted">Sources sind projektweite, unveränderliche Angaben. Symbole verwenden nur ASCII-Kleinbuchstaben, Ziffern und Unterstriche. Ein Digest wird als Hex-Bytes gespeichert.</p>
+          <div class="grid">
+            <div><label for="facts-source-kind">Source-Kind</label><input id="facts-source-kind" autocomplete="off" placeholder="z. B. buch" /></div>
+            <div><label for="facts-source-locator">Locator (optional)</label><input id="facts-source-locator" autocomplete="off" /></div>
+            <div><label for="facts-source-digest">Content-Digest, Hex (optional)</label><input id="facts-source-digest" autocomplete="off" /></div>
+          </div>
+          <div class="grid">
+            <div><label for="facts-source-metadata-key">Metadaten-Schlüssel (optional)</label><input id="facts-source-metadata-key" autocomplete="off" placeholder="z. B. edition" /></div>
+            <div><label for="facts-source-metadata-value">Metadaten-Wert</label><input id="facts-source-metadata-value" autocomplete="off" /></div>
+            <div><label for="facts-source-supersede-target">Zu ersetzende Source (optional)</label><select id="facts-source-supersede-target"></select></div>
+          </div>
+          <p class="muted">Beim Ersetzen bleibt die alte Source erhalten. Eine neue Source und ihre explizite DerivedFrom-Lineage werden gemeinsam gespeichert.</p>
+          <div class="actions"><button id="facts-source-create" type="button">Source speichern</button><button id="facts-source-supersede" type="button">Source mit Lineage ersetzen</button></div>
+        </fieldset>
+        <div class="grid">
+          <fieldset id="facts-evidence-fields">
+            <legend>Evidence erfassen oder zurücknehmen</legend>
+            <div><label for="facts-evidence-source">Source</label><select id="facts-evidence-source"></select></div>
+            <div><label for="facts-evidence-target">Autorisierter Beleg-Zielrecord</label><select id="facts-evidence-target"></select></div>
+            <div><label for="facts-evidence-relation">Belegart</label><select id="facts-evidence-relation"><option value="supports">Stützt</option><option value="contradicts">Widerspricht</option><option value="documents">Dokumentiert</option></select></div>
+            <div class="actions"><button id="facts-evidence-create" type="button">Evidence speichern</button></div>
+            <label for="facts-evidence-retract-target">Aktive Evidence zurücknehmen</label><select id="facts-evidence-retract-target"></select>
+            <label for="facts-evidence-retract-reason">Begründung</label><input id="facts-evidence-retract-reason" maxlength="4096" autocomplete="off" />
+            <div class="actions"><button id="facts-evidence-retract" type="button">Evidence zurücknehmen</button></div>
+          </fieldset>
+          <fieldset id="facts-provenance-fields">
+            <legend>Provenance erfassen oder zurücknehmen</legend>
+            <div><label for="facts-provenance-from">Von (autorisierter Record)</label><select id="facts-provenance-from"></select></div>
+            <div><label for="facts-provenance-relation">Relation</label><select id="facts-provenance-relation"><option value="corrects">Corrects</option><option value="derived_from">DerivedFrom</option><option value="resulted_from">ResultedFrom</option></select></div>
+            <div><label for="facts-provenance-to">Zu (autorisierter Record)</label><select id="facts-provenance-to"></select></div>
+            <p class="muted">Relation und Recordfamilie bestimmen gemeinsam, ob die Endpunkte zulässig sind. Der vollständige gemischte Provenienzgraph wird auf Zyklen geprüft.</p>
+            <div class="actions"><button id="facts-provenance-create" type="button">Provenance speichern</button></div>
+            <label for="facts-provenance-retract-target">Aktive Provenance zurücknehmen</label><select id="facts-provenance-retract-target"></select>
+            <label for="facts-provenance-retract-reason">Begründung</label><input id="facts-provenance-retract-reason" maxlength="4096" autocomplete="off" />
+            <div class="actions"><button id="facts-provenance-retract" type="button">Provenance zurücknehmen</button></div>
+          </fieldset>
+        </div>
+        <fieldset>
+          <legend>Quellen, Belege und Provenienz</legend>
+          <div id="facts-meta-catalog" aria-live="polite"></div>
+        </fieldset>
         <div class="grid">
           <fieldset id="facts-correction-fields">
             <legend>Assertion korrigieren</legend>

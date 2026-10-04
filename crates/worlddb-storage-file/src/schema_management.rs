@@ -23,7 +23,7 @@ mod facts;
 pub use facts::{
     AssertionCorrectionReceipt, EventCorrectionReceipt, EventSnapshotRef, FactManagementError,
     FactOperationStatus, FactPublicationReceipt, FactResolutionPreviewRequest, FactSnapshot,
-    FileFactManager, ReplacementBoundaryDraft,
+    FileFactManager, ReplacementBoundaryDraft, SourceDraft, SourceSupersessionDraft,
 };
 mod project_metadata;
 pub use project_metadata::{

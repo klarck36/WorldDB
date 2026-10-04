@@ -721,7 +721,20 @@ fn manage_facts(
 
 #[tauri::command]
 fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Result<(), IpcErrorV1> {
-    record_facts_smoke_diagnostic(window.label(), details)
+    let close_after_smoke = window.label() == "primary"
+        && details == "facts-smoke:project-complete"
+        && cfg!(debug_assertions)
+        && project_smoke_root().is_some()
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    let app = window.app_handle().clone();
+    record_facts_smoke_diagnostic(window.label(), details)?;
+    if close_after_smoke {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            app.exit(0);
+        });
+    }
+    Ok(())
 }
 
 fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<(), IpcErrorV1> {
@@ -1024,6 +1037,12 @@ fn security_policy_smoke_operation(command: &SecurityPolicyCommand) -> &'static 
 fn facts_smoke_operation(command: &FactCommand) -> &'static str {
     match command {
         FactCommand::Snapshot => "snapshot",
+        FactCommand::CreateSource { .. } => "create_source",
+        FactCommand::SupersedeSource { .. } => "supersede_source",
+        FactCommand::CreateEvidence { .. } => "create_evidence",
+        FactCommand::CreateProvenance { .. } => "create_provenance",
+        FactCommand::RetractEvidence { .. } => "retract_evidence",
+        FactCommand::RetractProvenance { .. } => "retract_provenance",
         FactCommand::CreateAssertion { .. } => "create_assertion",
         FactCommand::CreateMask { .. } => "create_mask",
         FactCommand::CreateReplacementBoundary { .. } => "create_replacement_boundary",

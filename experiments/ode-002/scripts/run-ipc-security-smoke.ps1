@@ -7,10 +7,20 @@ param(
     [string]$EngineExecutablePath,
     [switch]$KeepArtifacts,
     [ValidateRange(30, 600)]
-    [int]$FactsTimeoutSeconds = 240
+    [int]$FactsTimeoutSeconds = 600
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not ('WorldDbIpcSmokeNative' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class WorldDbIpcSmokeNative {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GetExitCodeProcess(IntPtr processHandle, out uint exitCode);
+}
+'@
+}
 $executable = [System.IO.Path]::GetFullPath($ExecutablePath)
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw 'Build the selected ODE-002 mode before running this IPC smoke check.'
@@ -42,6 +52,7 @@ $primarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-primary.js
 $secondarySecurityPolicyPath = Join-Path $testRoot 'ipc-security-policy-secondary.jsonl'
 $primaryFactsPath = Join-Path $testRoot 'ipc-facts-primary.jsonl'
 $process = $null
+$processHandle = [IntPtr]::Zero
 $smokePassed = $false
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
@@ -207,6 +218,18 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $events = @($operations | Where-Object { $_.operation -eq 'create_event' -and $_.succeeded }).Count
             $eventMasks = @($operations | Where-Object { $_.operation -eq 'create_event_mask' -and $_.succeeded }).Count
             $eventRelations = @($operations | Where-Object { $_.operation -eq 'create_event_relation' -and $_.succeeded }).Count
+            $sources = @($operations | Where-Object { $_.operation -eq 'create_source' -and $_.succeeded }).Count
+            $sourceSupersessions = @($operations | Where-Object { $_.operation -eq 'supersede_source' -and $_.succeeded }).Count
+            $evidence = @($operations | Where-Object { $_.operation -eq 'create_evidence' -and $_.succeeded }).Count
+            $provenance = @($operations | Where-Object { $_.operation -eq 'create_provenance' -and $_.succeeded }).Count
+            $evidenceRetractions = @($operations | Where-Object { $_.operation -eq 'retract_evidence' -and $_.succeeded }).Count
+            $provenanceRetractions = @($operations | Where-Object { $_.operation -eq 'retract_provenance' -and $_.succeeded }).Count
+            $metaHistoryComplete = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:meta-history:complete'
+            }).Count -gt 0
+            $projectSmokeComplete = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:project-complete'
+            }).Count -gt 0
             $spanClosures = @($operations | Where-Object { $_.operation -eq 'close_event_span' -and $_.succeeded }).Count
             $catalogs = @($operations | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count
             $lifecycle = @($operations | Where-Object { $_.operation -eq 'lifecycle' -and $_.succeeded })
@@ -229,6 +252,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $events -ge 3 -and $eventMasks -ge 1 -and $eventRelations -ge 5 -and
                 $spanClosures -ge 1 -and $eventRetractions -ge 1 -and $eventMaskRetractions -ge 1 -and
                 $safeGraphConflicts -ge 3 -and
+                $sources -ge 1 -and $sourceSupersessions -ge 1 -and $evidence -ge 1 -and
+                $provenance -ge 1 -and $evidenceRetractions -ge 1 -and $provenanceRetractions -ge 1 -and
+                $metaHistoryComplete -and $projectSmokeComplete -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $hasExact -and $hasProposition -and $hasSlot
             ) {
@@ -266,6 +292,7 @@ try {
     $stderrPath = Join-Path $testRoot 'ipc.stderr.log'
     $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $processHandle = $process.Handle
 
     Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
     Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
@@ -454,7 +481,13 @@ try {
         throw 'The IPC smoke process did not shut down.'
     }
     $process.Refresh()
-    if ($process.ExitCode -ne 0) { throw "The IPC smoke process exited with code $($process.ExitCode)." }
+    [uint32]$processExitCode = 0
+    if (-not [WorldDbIpcSmokeNative]::GetExitCodeProcess($processHandle, [ref]$processExitCode)) {
+        $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "Could not read the exited IPC smoke process code (Windows error $nativeError)."
+    }
+    if ($processExitCode -eq 259) { throw 'The IPC smoke process still reports itself as active after WaitForExit.' }
+    if ($processExitCode -ne 0) { throw "The IPC smoke process exited with code $processExitCode." }
     $smokePassed = $true
 
     [pscustomobject]@{
@@ -487,6 +520,9 @@ try {
         explicit_event_span_closure_and_event_retractions = 'PASS'
         event_mask_priority_and_separate_retraction = 'PASS'
         canonical_event_relations_and_safe_graph_conflicts = 'PASS'
+        source_creation_and_replacement_lineage = 'PASS'
+        evidence_and_provenance_creation = 'PASS'
+        separate_evidence_and_provenance_retractions = 'PASS'
         world_state_and_epistemic_contexts_separate = 'PASS'
         invalid_and_retired_perspectives_rejected = 'PASS'
         secondary_window_perspective_read = 'PASS'

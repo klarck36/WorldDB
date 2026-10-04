@@ -39,12 +39,13 @@ pub use history_space_transfer::{
 mod facts;
 pub use facts::{
     AssertionCorrectionView, AssertionDraftInput, EventAttributeInput, EventCorrectionView,
-    EventDraftInput, EventParticipantInput, EventTimeInput, FactCatalogRecordView, FactCatalogView,
-    FactCommand, FactContextInput, FactLifecycleActionInput, FactLifecycleView, EventGraphConflictView,
-    FactOperationStatusKind, FactOperationStatusView, FactPublicationView, FactResponse,
-    FactTargetInput, FactValueInput, EventRelationKindInput, MaskSelectorInput, PolarityInput, ResolutionConflictView,
-    ResolutionOutcomeView, ResolutionPreviewView, ResolutionResultView, ResolutionSliceView,
-    ResolutionValueView, ValidityInput, WorldTimeSelectorInput,
+    EventDraftInput, EventGraphConflictView, EventParticipantInput, EventRelationKindInput,
+    EventTimeInput, FactCatalogRecordView, FactCatalogView, FactCommand, FactContextInput,
+    FactLifecycleActionInput, FactLifecycleView, FactOperationStatusKind, FactOperationStatusView,
+    FactPublicationView, FactResponse, FactTargetInput, FactValueInput, MaskSelectorInput,
+    PolarityInput, ResolutionConflictView, ResolutionOutcomeView, ResolutionPreviewView,
+    ResolutionResultView, ResolutionSliceView, ResolutionValueView, ValidityInput,
+    WorldTimeSelectorInput,
 };
 mod schema;
 pub use schema::{

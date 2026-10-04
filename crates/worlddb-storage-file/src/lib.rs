@@ -109,8 +109,9 @@ pub use schema_management::{
     FileFactManager, FileHistorySpaceTransferManager, FileProjectMetadataManager,
     FileSchemaManager, FileSecurityPolicyManager, HistorySpaceTransferError, LayerManagementError,
     MetadataPublicationReceipt, PolicyManagementError, PolicyPublicationReceipt,
-    ReplacementBoundaryDraft, SchemaManagementError, SchemaPublicationReceipt,
-    TransferEventRelationItem, TransferPublicationReceipt, TransferSourceItem,
+    ReplacementBoundaryDraft, SchemaManagementError, SchemaPublicationReceipt, SourceDraft,
+    SourceSupersessionDraft, TransferEventRelationItem, TransferPublicationReceipt,
+    TransferSourceItem,
 };
 pub use security_segment::{
     SecurityPolicyHistorySnapshot, SecurityPolicyHistoryStore, SecurityPolicySegment,

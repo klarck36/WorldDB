@@ -201,6 +201,29 @@ const factsCreateMask = document.querySelector("#facts-create-mask");
 const factsBoundaryNote = document.querySelector("#facts-boundary-note");
 const factsCreateBoundary = document.querySelector("#facts-create-boundary");
 const factsRecordCatalog = document.querySelector("#facts-record-catalog");
+const factsMetaCatalog = document.querySelector("#facts-meta-catalog");
+const factsSourceKind = document.querySelector("#facts-source-kind");
+const factsSourceLocator = document.querySelector("#facts-source-locator");
+const factsSourceDigest = document.querySelector("#facts-source-digest");
+const factsSourceMetadataKey = document.querySelector("#facts-source-metadata-key");
+const factsSourceMetadataValue = document.querySelector("#facts-source-metadata-value");
+const factsSourceSupersedeTarget = document.querySelector("#facts-source-supersede-target");
+const factsSourceCreate = document.querySelector("#facts-source-create");
+const factsSourceSupersede = document.querySelector("#facts-source-supersede");
+const factsEvidenceSource = document.querySelector("#facts-evidence-source");
+const factsEvidenceTarget = document.querySelector("#facts-evidence-target");
+const factsEvidenceRelation = document.querySelector("#facts-evidence-relation");
+const factsEvidenceCreate = document.querySelector("#facts-evidence-create");
+const factsEvidenceRetractTarget = document.querySelector("#facts-evidence-retract-target");
+const factsEvidenceRetractReason = document.querySelector("#facts-evidence-retract-reason");
+const factsEvidenceRetract = document.querySelector("#facts-evidence-retract");
+const factsProvenanceFrom = document.querySelector("#facts-provenance-from");
+const factsProvenanceTo = document.querySelector("#facts-provenance-to");
+const factsProvenanceRelation = document.querySelector("#facts-provenance-relation");
+const factsProvenanceCreate = document.querySelector("#facts-provenance-create");
+const factsProvenanceRetractTarget = document.querySelector("#facts-provenance-retract-target");
+const factsProvenanceRetractReason = document.querySelector("#facts-provenance-retract-reason");
+const factsProvenanceRetract = document.querySelector("#facts-provenance-retract");
 const factsCorrectionTarget = document.querySelector("#facts-correction-target");
 const factsCorrectionReason = document.querySelector("#facts-correction-reason");
 const factsCorrectionPreviewButton = document.querySelector("#facts-correction-preview");
@@ -706,7 +729,9 @@ async function refreshFactsCatalog(activeSessionId = sessionId) {
       }
       factCatalog = { schema, entities, branches, perspectives, records: records.records,
         lifecycleVisible: records.lifecycle_visible, revision: revisions[0],
-        eventGraphGuidance: records.event_graph_guidance ?? [] };
+        eventGraphGuidance: records.event_graph_guidance ?? [],
+        sources: records.sources ?? [], evidence: records.evidence ?? [],
+        provenance: records.provenance ?? [], endpointOptions: records.endpoint_options ?? [] };
       renderFactsChoices();
       renderFactRecordCatalog();
       updateFactControls();
@@ -870,10 +895,68 @@ function renderFactRecordCatalog() {
     value: `${record.family}:${record.record_id}`,
     label: `${record.family} · ${record.record_id}${record.archived === true ? " · archiviert" : ""}`,
   })), factsLifecycleTarget.value, "Keine Datensätze für Lebenszyklusaktionen vorhanden");
+  const sourceOptions = (factCatalog?.sources ?? []).map((source) => ({
+    value: source.source_id,
+    label: `${source.source_kind} · ${source.source_id}`,
+  }));
+  replaceFactOptions(factsSourceSupersedeTarget, sourceOptions, factsSourceSupersedeTarget.value,
+    "Keine sichtbare Source vorhanden");
+  replaceFactOptions(factsEvidenceSource, sourceOptions, factsEvidenceSource.value,
+    "Keine sichtbare Source vorhanden");
+  const endpointOptions = factCatalog?.endpointOptions ?? [];
+  const evidenceTargetOptions = endpointOptions
+    .filter((endpoint) => endpoint.family !== "source" && endpoint.family !== "evidence")
+    .map((endpoint) => ({
+      value: `${endpoint.family}:${endpoint.record_id}`,
+      label: `${endpoint.family} · ${endpoint.record_id}`,
+    }));
+  replaceFactOptions(factsEvidenceTarget, evidenceTargetOptions, factsEvidenceTarget.value,
+    "Kein autorisierter Evidence-Zielrecord vorhanden");
+  const provenanceEndpointOptions = endpointOptions.map((endpoint) => ({
+    value: `${endpoint.family}:${endpoint.record_id}`,
+    label: `${endpoint.family} · ${endpoint.record_id}`,
+  }));
+  replaceFactOptions(factsProvenanceFrom, provenanceEndpointOptions, factsProvenanceFrom.value,
+    "Kein autorisierter Provenance-Endpunkt vorhanden");
+  replaceFactOptions(factsProvenanceTo, provenanceEndpointOptions, factsProvenanceTo.value,
+    "Kein autorisierter Provenance-Endpunkt vorhanden");
+  const activeEvidence = (factCatalog?.evidence ?? []).filter((item) => item.retracted === false);
+  replaceFactOptions(factsEvidenceRetractTarget, activeEvidence.map((item) => ({
+    value: item.evidence_id,
+    label: `${item.relation} · ${item.evidence_id}`,
+  })), factsEvidenceRetractTarget.value, "Keine aktive, autorisierte Evidence vorhanden");
+  const activeProvenance = (factCatalog?.provenance ?? []).filter((item) => item.retracted === false);
+  replaceFactOptions(factsProvenanceRetractTarget, activeProvenance.map((item) => ({
+    value: item.provenance_id,
+    label: `${item.relation} · ${item.provenance_id}`,
+  })), factsProvenanceRetractTarget.value, "Keine aktive, autorisierte Provenance vorhanden");
+  renderFactMetaCatalog();
   updateEventCorrectionTemplate();
   factsEventGraphGuidance.replaceChildren();
   for (const line of factCatalog?.eventGraphGuidance ?? []) appendText(factsEventGraphGuidance, "p", line);
   clearFactActionPreviews();
+}
+
+function renderFactMetaCatalog() {
+  factsMetaCatalog.replaceChildren();
+  const groups = [
+    ["Sources", (factCatalog?.sources ?? []).map((item) =>
+      `${item.source_kind} · ${item.source_id} · Revision ${item.created_revision}${item.locator ? ` · ${item.locator}` : ""}`)],
+    ["Evidence", (factCatalog?.evidence ?? []).map((item) =>
+      `${item.relation} · ${item.source_id} → ${item.target_family}:${item.target_record_id} · Revision ${item.created_revision}${item.retracted === true ? " · zurückgenommen" : ""}`)],
+    ["Provenance", (factCatalog?.provenance ?? []).map((item) =>
+      `${item.relation} · ${item.from_family}:${item.from_record_id} → ${item.to_family}:${item.to_record_id} · Revision ${item.created_revision}${item.retracted === true ? " · zurückgenommen" : ""}`)],
+  ];
+  for (const [title, rows] of groups) {
+    appendText(factsMetaCatalog, "h3", title);
+    if (!rows.length) {
+      appendText(factsMetaCatalog, "p", "Keine sichtbaren Einträge.", "muted");
+      continue;
+    }
+    const list = document.createElement("ul");
+    for (const row of rows) appendText(list, "li", row);
+    factsMetaCatalog.append(list);
+  }
 }
 
 function selectedFactRecord(select, composite = false) {
@@ -944,6 +1027,35 @@ function factsContextInput() {
     layer_id: factsLayer.value,
     perspective_id: perspectiveId,
     epistemic_mode: mode,
+  };
+}
+
+function factsSourceFieldsInput() {
+  const sourceKind = factsSourceKind.value.trim();
+  const locator = factsSourceLocator.value.trim();
+  const digest = factsSourceDigest.value.trim();
+  const key = factsSourceMetadataKey.value.trim();
+  const metadataValue = factsSourceMetadataValue.value;
+  if (!/^[a-z][a-z0-9_]*$/.test(sourceKind)
+    || (key && !/^[a-z][a-z0-9_]*$/.test(key))
+    || (digest && (!/^(?:[0-9a-fA-F]{2})+$/.test(digest)))) {
+    throw new Error("invalid_request");
+  }
+  if (!key && metadataValue) throw new Error("invalid_request");
+  return {
+    source_kind: sourceKind,
+    locator: locator || null,
+    content_digest_hex: digest || null,
+    metadata: key ? [{ key, value: { kind: "string", data: metadataValue } }] : [],
+  };
+}
+
+function factsEndpointInput(select) {
+  const separator = select.value.indexOf(":");
+  if (separator < 1) throw new Error("invalid_request");
+  return {
+    family: select.value.slice(0, separator),
+    record_id: select.value.slice(separator + 1),
   };
 }
 
@@ -1360,6 +1472,7 @@ function updateFactControls() {
   let eventCorrectionValid = false;
   let eventCreateValid = false;
   let lifecycleValid = false;
+  let sourceFieldsValid = false;
   try { factsValueInput(); valueValid = true; } catch {}
   try { factsValidityInput(); validityValid = true; } catch {}
   try { factsWorldTimeInput(); queryTimeValid = true; } catch {}
@@ -1367,6 +1480,7 @@ function updateFactControls() {
   try { factsEventCorrectionCommand(); eventCorrectionValid = true; } catch {}
   try { factsEventCreateCommand(); eventCreateValid = true; } catch {}
   try { factsLifecycleCommand(); lifecycleValid = true; } catch {}
+  try { factsSourceFieldsInput(); sourceFieldsValid = true; } catch {}
   const eventMaskValid = Boolean(factsHistorySpace.value && factsLayer.value && factsEventMaskTarget.value);
   const eventRelationValid = Boolean(factsEventRelationFrom.value && factsEventRelationTo.value
     && factsEventRelationFrom.value !== factsEventRelationTo.value && factsEventRelationKind.value);
@@ -1407,6 +1521,15 @@ function updateFactControls() {
   factsEventMaskCreate.disabled = !canRead || !eventMaskValid;
   factsEventRelationCreate.disabled = !canRead || !eventRelationValid;
   factsEventSpanClose.disabled = !canRead || !eventSpanCloseValid;
+  const evidenceValid = Boolean(factsEvidenceSource.value && factsEvidenceTarget.value && factsEvidenceRelation.value);
+  const provenanceValid = Boolean(factsProvenanceFrom.value && factsProvenanceTo.value
+    && factsProvenanceFrom.value !== factsProvenanceTo.value && factsProvenanceRelation.value);
+  factsSourceCreate.disabled = !canRead || !sourceFieldsValid;
+  factsSourceSupersede.disabled = !canRead || !sourceFieldsValid || !factsSourceSupersedeTarget.value;
+  factsEvidenceCreate.disabled = !canRead || !evidenceValid;
+  factsEvidenceRetract.disabled = !canRead || !factsEvidenceRetractTarget.value || !factsEvidenceRetractReason.value.trim();
+  factsProvenanceCreate.disabled = !canRead || !provenanceValid;
+  factsProvenanceRetract.disabled = !canRead || !factsProvenanceRetractTarget.value || !factsProvenanceRetractReason.value.trim();
   factsPreviewButton.disabled = !canRead || !contextValid || !slotValid || !queryTimeValid;
   factsCorrectionPreviewButton.disabled = !canRead || !assertionCorrectionValid || !slotValid || !validityValid || !valueValid;
   factsCorrectionCommitButton.disabled = !canRead || !assertionCorrectionValid || !pendingFactActionPreviews.assertion;
@@ -3442,6 +3565,68 @@ async function runFactsSmoke(activeSessionId) {
   if (factCatalog.records.find((item) => item.family === "event" && item.record_id === eventB.recordId)?.retracted !== true) {
     throw new Error("the explicit Event retraction did not appear in the record catalog");
   }
+
+  factsSourceKind.value = "book";
+  factsSourceLocator.value = "https://example.invalid/source";
+  factsSourceDigest.value = "1234abcd";
+  factsSourceMetadataKey.value = "edition";
+  factsSourceMetadataValue.value = "first";
+  updateFactControls();
+  const source = await clickFactWrite(factsSourceCreate, "Source");
+  if (!factCatalog.sources.some((item) => item.source_id === source.recordId
+    && item.source_kind === "book" && item.content_digest_hex === "1234abcd")) {
+    throw new Error("the Source fields were not persisted and returned in the authorized catalog");
+  }
+
+  factsEvidenceSource.value = source.recordId;
+  factsEvidenceTarget.value = `assertion:${assertion.recordId}`;
+  factsEvidenceRelation.value = "supports";
+  updateFactControls();
+  const evidence = await clickFactWrite(factsEvidenceCreate, "Evidence");
+  if (!factCatalog.evidence.some((item) => item.evidence_id === evidence.recordId
+    && item.source_id === source.recordId && item.target_record_id === assertion.recordId)) {
+    throw new Error("Evidence endpoints were not preserved in the authorized catalog");
+  }
+
+  factsProvenanceFrom.value = `source:${source.recordId}`;
+  factsProvenanceTo.value = `assertion:${assertion.recordId}`;
+  factsProvenanceRelation.value = "derived_from";
+  updateFactControls();
+  const provenance = await clickFactWrite(factsProvenanceCreate, "Provenance");
+  if (!factCatalog.provenance.some((item) => item.provenance_id === provenance.recordId
+    && item.from_record_id === source.recordId && item.to_record_id === assertion.recordId)) {
+    throw new Error("the Provenance edge was not returned with its closed endpoints");
+  }
+
+  factsSourceSupersedeTarget.value = source.recordId;
+  factsSourceKind.value = "book_revision";
+  factsSourceLocator.value = "https://example.invalid/source/revised";
+  factsSourceDigest.value = "5678abcd";
+  factsSourceMetadataValue.value = "second";
+  updateFactControls();
+  const replacementSource = await clickFactWrite(factsSourceSupersede, "Source mit Lineage");
+  if (!factCatalog.provenance.some((item) => item.from_family === "source"
+    && item.from_record_id === source.recordId && item.to_family === "source"
+    && item.to_record_id === replacementSource.recordId && item.relation === "derived_from")) {
+    throw new Error("Source replacement did not store its explicit DerivedFrom lineage");
+  }
+
+  factsEvidenceRetractTarget.value = evidence.recordId;
+  factsEvidenceRetractReason.value = "IPC smoke: source changed";
+  updateFactControls();
+  await clickFactWrite(factsEvidenceRetract, "Evidence-Rücknahme");
+  if (factCatalog.evidence.find((item) => item.evidence_id === evidence.recordId)?.retracted !== true) {
+    throw new Error("the Evidence retraction was not shown as a separate lifecycle record");
+  }
+
+  factsProvenanceRetractTarget.value = provenance.recordId;
+  factsProvenanceRetractReason.value = "IPC smoke: explicit Provenance retraction";
+  updateFactControls();
+  await clickFactWrite(factsProvenanceRetract, "Provenance-Rücknahme");
+  if (factCatalog.provenance.find((item) => item.provenance_id === provenance.recordId)?.retracted !== true) {
+    throw new Error("the Provenance retraction was not shown in the catalog");
+  }
+  await recordFactsSmokeStage("meta-history:complete");
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
@@ -4130,6 +4315,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         }
         operationStatus.textContent = "Projektprüfung abgeschlossen.";
         await refreshProject(sessionId);
+        if (role === "primary") await recordFactsSmokeStage("project-complete");
       }
 
       window.setInterval(() => {
@@ -4321,8 +4507,18 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   });
   for (const input of [factsValueText, factsTimeValueTicks, factsValidityStart, factsValidityEnd,
     factsMaskAssertionId, factsQueryNanoseconds, factsCorrectionReason, factsEventCorrectionDraft,
-    factsEventDraft, factsLifecycleReason, factsEventSpanCloseNanoseconds]) {
+  factsEventDraft, factsLifecycleReason, factsEventSpanCloseNanoseconds]) {
     input.addEventListener("input", clearFactActionPreviews);
+  }
+  for (const input of [factsSourceKind, factsSourceLocator, factsSourceDigest,
+    factsSourceMetadataKey, factsSourceMetadataValue, factsEvidenceRetractReason,
+    factsProvenanceRetractReason]) {
+    input.addEventListener("input", updateFactControls);
+  }
+  for (const select of [factsSourceSupersedeTarget, factsEvidenceSource, factsEvidenceTarget,
+    factsEvidenceRelation, factsEvidenceRetractTarget, factsProvenanceFrom, factsProvenanceTo,
+    factsProvenanceRelation, factsProvenanceRetractTarget]) {
+    select.addEventListener("change", updateFactControls);
   }
   factsCreateAssertion.addEventListener("click", () => submitFact(() => ({
     command: "create_assertion",
@@ -4334,6 +4530,43 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
     polarity: factsPolarity.value,
     validity: factsValidityInput(),
   }), "Assertion"));
+  factsSourceCreate.addEventListener("click", () => submitFact(() => ({
+    command: "create_source",
+    expected_base_revision: factCatalog.revision,
+    ...factsSourceFieldsInput(),
+  }), "Source"));
+  factsSourceSupersede.addEventListener("click", () => submitFact(() => ({
+    command: "supersede_source",
+    expected_base_revision: factCatalog.revision,
+    superseded_source_id: factsSourceSupersedeTarget.value,
+    ...factsSourceFieldsInput(),
+  }), "Source mit Lineage"));
+  factsEvidenceCreate.addEventListener("click", () => submitFact(() => ({
+    command: "create_evidence",
+    expected_base_revision: factCatalog.revision,
+    source_id: factsEvidenceSource.value,
+    target: factsEndpointInput(factsEvidenceTarget),
+    relation: factsEvidenceRelation.value,
+  }), "Evidence"));
+  factsEvidenceRetract.addEventListener("click", () => submitFact(() => ({
+    command: "retract_evidence",
+    expected_base_revision: factCatalog.revision,
+    evidence_id: factsEvidenceRetractTarget.value,
+    reason: factsEvidenceRetractReason.value.trim(),
+  }), "Evidence-Rücknahme"));
+  factsProvenanceCreate.addEventListener("click", () => submitFact(() => ({
+    command: "create_provenance",
+    expected_base_revision: factCatalog.revision,
+    from: factsEndpointInput(factsProvenanceFrom),
+    to: factsEndpointInput(factsProvenanceTo),
+    relation: factsProvenanceRelation.value,
+  }), "Provenance"));
+  factsProvenanceRetract.addEventListener("click", () => submitFact(() => ({
+    command: "retract_provenance",
+    expected_base_revision: factCatalog.revision,
+    provenance_id: factsProvenanceRetractTarget.value,
+    reason: factsProvenanceRetractReason.value.trim(),
+  }), "Provenance-Rücknahme"));
   factsCreateMask.addEventListener("click", () => submitFact(() => ({
     command: "create_mask",
     expected_base_revision: factCatalog.revision,
