@@ -17,9 +17,10 @@ use worlddb_ode_engine::{
     BranchLayerCommand, BranchLayerResponse, EntityCommand, EntityModeInput, EntityResponse,
     FactCommand, FactQueryModeInput, FactQuerySchemaModeInput, FactResponse,
     HistorySpaceTransferCommand, HistorySpaceTransferResponse, JobListView, JobShutdownView,
-    MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, ResolutionOutcomeView,
-    ResolutionResultView, Response, SchemaCommand, SchemaResponse, SecurityPolicyCommand,
-    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
+    MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, RecoveryApplyView,
+    RecoveryReportView, RecoverySalvageView, ResolutionOutcomeView, ResolutionResultView, Response,
+    SchemaCommand, SchemaResponse, SecurityPolicyCommand, SecurityPolicyResponse,
+    SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -172,6 +173,9 @@ fn run() -> Result<(), String> {
             project_status,
             list_jobs,
             cancel_job,
+            inspect_recovery,
+            run_journaled_recovery,
+            salvage_recovery,
             create_project,
             open_project,
             close_project,
@@ -283,6 +287,26 @@ struct JobsRequestV1 {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RecoveryRequestV1 {
+    protocol_version: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoveryApplyRequestV1 {
+    protocol_version: u16,
+    confirmed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecoverySalvageRequestV1 {
+    protocol_version: u16,
+    archive_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CancelJobRequestV1 {
     protocol_version: u16,
     session_id: String,
@@ -295,6 +319,24 @@ struct JobListResponseV1 {
     result: JobListView,
     #[serde(skip_serializing_if = "Option::is_none")]
     cancel_disposition: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RecoveryReportResponseV1 {
+    protocol_version: u16,
+    result: RecoveryReportView,
+}
+
+#[derive(Serialize)]
+struct RecoveryApplyResponseV1 {
+    protocol_version: u16,
+    result: RecoveryApplyView,
+}
+
+#[derive(Serialize)]
+struct RecoverySalvageResponseV1 {
+    protocol_version: u16,
+    result: RecoverySalvageView,
 }
 
 #[derive(Serialize)]
@@ -579,6 +621,91 @@ fn cancel_job(
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
         cancel_disposition: Some(disposition),
+    })
+}
+
+#[tauri::command]
+async fn inspect_recovery(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: RecoveryRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<RecoveryReportResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let root = if let Some(test_root) = project_smoke_root() {
+        test_root
+    } else {
+        pick_project_folder(app, window, "WorldDB-Projekt read-only prüfen").await?
+    };
+    let result = backend
+        .inspect_recovery(&root)
+        .map_err(|_| IpcErrorV1::new("recovery_inspection_unavailable"))?;
+    Ok(RecoveryReportResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+fn run_journaled_recovery(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: RecoveryApplyRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<RecoveryApplyResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    if !request.confirmed {
+        return Err(IpcErrorV1::new("explicit_confirmation_required"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let result = backend
+        .run_journaled_recovery()
+        .map_err(|_| IpcErrorV1::new("journaled_recovery_rejected"))?;
+    app.emit("recovery-state-changed", ())
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    Ok(RecoveryApplyResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
+}
+
+#[tauri::command]
+async fn salvage_recovery(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: RecoverySalvageRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<RecoverySalvageResponseV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let archive_name = validate_project_name(&request.archive_name)?;
+    let parent = pick_project_parent(app, window, "Zielordner für das Salvage-Archiv").await?;
+    let destination = parent.join(format!("{archive_name}.salvage"));
+    let result = backend
+        .salvage_recovery(&destination)
+        .map_err(|_| IpcErrorV1::new("salvage_rejected"))?;
+    Ok(RecoverySalvageResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
     })
 }
 
@@ -895,7 +1022,7 @@ fn manage_facts(
 #[tauri::command]
 fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Result<(), IpcErrorV1> {
     let close_after_smoke = window.label() == "primary"
-        && details == "facts-smoke:project-complete"
+        && details == "facts-smoke:recovery-smoke:complete"
         && cfg!(debug_assertions)
         && project_smoke_root().is_some()
         && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
@@ -2008,7 +2135,8 @@ fn chunk_metadata(headers: &tauri::http::HeaderMap) -> Result<ChunkMetadata<'_>,
 mod ipc_security_tests {
     use super::{
         CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, IpcErrorV1,
-        OpenProjectRequestV1, chunk_metadata, validate_project_name,
+        OpenProjectRequestV1, RecoveryApplyRequestV1, RecoveryRequestV1, RecoverySalvageRequestV1,
+        chunk_metadata, validate_project_name,
     };
     use std::str::FromStr;
     use tauri::http::{HeaderMap, HeaderValue};
@@ -2072,6 +2200,29 @@ mod ipc_security_tests {
         assert!(serde_json::from_value::<CreateProjectRequestV1>(invalid.clone()).is_err());
         assert!(serde_json::from_value::<OpenProjectRequestV1>(invalid.clone()).is_err());
         assert!(serde_json::from_value::<CloseProjectRequestV1>(invalid).is_err());
+    }
+
+    #[test]
+    fn recovery_dtos_reject_renderer_paths_and_require_explicit_apply_confirmation() {
+        let invalid = serde_json::json!({
+            "protocol_version": 1,
+            "project_path": "C:/renderer/chosen/database",
+        });
+        assert!(serde_json::from_value::<RecoveryRequestV1>(invalid).is_err());
+        assert!(
+            serde_json::from_value::<RecoveryApplyRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<RecoverySalvageRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "archive_name": "safe-name",
+                "destination": "C:/renderer/chosen/database",
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2177,6 +2328,7 @@ struct WindowProjectSnapshot {
 struct BackendState {
     engine: Option<EngineBackend>,
     project: Option<worlddb_ode_engine::ProjectAccess>,
+    recovery_root: Option<PathBuf>,
     windows: HashMap<String, WindowProjectSnapshot>,
 }
 
@@ -2206,6 +2358,7 @@ impl Backend {
             state: Mutex::new(BackendState {
                 engine,
                 project: None,
+                recovery_root: None,
                 windows: HashMap::new(),
             }),
         })
@@ -2329,6 +2482,7 @@ impl Backend {
         ));
         state.engine = Some(engine);
         state.project = Some(access);
+        state.recovery_root = None;
         state.windows.clear();
         attach_window_snapshot(&mut state, window_label).map_err(|_| {
             ProjectError::UnknownCommitOutcome {
@@ -2384,9 +2538,63 @@ impl Backend {
         };
         state.engine = Some(engine);
         state.project = Some(access);
+        state.recovery_root = None;
         state.windows.clear();
         attach_window_snapshot(&mut state, window_label)?;
         self.project_status_locked(&mut state, window_label)
+    }
+
+    fn inspect_recovery(&self, root: &Path) -> Result<RecoveryReportView, String> {
+        let metadata = std::fs::symlink_metadata(root)
+            .map_err(|_| "recovery source is unavailable".to_owned())?;
+        if !metadata.is_dir() || is_reparse_point(&metadata) {
+            return Err("recovery source is unavailable".to_owned());
+        }
+        let canonical_root =
+            std::fs::canonicalize(root).map_err(|_| "recovery source is unavailable".to_owned())?;
+        {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "host project state is poisoned".to_owned())?;
+            if state.project.is_some() || state.engine.is_some() {
+                return Err("another project is open".to_owned());
+            }
+        }
+        let result = recovery_inspect_host(&canonical_root)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() {
+            return Err("another project is open".to_owned());
+        }
+        state.recovery_root = Some(canonical_root);
+        Ok(result)
+    }
+
+    fn run_journaled_recovery(&self) -> Result<RecoveryApplyView, String> {
+        let root = self.recovery_root()?;
+        recovery_run_host(&root)
+    }
+
+    fn salvage_recovery(&self, destination: &Path) -> Result<RecoverySalvageView, String> {
+        let root = self.recovery_root()?;
+        recovery_salvage_host(&root, destination)
+    }
+
+    fn recovery_root(&self) -> Result<PathBuf, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is poisoned".to_owned())?;
+        if state.project.is_some() || state.engine.is_some() {
+            return Err("another project is open".to_owned());
+        }
+        state
+            .recovery_root
+            .clone()
+            .ok_or_else(|| "no recovery source is selected".to_owned())
     }
 
     fn close_project(&self) -> Result<Option<JobShutdownView>, ProjectError> {
@@ -2625,6 +2833,71 @@ fn map_project_error(error: worlddb_ode_engine::ProjectError) -> IpcErrorV1 {
             operation_id,
             database_id,
         } => IpcErrorV1::unknown_commit(operation_id, database_id.map(|id| id.to_string())),
+    }
+}
+
+#[cfg(feature = "in-process")]
+fn recovery_inspect_host(root: &Path) -> Result<RecoveryReportView, String> {
+    worlddb_ode_engine::inspect_recovery(root).map_err(|_| "recovery inspection failed".to_owned())
+}
+
+#[cfg(feature = "in-process")]
+fn recovery_run_host(root: &Path) -> Result<RecoveryApplyView, String> {
+    worlddb_ode_engine::run_journaled_recovery(root)
+        .map_err(|_| "journaled recovery failed".to_owned())
+}
+
+#[cfg(feature = "in-process")]
+fn recovery_salvage_host(root: &Path, destination: &Path) -> Result<RecoverySalvageView, String> {
+    worlddb_ode_engine::salvage_recovery(root, destination).map_err(|_| "salvage failed".to_owned())
+}
+
+#[cfg(feature = "sidecar")]
+fn recovery_sidecar_request(root: &Path, request: Request) -> Result<Response, String> {
+    let mut sidecar = Sidecar::start_for_recovery(root)?;
+    let response = sidecar.request(request);
+    let stopped = sidecar.shutdown_child();
+    match response {
+        Ok(response) => {
+            stopped?;
+            Ok(response)
+        }
+        Err(error) => {
+            let _ = stopped;
+            Err(error)
+        }
+    }
+}
+
+#[cfg(feature = "sidecar")]
+fn recovery_inspect_host(root: &Path) -> Result<RecoveryReportView, String> {
+    match recovery_sidecar_request(root, Request::RecoveryInspect)? {
+        Response::RecoveryReport { result } => Ok(result),
+        Response::Error { .. } => Err("recovery inspection failed".to_owned()),
+        _ => Err("sidecar returned an unexpected recovery report".to_owned()),
+    }
+}
+
+#[cfg(feature = "sidecar")]
+fn recovery_run_host(root: &Path) -> Result<RecoveryApplyView, String> {
+    match recovery_sidecar_request(root, Request::RecoveryRun)? {
+        Response::RecoveryApplied { result } => Ok(result),
+        Response::Error { .. } => Err("journaled recovery failed".to_owned()),
+        _ => Err("sidecar returned an unexpected recovery result".to_owned()),
+    }
+}
+
+#[cfg(feature = "sidecar")]
+fn recovery_salvage_host(root: &Path, destination: &Path) -> Result<RecoverySalvageView, String> {
+    match recovery_sidecar_request(
+        root,
+        Request::RecoverySalvage {
+            destination: destination.to_owned(),
+        },
+    )? {
+        Response::RecoverySalvaged { result } => Ok(result),
+        Response::Error { .. } => Err("salvage failed".to_owned()),
+        _ => Err("sidecar returned an unexpected salvage result".to_owned()),
     }
 }
 
@@ -3028,6 +3301,7 @@ struct Sidecar {
     database_root: PathBuf,
     executable: PathBuf,
     host_authenticated: bool,
+    recovery_mode: bool,
     engine_process_id: u32,
     engine_build_id: String,
 }
@@ -3054,17 +3328,22 @@ impl Sidecar {
     }
 
     fn start_for_project(database_root: &Path) -> Result<Self, String> {
-        Self::start_with_authentication(database_root, &sidecar_executable()?, true)
+        Self::start_with_authentication(database_root, &sidecar_executable()?, true, false)
+    }
+
+    fn start_for_recovery(database_root: &Path) -> Result<Self, String> {
+        Self::start_with_authentication(database_root, &sidecar_executable()?, true, true)
     }
 
     fn start_with(database_root: &Path, executable: &Path) -> Result<Self, String> {
-        Self::start_with_authentication(database_root, executable, false)
+        Self::start_with_authentication(database_root, executable, false, false)
     }
 
     fn start_with_authentication(
         database_root: &Path,
         executable: &Path,
         host_authenticated: bool,
+        recovery_only: bool,
     ) -> Result<Self, String> {
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
@@ -3078,6 +3357,9 @@ impl Sidecar {
             .stderr(Stdio::null());
         if host_authenticated {
             command.arg("--host-account");
+        }
+        if recovery_only {
+            command.arg("--recovery-only");
         }
         let mut child = command
             .spawn()
@@ -3118,6 +3400,7 @@ impl Sidecar {
             database_root: database_root.to_owned(),
             executable: executable.to_owned(),
             host_authenticated,
+            recovery_mode: recovery_only,
             engine_process_id: 0,
             engine_build_id: String::new(),
         };
@@ -3316,6 +3599,7 @@ impl Sidecar {
             &self.database_root,
             &self.executable,
             self.host_authenticated,
+            self.recovery_mode,
         )?;
         let response = replacement.request_without_recovery(Request::Health)?;
         if !matches!(
@@ -3472,6 +3756,7 @@ impl Sidecar {
             &self.database_root,
             &self.executable,
             self.host_authenticated,
+            self.recovery_mode,
         )?;
         let replacement_health = replacement.health_for_validation()?;
         let replacement_process_id = replacement.engine_process_id;
@@ -3508,6 +3793,7 @@ impl Sidecar {
             &self.database_root,
             updated_executable,
             self.host_authenticated,
+            self.recovery_mode,
         )?;
         let replacement_health = replacement.health_for_validation()?;
         let replacement_build_id = replacement.engine_build_id.clone();

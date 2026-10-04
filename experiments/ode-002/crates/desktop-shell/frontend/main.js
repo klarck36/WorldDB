@@ -15,6 +15,20 @@ const jobsList = document.querySelector("#jobs-list");
 const jobsRefreshButton = document.querySelector("#jobs-refresh");
 const jobsCloseProjectButton = document.querySelector("#jobs-close-project");
 const jobsShutdownStatus = document.querySelector("#jobs-shutdown-status");
+const recoveryPanel = document.querySelector("#recovery-panel");
+const recoveryInspectButton = document.querySelector("#recovery-inspect");
+const recoveryOpenCleanButton = document.querySelector("#recovery-open-clean");
+const recoveryStatus = document.querySelector("#recovery-status");
+const recoveryReportElement = document.querySelector("#recovery-report");
+const recoveryFindings = document.querySelector("#recovery-findings");
+const recoveryActions = document.querySelector("#recovery-actions");
+const recoveryNextActions = document.querySelector("#recovery-next-actions");
+const recoveryKeepReadOnlyButton = document.querySelector("#recovery-keep-readonly");
+const recoveryRunButton = document.querySelector("#recovery-run");
+const recoveryRestoreButton = document.querySelector("#recovery-restore");
+const recoveryArchiveName = document.querySelector("#recovery-archive-name");
+const recoverySalvageFields = document.querySelector("#recovery-salvage-fields");
+const recoverySalvageButton = document.querySelector("#recovery-salvage");
 
 const schemaPanel = document.querySelector("#schema-panel");
 const schemaStatus = document.querySelector("#schema-status");
@@ -299,6 +313,10 @@ const userMessages = {
   project_unavailable: "Dieses Konto hat keinen Zugriff auf das Projekt.",
   invalid_project: "Der ausgewählte Ordner enthält kein gültiges WorldDB-Projekt.",
   recovery_required: "Das Projekt benötigt eine Prüfung oder Wiederherstellung und wurde nicht geöffnet.",
+  recovery_inspection_unavailable: "Das Projekt konnte nicht read-only geprüft werden. Es wurde nicht geöffnet oder repariert.",
+  journaled_recovery_rejected: "Die journalisierte Recovery wurde abgelehnt oder ist für diesen Befund nicht sicher.",
+  salvage_rejected: "Salvage wurde abgelehnt. Das Quellprojekt blieb unverändert.",
+  explicit_confirmation_required: "Eine ausdrückliche Bestätigung ist für Recovery erforderlich.",
   host_unavailable: "Der lokale WorldDB-Host ist gerade nicht verfügbar.",
   selection_cancelled: "Die Auswahl wurde abgebrochen.",
   invalid_request: "Bitte prüfe die Eingabe.",
@@ -326,6 +344,8 @@ let projectCreationJournalUnavailable = false;
 const pendingProjectCreationPrefix = "worlddb.pending_project_creations.v1:";
 let projectBusy = false;
 let jobsBusy = false;
+let recoveryBusy = false;
+let currentRecoveryReport = null;
 let schemaBusy = false;
 let entityBusy = false;
 let perspectiveBusy = false;
@@ -928,6 +948,17 @@ function updateProjectControls() {
   closeButton.disabled = projectBusy || schemaBusy || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy || !projectOpen;
   jobsRefreshButton.disabled = jobsBusy || !projectOpen;
   jobsCloseProjectButton.disabled = closeButton.disabled;
+  updateRecoveryControls();
+}
+
+function updateRecoveryControls() {
+  const blocked = recoveryBusy || projectBusy || projectOpen;
+  recoveryInspectButton.disabled = blocked;
+  recoveryKeepReadOnlyButton.disabled = blocked || !currentRecoveryReport;
+  recoveryRunButton.disabled = blocked || !currentRecoveryReport?.can_run_journaled_recovery;
+  recoveryRestoreButton.disabled = blocked || !currentRecoveryReport?.can_restore_verified_backup;
+  recoverySalvageButton.disabled = blocked || !currentRecoveryReport?.can_salvage;
+  recoveryOpenCleanButton.disabled = blocked || currentRecoveryReport?.disposition !== "clean";
 }
 
 function setBusy(busy) {
@@ -962,6 +993,7 @@ function renderProject(project) {
   transferPanel.hidden = !projectOpen;
   factsPanel.hidden = !projectOpen;
   jobsPanel.hidden = !projectOpen;
+  recoveryPanel.hidden = projectOpen;
   projectRevision = projectOpen ? project.revision ?? null : null;
   if (!projectOpen) {
     projectStatus.textContent = "Kein Projekt geöffnet";
@@ -981,6 +1013,109 @@ function renderProject(project) {
 
 async function getProject(activeSessionId) {
   return invoke("project_status", { sessionId: activeSessionId });
+}
+
+const recoveryDispositionText = {
+  clean: "sauber geprüft",
+  recovery_required: "journalisierte Recovery erforderlich",
+  quarantined_read_only: "Quarantäne · read-only",
+};
+const recoveryDamageText = {
+  bitflip: "Digest oder Prüfsumme stimmt nicht",
+  truncation: "unvollständiges Dateiende",
+  reorder: "ungültige Reihenfolge",
+  duplicate_frame: "doppelter Frame",
+  semantic_invalidity: "semantische Integritätsverletzung",
+  other: "sonstiger Integritätsbefund",
+};
+const recoveryActionText = {
+  preserve_original: "Original für Diagnose unverändert aufbewahren",
+  keep_read_only: "Projekt read-only belassen",
+  run_journaled_tail_recovery: "WAL-Endstück mit Recovery-Journal behandeln",
+  run_journaled_recovery: "Journalisierte Recovery ausdrücklich ausführen",
+  restore_verified_backup_to_new_destination: "Verifiziertes Backup in ein neues Ziel wiederherstellen",
+  salvage_into_new_database: "Verifizierte Segmente als neues Salvage-Archiv kopieren",
+};
+const recoveryIssueText = {
+  torn_tail: "Ein WAL-Endstück ist unvollständig und zählt nicht zur sicheren Revision.",
+  uncommitted_tail: "Ein vollständiger Prepare-Eintrag besitzt keinen Commitmarker.",
+  current_manifest_corrupt: "CURRENT oder das referenzierte Manifest ist nicht verifizierbar.",
+  manifest_ahead_of_safe_prefix: "Das Manifest beansprucht eine Revision oberhalb des verifizierten WAL-Präfixes.",
+  manifest_commit_hash_mismatch: "Der Manifest-Commitbezug stimmt nicht mit der WAL-Hashkette überein.",
+  manifest_behind_committed_snapshot: "Das Manifest liegt hinter einem vollständig committed Snapshot.",
+  manifest_snapshot_mismatch: "Manifest und committed Snapshot nennen unterschiedliche Segmentinventare.",
+  committed_replay_payload_corrupt: "Ein committed Replay-Payload ist nicht vollständig verifizierbar.",
+  required_audit_sequence_invalid: "Eine Required-Audit-Sequenz ist doppelt oder nicht fortlaufend.",
+  referenced_segment_corrupt: "Ein vom committed Inventar referenziertes Segment ist beschädigt.",
+  operation_index_mismatch: "Der OperationId-Index stimmt nicht mit dem vollständig geprüften WAL überein.",
+  schema_history_invalid: "Die Schemahistorie konnte nicht vollständig verifiziert werden.",
+  capability_history_invalid: "Die Berechtigungshistorie konnte nicht vollständig verifiziert werden.",
+  segment_readback_failed: "Ein referenziertes Datensegment konnte beim zweiten Prüflauf nicht verifiziert werden.",
+};
+
+function renderRecoveryReport(report) {
+  currentRecoveryReport = report;
+  recoveryReportElement.replaceChildren();
+  recoveryFindings.replaceChildren();
+  recoveryReportElement.hidden = false;
+  recoveryActions.hidden = !report.read_only;
+  recoveryRunButton.hidden = !report.can_run_journaled_recovery;
+  recoveryRestoreButton.hidden = !report.can_restore_verified_backup;
+  recoverySalvageFields.hidden = !report.can_salvage;
+  recoveryOpenCleanButton.hidden = report.disposition !== "clean";
+
+  const summary = document.createElement("div");
+  summary.className = "grid";
+  const inventory = report.inventory;
+  const metrics = [
+    ["Sichere Revision", report.safe_revision],
+    ["Zustand", recoveryDispositionText[report.disposition] ?? report.disposition],
+    ["Schreibstatus", report.read_only ? "read-only" : "schreibbar"],
+    ["WAL-Commitframes", inventory.wal_commit_frames],
+    ["Manifestsegmente", inventory.manifest_segments ?? "nicht vollständig verifiziert"],
+    ["Historysegmente", inventory.history_segments],
+    ["Rechte-Segmente", inventory.security_policy_segments],
+    ["Schema-Definitionen", inventory.schema_definitions],
+    ["Rechteversionen", inventory.capability_versions],
+    ["CURRENT/Manifest", report.current_manifest === "corrupt" ? "nicht verifizierbar" : "geprüft oder nicht anwendbar"],
+  ];
+  for (const [label, value] of metrics) {
+    const cell = document.createElement("div");
+    cell.className = "result-cell";
+    const heading = document.createElement("strong");
+    heading.textContent = label;
+    const text = document.createElement("p");
+    text.textContent = value;
+    cell.append(heading, text);
+    summary.append(cell);
+  }
+  recoveryReportElement.append(summary);
+
+  if (report.findings.length === 0) {
+    const clean = document.createElement("p");
+    clean.className = "muted";
+    clean.textContent = "Keine Schäden oder offenen Recovery-Befunde gefunden.";
+    recoveryFindings.append(clean);
+  } else {
+    for (const finding of report.findings) {
+      const item = document.createElement("article");
+      item.className = "result-cell";
+      const heading = document.createElement("h3");
+      heading.textContent = finding.code.replaceAll("_", " ");
+      const classification = document.createElement("p");
+      classification.className = "muted";
+      classification.textContent = recoveryDamageText[finding.damage_class] ?? finding.damage_class;
+      const description = document.createElement("p");
+      description.textContent = recoveryIssueText[finding.code] ?? finding.summary;
+      item.append(heading, classification, description);
+      recoveryFindings.append(item);
+    }
+  }
+
+  const nextActions = report.next_actions.map((action) => recoveryActionText[action] ?? action).join(" · ");
+  recoveryNextActions.textContent = nextActions || "Keine zusätzliche Recoveryaktion ist erforderlich.";
+  recoveryStatus.textContent = `Read-only-Prüfung abgeschlossen · sichere Revision ${report.safe_revision} · ${recoveryDispositionText[report.disposition] ?? report.disposition}.`;
+  updateRecoveryControls();
 }
 
 const jobText = {
@@ -1221,6 +1356,90 @@ async function runSecurityProbes(activeSessionId) {
   }
 }
 
+function runRecoveryRendererSmoke() {
+  renderRecoveryReport({
+    safe_revision: "9223372036854775807",
+    disposition: "quarantined_read_only",
+    read_only: true,
+    current_manifest: "corrupt",
+    inventory: {
+      wal_commit_frames: "12",
+      manifest_segments: null,
+      history_segments: "8",
+      security_policy_segments: "2",
+      schema_definitions: "5",
+      capability_versions: "3",
+    },
+    findings: [{
+      code: "referenced_segment_corrupt",
+      damage_class: "bitflip",
+      summary: "safe summary",
+      next_actions: ["preserve_original", "keep_read_only"],
+    }],
+    next_actions: [
+      "preserve_original",
+      "keep_read_only",
+      "restore_verified_backup_to_new_destination",
+      "salvage_into_new_database",
+    ],
+    can_run_journaled_recovery: false,
+    can_restore_verified_backup: true,
+    can_salvage: true,
+  });
+  const damageText = `${recoveryReportElement.textContent} ${recoveryFindings.textContent} ${recoveryNextActions.textContent}`;
+  if (!damageText.includes("9223372036854775807") || !damageText.includes("read-only")
+    || !damageText.includes("beschädigt") || recoveryRestoreButton.hidden
+    || recoverySalvageFields.hidden || !recoveryRunButton.hidden) {
+    throw new Error("Recovery-Bericht, read-only-Zustand oder getrennte Folgeaktionen fehlen.");
+  }
+
+  renderRecoveryReport({
+    safe_revision: "42",
+    disposition: "clean",
+    read_only: false,
+    current_manifest: "verified_or_not_applicable",
+    inventory: {
+      wal_commit_frames: "42",
+      manifest_segments: "6",
+      history_segments: "4",
+      security_policy_segments: "2",
+      schema_definitions: "5",
+      capability_versions: "3",
+    },
+    findings: [],
+    next_actions: [],
+    can_run_journaled_recovery: false,
+    can_restore_verified_backup: false,
+    can_salvage: false,
+  });
+  if (!recoveryFindings.textContent.includes("Keine Schäden")
+    || recoveryOpenCleanButton.hidden || !recoveryRunButton.hidden
+    || !recoveryRestoreButton.hidden || !recoverySalvageFields.hidden) {
+    throw new Error("Der saubere Recovery-Bericht bietet unerwartete Änderungsaktionen an.");
+  }
+  currentRecoveryReport = null;
+  recoveryReportElement.hidden = true;
+  recoveryActions.hidden = true;
+  recoveryOpenCleanButton.hidden = true;
+  recoveryStatus.textContent = "";
+  recoveryFindings.replaceChildren();
+  updateRecoveryControls();
+}
+
+async function runRecoverySmoke(activeSessionId) {
+  const response = await invoke("inspect_recovery", {
+    sessionId: activeSessionId,
+    request: { protocol_version: 1 },
+  });
+  const report = response.result;
+  if (response.protocol_version !== 1 || report.disposition !== "clean"
+    || report.read_only || report.findings.length !== 0 || !report.safe_revision) {
+    throw new Error("Die native read-only Recovery-Prüfung meldete keinen sauberen Projektstand.");
+  }
+  renderRecoveryReport(report);
+  await recordFactsSmokeStage("recovery-smoke:pass");
+}
+
 async function runProjectSmoke(activeSessionId) {
   if (role === "primary") {
     await createProjectTracked(activeSessionId, "IPC-Smoke");
@@ -1295,6 +1514,7 @@ async function runProjectSmoke(activeSessionId) {
     throw new Error("Unbestimmter Fortschritt oder belegter Neustartstatus fehlt in der Jobansicht.");
   }
   renderJobs(response.result);
+  runRecoveryRendererSmoke();
 }
 
 function schemaModeInput() {
@@ -5442,6 +5662,8 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           renderProject(closeResponse.project);
           jobsShutdownStatus.textContent = "Shutdown: vollständig; keine offenen Jobs oder Worker.";
           await recordFactsSmokeStage("project-complete");
+          await runRecoverySmoke(sessionId);
+          await recordFactsSmokeStage("recovery-smoke:complete");
         }
       }
 
@@ -5489,6 +5711,89 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       setBusy(false);
       await refreshProject(sessionId).catch(() => {});
     }
+  });
+
+  recoveryInspectButton.addEventListener("click", async () => {
+    if (!sessionId || projectOpen || recoveryBusy) return;
+    recoveryBusy = true;
+    recoveryStatus.textContent = "Projektordner wird read-only geprüft …";
+    currentRecoveryReport = null;
+    updateRecoveryControls();
+    try {
+      const response = await invoke("inspect_recovery", {
+        sessionId,
+        request: { protocol_version: 1 },
+      });
+      renderRecoveryReport(response.result);
+    } catch (error) {
+      recoveryReportElement.hidden = true;
+      recoveryActions.hidden = true;
+      recoveryStatus.textContent = showError(error);
+    } finally {
+      recoveryBusy = false;
+      updateRecoveryControls();
+    }
+  });
+
+  recoveryOpenCleanButton.addEventListener("click", () => openButton.click());
+
+  recoveryKeepReadOnlyButton.addEventListener("click", () => {
+    if (!currentRecoveryReport) return;
+    recoveryStatus.textContent = `Die Quelle bleibt unverändert und read-only; sichere Revision ${currentRecoveryReport.safe_revision}.`;
+  });
+
+  recoveryRunButton.addEventListener("click", async () => {
+    if (!sessionId || !currentRecoveryReport?.can_run_journaled_recovery || recoveryBusy) return;
+    const confirmed = window.confirm(
+      "Journalisierte Recovery darf WAL-Endstücke quarantänisieren und ein verifiziertes Manifest veröffentlichen. Das ist eine ausdrückliche Änderung am Projekt. Fortfahren?",
+    );
+    if (!confirmed) return;
+    recoveryBusy = true;
+    recoveryStatus.textContent = "Journalisierte Recovery läuft …";
+    updateRecoveryControls();
+    try {
+      const response = await invoke("run_journaled_recovery", {
+        sessionId,
+        request: { protocol_version: 1, confirmed: true },
+      });
+      renderRecoveryReport(response.result.report);
+      recoveryStatus.textContent = `Journalisierte Recovery abgeschlossen · ${response.result.quarantined_tails} WAL-Endstücke quarantänisiert · ${response.result.replayed_snapshots} Snapshots wiederholt · Zustand: ${recoveryDispositionText[response.result.report.disposition] ?? response.result.report.disposition}.`;
+    } catch (error) {
+      recoveryStatus.textContent = showError(error);
+    } finally {
+      recoveryBusy = false;
+      updateRecoveryControls();
+    }
+  });
+
+  recoverySalvageButton.addEventListener("click", async () => {
+    if (!sessionId || !currentRecoveryReport?.can_salvage || recoveryBusy) return;
+    const archiveName = recoveryArchiveName.value.trim();
+    if (!archiveName) {
+      recoveryStatus.textContent = "Gib einen Namen für das neue Salvage-Archiv ein.";
+      recoveryArchiveName.focus();
+      return;
+    }
+    recoveryBusy = true;
+    recoveryStatus.textContent = "Wähle im nativen Dialog einen vorhandenen Elternordner für das neue Archiv …";
+    updateRecoveryControls();
+    try {
+      const response = await invoke("salvage_recovery", {
+        sessionId,
+        request: { protocol_version: 1, archive_name: archiveName },
+      });
+      const result = response.result;
+      recoveryStatus.textContent = `Salvage-Archiv ${result.archive_name} erstellt · neue Datenbank-ID ${result.new_database_id} · sichere Revision ${result.safe_revision} · ${result.copied_segments} Segmente kopiert · ${result.omitted_segments} ausgelassen · ${result.uncertainty_count} Unsicherheiten im markierten Archivbericht.`;
+    } catch (error) {
+      recoveryStatus.textContent = showError(error);
+    } finally {
+      recoveryBusy = false;
+      updateRecoveryControls();
+    }
+  });
+
+  recoveryRestoreButton.addEventListener("click", () => {
+    recoveryStatus.textContent = "Restore bleibt ein eigener Ablauf in ein neues Ziel und überschreibt diese Quelle nicht. Die vollständige Backup-/Restore-Bedienung folgt in M8-23a; dieser Schritt hat nichts an Dateien geändert.";
   });
 
   closeButton.addEventListener("click", async () => {

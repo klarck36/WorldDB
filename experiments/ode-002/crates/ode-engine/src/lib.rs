@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -72,6 +72,12 @@ mod jobs;
 pub use jobs::{
     JobCancellationView, JobJournalViewStatus, JobKindView, JobListView, JobPhaseView, JobPoolView,
     JobProgressView, JobShutdownView, JobStatusView, JobView,
+};
+mod recovery;
+pub use recovery::{
+    RecoveryApplyView, RecoveryFindingView, RecoveryHost, RecoveryInventoryView,
+    RecoveryReportView, RecoverySalvageView, inspect_recovery, run_journaled_recovery,
+    salvage_recovery,
 };
 
 pub const MAX_STREAM_BYTES: u64 = 100 * 1024 * 1024;
@@ -154,6 +160,11 @@ pub enum Request {
     JobCancel {
         job_id: String,
     },
+    RecoveryInspect,
+    RecoveryRun,
+    RecoverySalvage {
+        destination: PathBuf,
+    },
     StreamSink {
         total_bytes: u64,
         chunk_bytes: u32,
@@ -230,6 +241,15 @@ pub enum Response {
     JobCancel {
         disposition: String,
         jobs: JobListView,
+    },
+    RecoveryReport {
+        result: RecoveryReportView,
+    },
+    RecoveryApplied {
+        result: RecoveryApplyView,
+    },
+    RecoverySalvaged {
+        result: RecoverySalvageView,
     },
     StreamComplete {
         bytes_read: u64,
@@ -367,6 +387,7 @@ pub enum EngineError {
     Perspective(String),
     SecurityPolicy(String),
     Jobs(String),
+    Recovery(&'static str),
     HistorySpaceTransfer(String),
     Fact(String),
 }
@@ -382,6 +403,7 @@ impl std::fmt::Display for EngineError {
             Self::Perspective(message) => formatter.write_str(message),
             Self::SecurityPolicy(message) => formatter.write_str(message),
             Self::Jobs(message) => formatter.write_str(message),
+            Self::Recovery(code) => write!(formatter, "recovery operation failed: {code}"),
             Self::HistorySpaceTransfer(message) => formatter.write_str(message),
             Self::Fact(message) => formatter.write_str(message),
         }

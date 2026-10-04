@@ -238,6 +238,9 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $projectSmokeComplete = @($operations | Where-Object {
                 $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:project-complete'
             }).Count -gt 0
+            $recoverySmokeComplete = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:recovery-smoke:complete'
+            }).Count -gt 0
             $spanClosures = @($operations | Where-Object { $_.operation -eq 'close_event_span' -and $_.succeeded }).Count
             $catalogs = @($operations | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count
             $lifecycle = @($operations | Where-Object { $_.operation -eq 'lifecycle' -and $_.succeeded })
@@ -283,7 +286,7 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $safeGraphConflicts -ge 3 -and
                 $sources -ge 1 -and $sourceSupersessions -ge 1 -and $evidence -ge 1 -and
                 $provenance -ge 1 -and $evidenceRetractions -ge 1 -and $provenanceRetractions -ge 1 -and
-                $metaHistoryComplete -and $projectSmokeComplete -and
+                $metaHistoryComplete -and $projectSmokeComplete -and $recoverySmokeComplete -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $historyQueries -ge 1 -and $explainQueries -ge 1 -and
                 $tokenSearchPages -ge 1 -and $tokenSearchCompletePages -ge 1 -and

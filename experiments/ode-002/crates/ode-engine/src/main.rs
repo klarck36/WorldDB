@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use worlddb_core::PrincipalId;
 use worlddb_core::{CancellationRequestDisposition, JobId, OperationId};
 use worlddb_ode_engine::{
-    EngineHost, JobJournalViewStatus, JobListView, JobShutdownView, Request, Response,
-    StreamConsumer, StreamPlan, stream_response, with_operation_id,
+    EngineHost, JobJournalViewStatus, JobListView, JobShutdownView, RecoveryHost, Request,
+    Response, StreamConsumer, StreamPlan, stream_response, with_operation_id,
 };
 
 const FRAME_DATA: u8 = 1;
@@ -22,15 +22,30 @@ fn main() {
     let Some(database_root) = arguments.next().map(PathBuf::from) else {
         std::process::exit(64);
     };
-    let host_authenticated = match arguments.next() {
-        None => false,
-        Some(argument)
-            if argument == OsStr::new("--host-account") && arguments.next().is_none() =>
-        {
-            true
+    let mut host_authenticated = false;
+    let mut recovery_only = false;
+    for argument in arguments {
+        if argument == OsStr::new("--host-account") && !host_authenticated {
+            host_authenticated = true;
+        } else if argument == OsStr::new("--recovery-only") && !recovery_only {
+            recovery_only = true;
+        } else {
+            std::process::exit(64);
         }
-        Some(_) => std::process::exit(64),
-    };
+    }
+    if recovery_only {
+        if !host_authenticated {
+            std::process::exit(64);
+        }
+        #[cfg(windows)]
+        {
+            let _principal = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
+            run_recovery_service(&database_root);
+            return;
+        }
+        #[cfg(not(windows))]
+        std::process::exit(73);
+    }
     let mut engine = if host_authenticated {
         #[cfg(windows)]
         {
@@ -137,6 +152,15 @@ fn main() {
                     },
                 };
                 if write_response(&response).is_err() {
+                    std::process::exit(74);
+                }
+            }
+            Request::RecoveryInspect | Request::RecoveryRun | Request::RecoverySalvage { .. } => {
+                if write_response(&Response::Error {
+                    code: "recovery_mode_required".to_owned(),
+                })
+                .is_err()
+                {
                     std::process::exit(74);
                 }
             }
@@ -385,6 +409,99 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+fn run_recovery_service(database_root: &std::path::Path) {
+    let recovery = RecoveryHost::open(database_root).unwrap_or_else(|_| std::process::exit(73));
+    if write_response(&Response::Ready {
+        engine_process_id: std::process::id(),
+        engine_build_id: worlddb_ode_engine::ENGINE_BUILD_ID.to_owned(),
+        protocol_version: 1,
+    })
+    .is_err()
+    {
+        std::process::exit(74);
+    }
+
+    let stdin = io::stdin();
+    let mut reader = stdin.lock();
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(_) => std::process::exit(74),
+        }
+        let request = match serde_json::from_str::<Request>(&line) {
+            Ok(request) => request,
+            Err(_) => {
+                if write_response(&Response::Error {
+                    code: "invalid_request".to_owned(),
+                })
+                .is_err()
+                {
+                    std::process::exit(74);
+                }
+                continue;
+            }
+        };
+        let (response, shutdown) = match request {
+            Request::RecoveryInspect => (
+                recovery
+                    .inspect()
+                    .map(|result| Response::RecoveryReport { result })
+                    .unwrap_or_else(recovery_error_response),
+                false,
+            ),
+            Request::RecoveryRun => (
+                recovery
+                    .run_journaled_recovery()
+                    .map(|result| Response::RecoveryApplied { result })
+                    .unwrap_or_else(recovery_error_response),
+                false,
+            ),
+            Request::RecoverySalvage { destination } => (
+                recovery
+                    .salvage_to(&destination)
+                    .map(|result| Response::RecoverySalvaged { result })
+                    .unwrap_or_else(recovery_error_response),
+                false,
+            ),
+            Request::Shutdown => (
+                Response::Shutdown {
+                    result: JobShutdownView {
+                        drained: true,
+                        unfinished_job_ids: Vec::new(),
+                        unfinished_workers: 0,
+                        worker_panics: 0,
+                    },
+                },
+                true,
+            ),
+            _ => (
+                Response::Error {
+                    code: "recovery_only_mode".to_owned(),
+                },
+                false,
+            ),
+        };
+        if write_response(&response).is_err() {
+            std::process::exit(74);
+        }
+        if shutdown {
+            return;
+        }
+    }
+}
+
+fn recovery_error_response(error: worlddb_ode_engine::EngineError) -> Response {
+    let code = match error {
+        worlddb_ode_engine::EngineError::Recovery(code) => code,
+        _ => "recovery_action_failed",
+    };
+    Response::Error {
+        code: code.to_owned(),
     }
 }
 

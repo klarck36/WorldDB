@@ -90,6 +90,33 @@
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
         <button id="reconcile-operations" type="button" hidden>Schreibstatus erneut prüfen</button>
       </section>
+      <section id="recovery-panel" class="card" aria-labelledby="recovery-heading">
+        <h2 id="recovery-heading">Projekt prüfen und wiederherstellen</h2>
+        <p class="muted">Die Prüfung liest den verifizierten WAL-Präfix und die referenzierten Inventare. Sie repariert nichts. Bei Schäden bleiben Verify, read-only, journalisierte Recovery, Restore und Salvage getrennte Entscheidungen.</p>
+        <div class="actions">
+          <button id="recovery-inspect" type="button" disabled>Projekt read-only prüfen</button>
+          <button id="recovery-open-clean" type="button" hidden>Sauberes Projekt öffnen</button>
+        </div>
+        <p id="recovery-status" class="muted" role="status" aria-live="polite"></p>
+        <div id="recovery-report" hidden></div>
+        <div id="recovery-findings" aria-live="polite"></div>
+        <fieldset id="recovery-actions" hidden>
+          <legend>Getrennte nächste Schritte</legend>
+          <p id="recovery-next-actions" class="muted"></p>
+          <div class="actions">
+            <button id="recovery-keep-readonly" type="button">Quelle read-only belassen</button>
+            <button id="recovery-run" type="button" hidden>Journalisierte Recovery ausdrücklich ausführen</button>
+            <button id="recovery-restore" type="button" hidden>Verifiziertes Backup wiederherstellen</button>
+          </div>
+          <div id="recovery-salvage-fields" class="actions" hidden>
+            <div style="flex: 1 1 240px">
+              <label for="recovery-archive-name">Name des neuen Salvage-Archivs</label>
+              <input id="recovery-archive-name" maxlength="80" value="WorldDB-Salvage" autocomplete="off" />
+            </div>
+            <button id="recovery-salvage" type="button">Salvage als neue markierte Kopie</button>
+          </div>
+        </fieldset>
+      </section>
       <section id="jobs-panel" class="card" aria-labelledby="jobs-heading" hidden>
         <h2 id="jobs-heading">Hintergrundjobs und Shutdown</h2>
         <p class="muted">Fortschritt zeigt echte Zähler oder „unbestimmt“. Nach einem Neustart wird der letzte dauerhaft belegte Stand als unterbrochen angezeigt.</p>
