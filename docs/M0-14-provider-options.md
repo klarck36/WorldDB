@@ -8,7 +8,7 @@ GitHub Actions ist als Ausführungsanbieter für das bestehende Repository einge
 
 Die verwendeten Actions sind auf vollständige Commit-SHAs festgelegt. Der wiederverwendbare Job installiert Rust 1.85.0 und 1.88.0, dazu cargo-deny 0.20.2, und archiviert `ci-job.json`, `steps.tsv` sowie die Verify-Logs als GitHub-Artefakt.
 
-Die Konfiguration selbst ist noch kein CI-Lauf. `M0-14` bleibt `BLOCKED`, bis die vollständige Matrix einschließlich eines echten macOS-Laufs auf dem aktuellen Produktstand erfolgreich war und die Anbieterartefakte vorliegen. Das Windows-Profil kann vorher allein ausgeführt werden. M0-14 hält M1–M8 nicht an, bleibt aber Voraussetzung für M9-13b und M10-10.
+Der manuelle Windows-only-Lauf [#37330953047](https://github.com/klarck36/WorldDB/actions/runs/37330953047) besteht mit 39 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL; sein GitHub-Artefakt ist verlinkt in der [Umgebungsprüfung](M0-14-environment-check.md). `M0-14` bleibt `BLOCKED`, bis die vollständige Matrix einschließlich eines echten macOS-Laufs auf dem aktuellen Produktstand erfolgreich war und die Anbieterartefakte vorliegen. M0-14 hält M1–M8 nicht an, bleibt aber Voraussetzung für M9-13b und M10-10.
 
 ## Mögliche Anbieter für den späteren Plattformnachweis
 
@@ -17,4 +17,4 @@ Die Konfiguration selbst ist noch kein CI-Lauf. `M0-14` bleibt `BLOCKED`, bis di
 
 ## Stand der Matrix
 
-Saubere lokale Windows- und WSL2/Linux-Läufe sind dokumentiert. Es gibt noch keinen externen Anbieterjob und keinen macOS-Lauf. Diese Lücke hält M1–M8 nicht an; M0-14 bleibt bis zum Plattformnachweis `BLOCKED` und muss vor M9-13b und M10-10 abgeschlossen werden.
+Saubere lokale Windows- und WSL2/Linux-Läufe sowie der erfolgreiche externe Windows-only-Lauf sind dokumentiert. Ein vollständiger externer Matrixlauf und der externe macOS-Lauf fehlen weiterhin. Diese Lücke hält M1–M8 nicht an; M0-14 bleibt bis zum Plattformnachweis `BLOCKED` und muss vor M9-13b und M10-10 abgeschlossen werden.

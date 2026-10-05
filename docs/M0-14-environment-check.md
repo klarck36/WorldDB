@@ -2,7 +2,7 @@
 
 **Status:** BLOCKED
 
-**Geprüft:** 2026-10-05T16:47:04+02:00
+**Geprüft:** 2026-10-05T17:24:09+02:00
 
 **Historischer Stand:** ursprüngliche saubere Läufe auf Commit `9e2d94894806112099efc560c4d524cb22e51470`; frühere Baseline-Läufe auf `8e0502961b46a26733c5342008df1227bec2874e`. Der neueste lokale Vorfreigabebeleg steht in `docs/gates/M0.md`.
 
@@ -27,15 +27,23 @@ Der erste saubere Windows-Klon deckte auf, dass `core.autocrlf=true` die hashgeb
 
 GitHub Actions ist für das öffentliche Repository konfiguriert. `.github/workflows/m0-14-ci.yml` ist manuell startbar und wählt standardmäßig ausschließlich den Windows-Job. Die Auswahl `full-matrix` schaltet zusätzlich Linux und macOS ein; diese beiden Jobs bleiben bis zum späteren Plattformnachweis zurückgestellt. Es gibt keinen Push-Trigger. `.github/workflows/m0-14-ci-job.yml` ruft den provider-neutralen Runner auf und archiviert dessen Manifest, Step-Manifest und Logs.
 
-Die Actions sind SHA-gepinnt. Rust 1.85.0 erfüllt den Projekt-MSRV; Rust 1.88.0 wird nur für die Installation des auf 0.20.2 gepinnten cargo-deny verwendet. Eine Datei- und Workflowkonfiguration ist noch kein externer CI-Nachweis.
+Die Actions sind SHA-gepinnt. Rust 1.85.0 erfüllt den Projekt-MSRV; Rust 1.88.0 wird nur für die Installation des auf 0.20.2 gepinnten cargo-deny verwendet. Die Konfiguration allein ist kein externer CI-Nachweis; der erfolgreiche Windows-only-Lauf ist im folgenden Abschnitt dokumentiert.
+
+## Externe Windows-only-Läufe
+
+Der dritte manuelle Lauf [#37330953047](https://github.com/klarck36/WorldDB/actions/runs/37330953047) besteht auf Commit `6cda1190d27b14d38c2347a39883791e06b96377`. Der saubere Windows-x86_64-MSVC-Checkout lief mit Rust/Cargo 1.85.0; `cargo xtask verify` meldete **39 PASS, 1 erwarteten `ci-matrix`-SKIP und 0 FAIL**. Alle drei Featureprofile (`no-default`, `default`, `all-features`) liefen; `checkout_clean_before` und `checkout_clean_after` sind `true`. Das GitHub-Artefakt [m0-14-windows-msrv-37330953047-1](https://github.com/klarck36/WorldDB/actions/runs/37330953047/artifacts/11354234118) enthält `ci-job.json`, `steps.tsv` und beide Logs. Der heruntergeladene ZIP-Hash stimmt mit GitHub überein: `SHA-256 54dd24b227a88fb01b81822e2f0711c1f6713192d0262ac941706bb9fc00e442`.
+
+Die ersten zwei Dispatches sind Fehlerbelege und wurden behoben: [Run #37328115435](https://github.com/klarck36/WorldDB/actions/runs/37328115435) scheiterte beim Workflowstart, weil `runner.temp` auf Job-Ebene verwendet wurde; Commit `d2535c1` verschob die Runner-Variable in den Jobschritt. [Run #37328625559](https://github.com/klarck36/WorldDB/actions/runs/37328625559) erreichte den Windows-Job, aber der bytegehashte M7-16h-Fixture-Hash änderte sich durch Windows-Zeilenenden. Commit `6cda119` ergänzt dafür den `-text`-Schutz in `.gitattributes`; der erneute saubere Windows-Checkout besteht.
+
+Im erfolgreichen Lauf wurden die GitHub-Jobs Linux und macOS explizit als übersprungen angezeigt ([Linux](https://github.com/klarck36/WorldDB/actions/runs/37330953047/job/111833641186), [macOS](https://github.com/klarck36/WorldDB/actions/runs/37330953047/job/111833642617)). Es wurden dafür keine Plattformprüfungen gestartet.
 
 ## Konkreter Blocker
 
-Es fehlen weiterhin ein erfolgreicher externer Matrixlauf auf dem aktuellen Produktstand, ein macOS-Lauf und die dazugehörigen extern archivierten Manifeste. `M0-14` bleibt deshalb `BLOCKED`, hält M1–M8 nach M0-15 aber nicht an. Vor M9-13b und M10-10 müssen die vollständige Plattformmatrix und WDB-ENG-005 durch tatsächliche CI-Läufe belegt werden. Der Windows-only-Workflow kann vorher separat ausgeführt werden; Linux und macOS bleiben bis zur späteren Prüfung zurückgestellt. Mögliche zusätzliche Anbieter stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
+Der externe Windows-only-Job besteht nun; es fehlen weiterhin die vollständige externe Matrix samt Linux-/macOS-Läufen und deren archivierte Manifeste. `M0-14` bleibt deshalb `BLOCKED`, hält M1–M8 nach M0-15 aber nicht an. Vor M9-13b und M10-10 müssen die vollständige Plattformmatrix und WDB-ENG-005 durch tatsächliche CI-Läufe belegt werden. Linux und macOS bleiben bis zur späteren Prüfung zurückgestellt. Mögliche zusätzliche Anbieter stehen in [M0-14-provider-options.md](M0-14-provider-options.md).
 
 ## Zum Fortsetzen erforderlich
 
-1. Vor M9-13b die vollständige manuelle GitHub-Actions-Matrix auf dem dann aktuellen Produktstand aus sauberen Checkouts starten.
-2. Windows-, Linux- und macOS-Manifeste samt Step-Manifest und Verify-Logs als Anbieterartefakte archivieren und ihre Ergebnisse prüfen.
+1. Nach den zurückgestellten Plattformprüfungen und vor M9-13b die vollständige manuelle GitHub-Actions-Matrix auf dem dann aktuellen Produktstand aus sauberen Checkouts starten.
+2. Das bereits gesicherte Windows-Manifest sowie die Linux- und macOS-Manifeste, Step-Manifeste und Verify-Logs als Anbieterartefakte prüfen und archivieren.
 
 Danach muss `macos-msrv` aus einem sauberen Checkout laufen und GitHub Actions die Step-Manifeste archivieren. Die Linux/macOS-Jobs sind vorbereitet, werden aktuell aber nicht gestartet.
