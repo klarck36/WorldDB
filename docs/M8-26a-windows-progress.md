@@ -47,8 +47,14 @@ Der automatisierte Keyboard-Smoke wurde inzwischen so geändert, dass er die UIA
 
 Das Manifest `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T200619Z-f2edcd1b/manifest.json` meldet `PASS`: 11/11 Fälle, 140 Prüfschritte, null Fehler und kein übersprungener Fall. Beide IPC-Profile bestanden je 56 Prüfungen; die Writer-Locks bestanden mit 4 In-Process- und 5 Sidecar-Prüfungen. Keyboard-Navigation sowie Commit-Crash und read-only Recovery bestanden in beiden Modi. Der Runner verwendet für den Eingabefokus UI Automation und sendet Tab/Enter nativ, ohne Cursorpositionierung.
 
-Der Lauf erfasste Commit `82329e8` mit `dirty=true`, weil Runner, Doku und Register noch uncommittet waren. Das Manifest entsprach dem JSON-Schema; alle elf gehashten Artefakte stimmten bei erneutem SHA-256-Abgleich. Ein gleichwertiger Lauf auf einem sauberen Commit ist vor Abschluss von M8-26a noch erforderlich.
+Der Lauf erfasste Commit `82329e8` mit `dirty=true`, weil Runner, Doku und Register noch uncommittet waren. Das Manifest entsprach dem JSON-Schema; alle elf gehashten Artefakte stimmten bei erneutem SHA-256-Abgleich.
+
+## Saubere Wiederholung
+
+Die Wiederholung `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T202012Z-69fd53ff/manifest.json` erfasste den sauberen Commit `c23af94e5ad5016beef2d0f9109536e78b171d45` mit `dirty=false`. Sie endete mit `PASS`: 11/11 Fälle, 140 Prüfschritte, keine Fehler und kein übersprungener Fall. Das JSON-Schema ist gültig; alle elf gehashten Artefakte stimmen bei erneutem SHA-256-Abgleich. Texteingabe, Tab/Enter-Erstellung sowie WAL-Crash und read-only Recovery bestanden in In-Process und Sidecar.
+
+Zusätzlich bestand `cargo xtask verify` mit 39 Schritten, einem vorgesehenen `ci-matrix`-Skip und null Fehlern. Der Plancheck, Sourcecheck, PowerShell-Parser und `git diff --check` bestanden ebenfalls.
 
 ## Status und Plattformgrenze
 
-Der vollständige Windows-Lauf auf `82329e8` mit den aktuellen Änderungen ist bestanden; der saubere Wiederholungslauf steht noch aus. `M8-26a` bleibt bis zu diesem Lauf offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt; M8-26d und das M8-Gate bleiben daher offen.
+Der Windows/NTFS-Profillauf ist auf dem sauberen Commit `c23af94` bestanden. Der Registerpunkt bleibt bis zur Erfüllung der übergeordneten M8-26-Abhängigkeit offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt; M8-26d und das M8-Gate bleiben daher offen.

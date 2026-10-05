@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26a",
+  "run_id": "m8-26a-20261005T202012Z-69fd53ff",
+  "status": "PASS",
+  "started_at": "2026-10-05T20:20:12.365Z",
+  "finished_at": "2026-10-05T20:27:54.666Z",
+  "repository": {
+    "commit": "c23af94e5ad5016beef2d0f9109536e78b171d45",
+    "dirty": false,
+    "branch": "codex/worlddb-project-integration"
+  },
+  "environment": {
+    "os": "Windows",
+    "os_version": "Microsoft Windows 11 Home 10.0.26200 (build 26200)",
+    "architecture": "X64",
+    "filesystem": "NTFS",
+    "filesystem_root": "C:\\",
+    "shell": "PowerShell 7.6.5",
+    "runner": "scripts/run-native-e2e.ps1",
+    "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+    "cargo": "cargo 1.85.0 (d73d2caf9 2024-12-31)"
+  },
+  "builds": [
+    {
+      "mode": "in-process",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "609279ba7784ed2f5c9e7159acbe786563f0ff1d9d7aa0243e3920f8ef53823a",
+      "app_bytes": 37052416,
+      "engine_path": null,
+      "engine_sha256": null,
+      "engine_bytes": null
+    },
+    {
+      "mode": "sidecar",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "dccbf2495aa36c6828bcde7919cff173ce1659e9c19af52488a06af30938ee25",
+      "app_bytes": 30188544,
+      "engine_path": "experiments\\ode-002\\target\\debug\\worlddb_ode_engine.exe",
+      "engine_sha256": "5646a964ad32b857ee44d411b61c9d353a2eccd0c78cbeda042ce39149152a63",
+      "engine_bytes": 17479168
+    }
+  ],
+  "recovery_cli": {
+    "path": "target\\debug\\worlddb-cli.exe",
+    "sha256": "37bb00f55561826ba680987fd2b336ea5433fc57c7e4ca513b80a89578294266",
+    "bytes": 8614400
+  },
+  "cases": [
+    {
+      "case_id": "build_recovery_cli",
+      "mode": "both",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Read-only recovery CLI built for crash-recovery verification.",
+      "artifacts": [
+        "logs\\build-recovery-cli.log"
+      ]
+    },
+    {
+      "case_id": "build_in-process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-in-process.log",
+      "artifacts": [
+        "logs\\build-in-process.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\native_ipc_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\competing_process_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\competing_process_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\keyboard_navigation-in-process.log.",
+      "artifacts": [
+        "logs\\keyboard_navigation-in-process.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\commit_crash_recovery-in-process.log.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-in-process.log"
+      ]
+    },
+    {
+      "case_id": "build_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-sidecar.log",
+      "artifacts": [
+        "logs\\build-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\native_ipc_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 5,
+      "details": "5 checks passed; summary is recorded in logs\\competing_process_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\competing_process_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\keyboard_navigation-sidecar.log.",
+      "artifacts": [
+        "logs\\keyboard_navigation-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\commit_crash_recovery-sidecar.log.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-sidecar.log"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "logs/build-in-process.log",
+      "sha256": "77a9d90fa1037d4a7ef09e7cb78d0650e7a8ad6654dcd5773192a547be677d75",
+      "bytes": 176
+    },
+    {
+      "path": "logs/build-recovery-cli.log",
+      "sha256": "77ef1ace51fe60885faab87e6e90dab26c9cb01755e1b739a33d66ffb8c77e1e",
+      "bytes": 73
+    },
+    {
+      "path": "logs/build-sidecar.log",
+      "sha256": "ad787622d9f10f9f6662701b40bc49e38c3596b6f6d6f9415cea3313844f181d",
+      "bytes": 176
+    },
+    {
+      "path": "logs/commit_crash_recovery-in-process.log",
+      "sha256": "2f8929e59750a4b2c943bb6ac13fdac76cb0bdf6ccccaf48cb9aef5e9a62b6c1",
+      "bytes": 223
+    },
+    {
+      "path": "logs/commit_crash_recovery-sidecar.log",
+      "sha256": "f1fdbd14df5d52217f2c4f9785eb266a61bc2b472dcc2accdea762418c53bd43",
+      "bytes": 219
+    },
+    {
+      "path": "logs/competing_process_in_process-in-process.log",
+      "sha256": "5b8f0be6d4883997956dc9252cb4b0fc25e2a0cfa031631acc565755c8e697d9",
+      "bytes": 292
+    },
+    {
+      "path": "logs/competing_process_sidecar-sidecar.log",
+      "sha256": "2c2ac2c9c94effc19bc8fd7e95db813e10bc9556f335893177d2f22e59d0e3a7",
+      "bytes": 279
+    },
+    {
+      "path": "logs/keyboard_navigation-in-process.log",
+      "sha256": "7c17a6050a326c50728f604fc32a694f24f7d3166db796ffa33278522fcb388a",
+      "bytes": 201
+    },
+    {
+      "path": "logs/keyboard_navigation-sidecar.log",
+      "sha256": "22658b49bcd283a854e9e4c9b14c748721ebb66715dce2dd373a6f3bab565641",
+      "bytes": 198
+    },
+    {
+      "path": "logs/native_ipc_in_process-in-process.log",
+      "sha256": "868faa16f54dbc74cc71520cf64e5696a44e859571d014696f5af996ead3d357",
+      "bytes": 2873
+    },
+    {
+      "path": "logs/native_ipc_sidecar-sidecar.log",
+      "sha256": "c998a37252dd66ea7748a259892a029bdaa6b2d2ea688d3caadbf4a34857e1d3",
+      "bytes": 2870
+    }
+  ],
+  "failures": []
+}
