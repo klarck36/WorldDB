@@ -93,6 +93,33 @@ foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'W
 $process = $null
 $passed = $false
 
+function Remove-TestDirectoryWithRetry([string]$Path) {
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedPath.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Refusing to remove a smoke-test directory outside the system temp directory.'
+    }
+
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (-not (Test-Path -LiteralPath $resolvedPath)) {
+            return $true
+        }
+        try {
+            Remove-Item -LiteralPath $resolvedPath -Recurse -Force -ErrorAction Stop
+            return $true
+        } catch {
+            $lastError = $_.Exception
+            if ($attempt -lt 29) {
+                Start-Sleep -Milliseconds 500
+            }
+        }
+    }
+
+    Write-Warning "The isolated smoke-test directory remains locked after 15 seconds; leaving it at $resolvedPath. $($lastError.Message)"
+    return $false
+}
+
 function Find-Element(
     [System.Windows.Automation.AutomationElement]$Root,
     [System.Windows.Automation.ControlType]$ControlType,
@@ -511,12 +538,14 @@ try {
             $destinationParent = [System.IO.Path]::GetDirectoryName($destination)
             $null = New-Item -ItemType Directory -Path $destinationParent -Force
             $null = New-Item -ItemType Directory -Path $destination
-            Get-ChildItem -LiteralPath $resolvedRoot -Force | Copy-Item -Destination $destination -Recurse
-            Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+            Get-ChildItem -LiteralPath $resolvedRoot -Force |
+                Where-Object { $_.Name -ne 'webview-profile' } |
+                Copy-Item -Destination $destination -Recurse
+            $null = Remove-TestDirectoryWithRetry $resolvedRoot
             $retainedRoot = $destination
         }
         Write-Warning "Preserved failed keyboard-smoke artifacts at $retainedRoot"
     } elseif (Test-Path -LiteralPath $resolvedRoot) {
-        Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+        $null = Remove-TestDirectoryWithRetry $resolvedRoot
     }
 }

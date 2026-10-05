@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26a",
+  "run_id": "m8-26a-20261005T134338Z-c303fb1a",
+  "status": "FAIL",
+  "started_at": "2026-10-05T13:43:38.840Z",
+  "finished_at": "2026-10-05T13:55:49.326Z",
+  "repository": {
+    "commit": "749e318e6275203d72851883a94766400d6f9980",
+    "dirty": false,
+    "branch": "codex/worlddb-project-integration"
+  },
+  "environment": {
+    "os": "Windows",
+    "os_version": "Microsoft Windows 11 Home 10.0.26200 (build 26200)",
+    "architecture": "X64",
+    "filesystem": "NTFS",
+    "filesystem_root": "C:\\",
+    "shell": "PowerShell 7.6.5",
+    "runner": "scripts/run-native-e2e.ps1",
+    "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+    "cargo": "cargo 1.85.0 (d73d2caf9 2024-12-31)"
+  },
+  "builds": [
+    {
+      "mode": "in-process",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "b343d9c828ef654cf4c5144ff8cdbbacaf9f4ef48d8ae91aff09631ea86d930e",
+      "app_bytes": 37052416,
+      "engine_path": null,
+      "engine_sha256": null,
+      "engine_bytes": null
+    },
+    {
+      "mode": "sidecar",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "c34af30e7601796a9bda0e6d5e348e3f6112c722796a1c253e7e4dc633d81bce",
+      "app_bytes": 30188544,
+      "engine_path": "experiments\\ode-002\\target\\debug\\worlddb_ode_engine.exe",
+      "engine_sha256": "5646a964ad32b857ee44d411b61c9d353a2eccd0c78cbeda042ce39149152a63",
+      "engine_bytes": 17479168
+    }
+  ],
+  "recovery_cli": {
+    "path": "target\\debug\\worlddb-cli.exe",
+    "sha256": "37bb00f55561826ba680987fd2b336ea5433fc57c7e4ca513b80a89578294266",
+    "bytes": 8614400
+  },
+  "cases": [
+    {
+      "case_id": "build_recovery_cli",
+      "mode": "both",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Read-only recovery CLI built for crash-recovery verification.",
+      "artifacts": [
+        "logs\\build-recovery-cli.log"
+      ]
+    },
+    {
+      "case_id": "build_in-process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-in-process.log",
+      "artifacts": [
+        "logs\\build-in-process.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\native_ipc_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\competing_process_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\competing_process_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-0602d2b0022f4130b590175b63f6f3d1\\webview-profile\\EBWebView\\Default\\Extension Rules\\000003.log' because it is being used by another process.",
+      "artifacts": [
+        "logs\\keyboard_navigation-in-process.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 3,
+      "details": "3 checks passed; summary is recorded in logs\\commit_crash_recovery-in-process.log.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-in-process.log"
+      ]
+    },
+    {
+      "case_id": "build_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-sidecar.log",
+      "artifacts": [
+        "logs\\build-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\native_ipc_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 5,
+      "details": "5 checks passed; summary is recorded in logs\\competing_process_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\competing_process_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-081977e6ac0946ea95243a7726997fd6\\webview-profile\\EBWebView\\Default\\Extension Rules\\000003.log' because it is being used by another process.",
+      "artifacts": [
+        "logs\\keyboard_navigation-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-34b0ab315243421b813d3ea525a7a313\\webview-profile\\EBWebView\\lockfile' because it is being used by another process.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-sidecar.log"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "logs/build-in-process.log",
+      "sha256": "e088d41f138a917033f6be6f70a2e30a829c2fd47fb1a93743dbba6f3d064124",
+      "bytes": 177
+    },
+    {
+      "path": "logs/build-recovery-cli.log",
+      "sha256": "2528a8d0b1cabe1310638520bc77499e2e729d97fe4d15ea5edad555d879757e",
+      "bytes": 73
+    },
+    {
+      "path": "logs/build-sidecar.log",
+      "sha256": "c78af068de1eb16b1064fd7622333f792cd09b5346c116fceedf6e8fab9f71a2",
+      "bytes": 176
+    },
+    {
+      "path": "logs/commit_crash_recovery-in-process.log",
+      "sha256": "7dcff578e74220e5a2887d4c45ec0f551110e732417b9a1c11d65d21bd903c28",
+      "bytes": 208
+    },
+    {
+      "path": "logs/commit_crash_recovery-sidecar.log",
+      "sha256": "c2d7c2de8025f6ce705a7b0181b9479bd0fd83ca0779ba3a2343635280f08a41",
+      "bytes": 187
+    },
+    {
+      "path": "logs/competing_process_in_process-in-process.log",
+      "sha256": "5b8f0be6d4883997956dc9252cb4b0fc25e2a0cfa031631acc565755c8e697d9",
+      "bytes": 292
+    },
+    {
+      "path": "logs/competing_process_sidecar-sidecar.log",
+      "sha256": "2c2ac2c9c94effc19bc8fd7e95db813e10bc9556f335893177d2f22e59d0e3a7",
+      "bytes": 279
+    },
+    {
+      "path": "logs/keyboard_navigation-in-process.log",
+      "sha256": "e1f379e6e22f5297bae310177bc7b0fe2297f35ee9b24654339973bcf9583ab3",
+      "bytes": 213
+    },
+    {
+      "path": "logs/keyboard_navigation-sidecar.log",
+      "sha256": "ae4fee7bad5da772c4fa612cff29c26549c66825418434043d25651baf88c7e3",
+      "bytes": 213
+    },
+    {
+      "path": "logs/native_ipc_in_process-in-process.log",
+      "sha256": "868faa16f54dbc74cc71520cf64e5696a44e859571d014696f5af996ead3d357",
+      "bytes": 2873
+    },
+    {
+      "path": "logs/native_ipc_sidecar-sidecar.log",
+      "sha256": "c998a37252dd66ea7748a259892a029bdaa6b2d2ea688d3caadbf4a34857e1d3",
+      "bytes": 2870
+    }
+  ],
+  "failures": [
+    {
+      "case_id": "keyboard_navigation",
+      "message": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-0602d2b0022f4130b590175b63f6f3d1\\webview-profile\\EBWebView\\Default\\Extension Rules\\000003.log' because it is being used by another process.",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-in-process.log",
+        "keyboard_navigation-in-process"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "message": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-081977e6ac0946ea95243a7726997fd6\\webview-profile\\EBWebView\\Default\\Extension Rules\\000003.log' because it is being used by another process.",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-sidecar.log",
+        "keyboard_navigation-sidecar"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "message": "The process cannot access the file '<local-path>worlddb-ode002-keyboard-34b0ab315243421b813d3ea525a7a313\\webview-profile\\EBWebView\\lockfile' because it is being used by another process.",
+      "artifact_paths": [
+        "logs\\commit_crash_recovery-sidecar.log",
+        "commit_crash_recovery-sidecar"
+      ]
+    }
+  ]
+}
