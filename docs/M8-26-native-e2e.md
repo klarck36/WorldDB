@@ -21,6 +21,8 @@ Nach den Korrekturen bestanden Tastatureingabe, Tab/Enter und Commit-Crash samt 
 
 Der vollständige Wiederholungslauf `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T140119Z-29c16683/manifest.json` meldet auf Windows 11/NTFS `PASS`: 11/11 Fälle, 138 Prüfschritte, null Fehler. Beide IPC-Profile, konkurrierende Schreiber, Tastaturabläufe und Crash-Recovery-Fälle bestanden. `docs/M8-26a-windows-progress.md` enthält die Einzelergebnisse und den historischen Verlauf.
 
+Eine Wiederholung auf dem aktuellen Branch (`01ab573a620ade99f96ced7e46249734a2283c36`) ist im Manifest `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T154837Z-2b012994/manifest.json` als `FAIL` archiviert: 7/11 Fälle bestanden. Builds, IPC und Writer-Locks bestanden; Tastatur- und Commit-Recovery-Fälle brachen vor der Eingabe ab, weil `SetCursorPos` im aktuellen Windows-Eingabezustand `false` zurückgab. Die isolierte Wiederholung konnte denselben Win32-Aufruf sogar an der schon aktuellen Cursorposition nicht ausführen. Das frühere 11/11-Ergebnis bleibt ein Nachweis für seinen Build; der neue Lauf belegt keine Regression im WorldDB-Ablauf, lässt aber die Tastaturfälle auf dem aktuellen Host unbestätigt.
+
 Der Windows-Lauf ist damit belegt. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
 
 ## Plattformstatus

@@ -1,0 +1,331 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26a",
+  "run_id": "m8-26a-20261005T154837Z-2b012994",
+  "status": "FAIL",
+  "started_at": "2026-10-05T15:48:37.425Z",
+  "finished_at": "2026-10-05T15:56:24.050Z",
+  "repository": {
+    "commit": "01ab573a620ade99f96ced7e46249734a2283c36",
+    "dirty": false,
+    "branch": "codex/worlddb-project-integration"
+  },
+  "environment": {
+    "os": "Windows",
+    "os_version": "Microsoft Windows 11 Home 10.0.26200 (build 26200)",
+    "architecture": "X64",
+    "filesystem": "NTFS",
+    "filesystem_root": "C:\\",
+    "shell": "PowerShell 7.6.5",
+    "runner": "scripts/run-native-e2e.ps1",
+    "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+    "cargo": "cargo 1.85.0 (d73d2caf9 2024-12-31)"
+  },
+  "builds": [
+    {
+      "mode": "in-process",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "5ca276b394bc3505879c447c99463c36a1715f7dad3b0254b94ebe5ffcab165a",
+      "app_bytes": 37052416,
+      "engine_path": null,
+      "engine_sha256": null,
+      "engine_bytes": null
+    },
+    {
+      "mode": "sidecar",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "ce4a382c70af62b383a7edd1e2902c29c8f56f5fe8652f9bfa2de2666d8e850a",
+      "app_bytes": 30188544,
+      "engine_path": "experiments\\ode-002\\target\\debug\\worlddb_ode_engine.exe",
+      "engine_sha256": "5646a964ad32b857ee44d411b61c9d353a2eccd0c78cbeda042ce39149152a63",
+      "engine_bytes": 17479168
+    }
+  ],
+  "recovery_cli": {
+    "path": "target\\debug\\worlddb-cli.exe",
+    "sha256": "37bb00f55561826ba680987fd2b336ea5433fc57c7e4ca513b80a89578294266",
+    "bytes": 8614400
+  },
+  "cases": [
+    {
+      "case_id": "build_recovery_cli",
+      "mode": "both",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Read-only recovery CLI built for crash-recovery verification.",
+      "artifacts": [
+        "logs\\build-recovery-cli.log"
+      ]
+    },
+    {
+      "case_id": "build_in-process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-in-process.log",
+      "artifacts": [
+        "logs\\build-in-process.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\native_ipc_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\competing_process_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\competing_process_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifacts": [
+        "logs\\keyboard_navigation-in-process.log",
+        "raw\\keyboard_navigation-in-process"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-in-process.log",
+        "raw\\commit_crash_recovery-in-process"
+      ]
+    },
+    {
+      "case_id": "build_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-sidecar.log",
+      "artifacts": [
+        "logs\\build-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\native_ipc_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 5,
+      "details": "5 checks passed; summary is recorded in logs\\competing_process_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\competing_process_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifacts": [
+        "logs\\keyboard_navigation-sidecar.log",
+        "raw\\keyboard_navigation-sidecar"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-sidecar.log",
+        "raw\\commit_crash_recovery-sidecar"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "logs/build-in-process.log",
+      "sha256": "76fa7949ac11c4d3aa12669af2caa92bf24da425df3553dfbebcf21386da2624",
+      "bytes": 176
+    },
+    {
+      "path": "logs/build-recovery-cli.log",
+      "sha256": "8c798c75014ca8e4571a98e4be7530a89ec2ce9032dc7862466150bbd077d744",
+      "bytes": 73
+    },
+    {
+      "path": "logs/build-sidecar.log",
+      "sha256": "4e94c97a6d3f3b82043775ab32e325ad306a8a2d60097c90b6f116d98b7d76f1",
+      "bytes": 176
+    },
+    {
+      "path": "logs/commit_crash_recovery-in-process.log",
+      "sha256": "d88b4f1c8369bc672f790e1c69ad804df932bf2e1210b1790f219c5298753c80",
+      "bytes": 104
+    },
+    {
+      "path": "logs/commit_crash_recovery-sidecar.log",
+      "sha256": "d88b4f1c8369bc672f790e1c69ad804df932bf2e1210b1790f219c5298753c80",
+      "bytes": 104
+    },
+    {
+      "path": "logs/competing_process_in_process-in-process.log",
+      "sha256": "5b8f0be6d4883997956dc9252cb4b0fc25e2a0cfa031631acc565755c8e697d9",
+      "bytes": 292
+    },
+    {
+      "path": "logs/competing_process_sidecar-sidecar.log",
+      "sha256": "2c2ac2c9c94effc19bc8fd7e95db813e10bc9556f335893177d2f22e59d0e3a7",
+      "bytes": 279
+    },
+    {
+      "path": "logs/keyboard_navigation-in-process.log",
+      "sha256": "d88b4f1c8369bc672f790e1c69ad804df932bf2e1210b1790f219c5298753c80",
+      "bytes": 104
+    },
+    {
+      "path": "logs/keyboard_navigation-sidecar.log",
+      "sha256": "d88b4f1c8369bc672f790e1c69ad804df932bf2e1210b1790f219c5298753c80",
+      "bytes": 104
+    },
+    {
+      "path": "logs/native_ipc_in_process-in-process.log",
+      "sha256": "868faa16f54dbc74cc71520cf64e5696a44e859571d014696f5af996ead3d357",
+      "bytes": 2873
+    },
+    {
+      "path": "logs/native_ipc_sidecar-sidecar.log",
+      "sha256": "c998a37252dd66ea7748a259892a029bdaa6b2d2ea688d3caadbf4a34857e1d3",
+      "bytes": 2870
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "failures": [
+    {
+      "case_id": "keyboard_navigation",
+      "message": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-in-process.log",
+        "keyboard_navigation-in-process"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "message": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifact_paths": [
+        "logs\\commit_crash_recovery-in-process.log",
+        "commit_crash_recovery-in-process"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "message": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-sidecar.log",
+        "keyboard_navigation-sidecar"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "message": "Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.",
+      "artifact_paths": [
+        "logs\\commit_crash_recovery-sidecar.log",
+        "commit_crash_recovery-sidecar"
+      ]
+    }
+  ]
+}

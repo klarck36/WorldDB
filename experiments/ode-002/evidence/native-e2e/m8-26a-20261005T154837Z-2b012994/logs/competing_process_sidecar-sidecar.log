@@ -1,0 +1,1 @@
+{"mode":"sidecar","two_native_windows":"PASS","first_writer_lock":"PASS","competing_writer_rejected":"PASS","reopen_after_shutdown":"PASS","sidecar_children_reaped":"PASS","expected_webview_teardown_diagnostic":"Chrome_WidgetWin_0 / 1412 may be logged by WebView2 on shutdown"}

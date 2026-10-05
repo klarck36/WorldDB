@@ -231,7 +231,9 @@ function Activate-TestWindow([System.Windows.Automation.AutomationElement]$Windo
             throw 'The visible title-bar point does not belong to the WorldDB test window; no mouse or keyboard input was sent.'
         }
         if (-not [WorldDbKeyboardSmokeNative]::SetCursorPos($point.X, $point.Y)) {
-            throw 'Windows could not position the cursor over the verified WorldDB title bar; no keyboard input was sent.'
+            $cursorError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            $cursorPosition = [System.Windows.Forms.Cursor]::Position
+            throw "Windows could not position the cursor over the verified WorldDB title bar (SetCursorPos error $cursorError; target=($($point.X),$($point.Y)); bounds=($($rect.Left),$($rect.Top),$($rect.Right),$($rect.Bottom)); cursor=($($cursorPosition.X),$($cursorPosition.Y))); no keyboard input was sent."
         }
         [WorldDbKeyboardSmokeNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
         [WorldDbKeyboardSmokeNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
@@ -290,7 +292,9 @@ function Click-TestElement(
         throw 'The visible control point is occluded or outside the WorldDB window; no input was sent.'
     }
     if (-not [WorldDbKeyboardSmokeNative]::SetCursorPos($point.X, $point.Y)) {
-        throw 'Windows could not position the cursor over the verified WorldDB control; no input was sent.'
+        $cursorError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        $cursorPosition = [System.Windows.Forms.Cursor]::Position
+        throw "Windows could not position the cursor over the verified WorldDB control (SetCursorPos error $cursorError; target=($($point.X),$($point.Y)); cursor=($($cursorPosition.X),$($cursorPosition.Y))); no input was sent."
     }
     [WorldDbKeyboardSmokeNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     [WorldDbKeyboardSmokeNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
