@@ -1,0 +1,391 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26a",
+  "run_id": "m8-26a-20261005T012844Z-823933db",
+  "status": "FAIL",
+  "started_at": "2026-10-05T01:28:44.468Z",
+  "finished_at": "2026-10-05T01:40:34.154Z",
+  "repository": {
+    "commit": "96815719bea97da48cdb4be5c1593fd3bba8b65c",
+    "dirty": false,
+    "branch": "codex/worlddb-project-integration"
+  },
+  "environment": {
+    "os": "Windows",
+    "os_version": "Microsoft Windows 11 Home 10.0.26200 (build 26200)",
+    "architecture": "X64",
+    "filesystem": "NTFS",
+    "filesystem_root": "C:\\",
+    "shell": "PowerShell 7.6.5",
+    "runner": "scripts/run-native-e2e.ps1",
+    "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+    "cargo": "cargo 1.85.0 (d73d2caf9 2024-12-31)"
+  },
+  "builds": [
+    {
+      "mode": "in-process",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "e289da77b8fe5a4c16f4d8f68d054b9fe01a189e7105ad7e4404b39c36167afa",
+      "app_bytes": 37051904,
+      "engine_path": null,
+      "engine_sha256": null,
+      "engine_bytes": null
+    },
+    {
+      "mode": "sidecar",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "c543f823de65dc35b62e209f07eb4e7aec21a5f4a6b77fc8a67854380daa8329",
+      "app_bytes": 30276096,
+      "engine_path": "experiments\\ode-002\\target\\debug\\worlddb_ode_engine.exe",
+      "engine_sha256": "50ea332531ce3c1cfd326c4d0daf181c129f0a73d2d4cd0518766c542ffd6e5b",
+      "engine_bytes": 17375232
+    }
+  ],
+  "recovery_cli": {
+    "path": "target\\debug\\worlddb-cli.exe",
+    "sha256": "37bb00f55561826ba680987fd2b336ea5433fc57c7e4ca513b80a89578294266",
+    "bytes": 8614400
+  },
+  "cases": [
+    {
+      "case_id": "build_recovery_cli",
+      "mode": "both",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Read-only recovery CLI built for crash-recovery verification.",
+      "artifacts": [
+        "logs\\build-recovery-cli.log"
+      ]
+    },
+    {
+      "case_id": "build_in-process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-in-process.log",
+      "artifacts": [
+        "logs\\build-in-process.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\native_ipc_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\competing_process_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\competing_process_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifacts": [
+        "logs\\keyboard_navigation-in-process.log",
+        "raw\\keyboard_navigation-in-process"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifacts": [
+        "logs\\commit_crash_recovery-in-process.log",
+        "raw\\commit_crash_recovery-in-process"
+      ]
+    },
+    {
+      "case_id": "build_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-sidecar.log",
+      "artifacts": [
+        "logs\\build-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\native_ipc_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 5,
+      "details": "5 checks passed; summary is recorded in logs\\competing_process_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\competing_process_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifacts": [
+        "logs\\keyboard_navigation-sidecar.log",
+        "raw\\keyboard_navigation-sidecar"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifacts": [
+        "logs\\commit_crash_recovery-sidecar.log",
+        "raw\\commit_crash_recovery-sidecar"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "logs/build-in-process.log",
+      "sha256": "9360b5ac057f29cf67124d549e39e0945545744555453c2a5fd77fd489a58975",
+      "bytes": 422
+    },
+    {
+      "path": "logs/build-recovery-cli.log",
+      "sha256": "5e03e5b94da96eaa01b2019da87a881a0e70d9c56ca3d4da0da4eec457acfb18",
+      "bytes": 225
+    },
+    {
+      "path": "logs/build-sidecar.log",
+      "sha256": "3b5c268924bd0e3652b2485b8e9131565c0d074db20a99c714c8dfe9c2eb416b",
+      "bytes": 176
+    },
+    {
+      "path": "logs/commit_crash_recovery-in-process.log",
+      "sha256": "92480b6f6e197c0fd9e64ac38e8fec5be4baf757915e7b53080cb6dedd8283d5",
+      "bytes": 91
+    },
+    {
+      "path": "logs/commit_crash_recovery-sidecar.log",
+      "sha256": "92480b6f6e197c0fd9e64ac38e8fec5be4baf757915e7b53080cb6dedd8283d5",
+      "bytes": 91
+    },
+    {
+      "path": "logs/competing_process_in_process-in-process.log",
+      "sha256": "5b8f0be6d4883997956dc9252cb4b0fc25e2a0cfa031631acc565755c8e697d9",
+      "bytes": 292
+    },
+    {
+      "path": "logs/competing_process_sidecar-sidecar.log",
+      "sha256": "2c2ac2c9c94effc19bc8fd7e95db813e10bc9556f335893177d2f22e59d0e3a7",
+      "bytes": 279
+    },
+    {
+      "path": "logs/keyboard_navigation-in-process.log",
+      "sha256": "92480b6f6e197c0fd9e64ac38e8fec5be4baf757915e7b53080cb6dedd8283d5",
+      "bytes": 91
+    },
+    {
+      "path": "logs/keyboard_navigation-sidecar.log",
+      "sha256": "92480b6f6e197c0fd9e64ac38e8fec5be4baf757915e7b53080cb6dedd8283d5",
+      "bytes": 91
+    },
+    {
+      "path": "logs/native_ipc_in_process-in-process.log",
+      "sha256": "868faa16f54dbc74cc71520cf64e5696a44e859571d014696f5af996ead3d357",
+      "bytes": 2873
+    },
+    {
+      "path": "logs/native_ipc_sidecar-sidecar.log",
+      "sha256": "c998a37252dd66ea7748a259892a029bdaa6b2d2ea688d3caadbf4a34857e1d3",
+      "bytes": 2870
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/database/DATABASE_ID",
+      "sha256": "58971048ad9ea482f0da086f432e7394b659e4460b1db73950aa87e9eeb24a6d",
+      "bytes": 16
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/database/FORMAT",
+      "sha256": "aba3763318d243bd554b3a8eb5ee88c646756dfb0ce0f09667995d7fb318c2c4",
+      "bytes": 72
+    },
+    {
+      "path": "raw/commit_crash_recovery-in-process/database/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/database/DATABASE_ID",
+      "sha256": "e5201abf4483f7e4e5da73daf15061512574e2306561091f0ee5f17404f75971",
+      "bytes": 16
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/database/FORMAT",
+      "sha256": "aba3763318d243bd554b3a8eb5ee88c646756dfb0ce0f09667995d7fb318c2c4",
+      "bytes": 72
+    },
+    {
+      "path": "raw/commit_crash_recovery-sidecar/database/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/database/DATABASE_ID",
+      "sha256": "3329f6db2477203371ca2526c4e8205e93850c9ef26ef76a392caca2f7666150",
+      "bytes": 16
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/database/FORMAT",
+      "sha256": "aba3763318d243bd554b3a8eb5ee88c646756dfb0ce0f09667995d7fb318c2c4",
+      "bytes": 72
+    },
+    {
+      "path": "raw/keyboard_navigation-in-process/database/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/desktop.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/desktop.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/database/DATABASE_ID",
+      "sha256": "b1ea52411090d57a33c4552bcd71ed3b6a40da137961e954cd07fabe784f7ea8",
+      "bytes": 16
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/database/FORMAT",
+      "sha256": "aba3763318d243bd554b3a8eb5ee88c646756dfb0ce0f09667995d7fb318c2c4",
+      "bytes": 72
+    },
+    {
+      "path": "raw/keyboard_navigation-sidecar/database/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ],
+  "failures": [
+    {
+      "case_id": "keyboard_navigation",
+      "message": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-in-process.log",
+        "keyboard_navigation-in-process"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "message": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifact_paths": [
+        "logs\\commit_crash_recovery-in-process.log",
+        "commit_crash_recovery-in-process"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "message": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifact_paths": [
+        "logs\\keyboard_navigation-sidecar.log",
+        "keyboard_navigation-sidecar"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "message": "Exception calling \"SetFocus\" with \"0\" argument(s): \"Target element cannot receive focus.\"",
+      "artifact_paths": [
+        "logs\\commit_crash_recovery-sidecar.log",
+        "commit_crash_recovery-sidecar"
+      ]
+    }
+  ]
+}

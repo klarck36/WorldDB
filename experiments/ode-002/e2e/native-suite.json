@@ -61,7 +61,7 @@
     {
       "id": "commit_crash_recovery",
       "scope": "terminate the native app during durable commit, reopen, and verify committed-prefix/recovery outcome",
-      "driver": null,
+      "driver": "scripts/run-keyboard-smoke.ps1",
       "modes": ["in-process", "sidecar"],
       "required": true
     }

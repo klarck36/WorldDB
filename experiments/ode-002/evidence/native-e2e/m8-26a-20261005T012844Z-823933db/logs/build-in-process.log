@@ -1,0 +1,5 @@
+   Compiling worlddb-storage-file v0.1.0 (<local-path>\crates\worlddb-storage-file)
+   Compiling worlddb-ode-engine v0.0.0 (<local-path>\experiments\ode-002\crates\ode-engine)
+   Compiling worlddb-cli v0.1.0 (<local-path>\crates\worlddb-cli)
+   Compiling worlddb-ode-desktop-shell v0.0.0 (<local-path>\experiments\ode-002\crates\desktop-shell)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.82s
