@@ -29,6 +29,10 @@ Die gemeinsame Ursache war `SetCursorPos`: Windows meldete `false`, obwohl der g
 
 Der frühere vollständige PASS bleibt ein gültiger Laufbeleg für den getesteten Build auf Commit `73b65db`; der aktuelle FAIL ist als abweichender Lauf auf HEAD archiviert und ersetzt ihn nicht. Die Windows-Tastaturfälle sind mit dem aktuellen Desktop-/Eingabezustand nicht erneut nachgewiesen. Das Manifest und alle erzeugten Rohprotokolle bleiben erhalten.
 
+## Separater Computer-Use-Diagnoseversuch
+
+Am 05.10.2026 wurde auf Commit `142794d` eine frische, isolierte In-Process-Testinstanz mit eigenem temporärem Projektpfad gestartet. `sky.list_apps()` lieferte genau ein WorldDB-Appobjekt mit einem Primär- und einem Sekundärfenster; das Primärfenster wurde anhand der zurückgegebenen ID und des Titels `WorldDB ODE-002 Primary` ausgewählt. `sky.activate_window()` schlug fehl mit `failed to activate captured window`. Nach erneutem `list_apps()` und einem frischen `get_window()` schlug der einmalige Wiederholungsversuch mit derselben Meldung fehl. Es wurden keine Klicks oder Tastenanschläge gesendet; der isolierte Testprozess wurde beendet. Dieser Diagnoseversuch ist kein zusätzlicher E2E-Fall und ändert den Suite-Stand von 7/11 nicht. Die native Eingabeprüfung bleibt offen.
+
 ## Status und Plattformgrenze
 
 Der vollständige Windows-Lauf vom Commit `73b65db` ist belegt; der aktuelle HEAD-Wiederholungslauf zeigt die oben dokumentierte Eingabegrenze. `M8-26a` bleibt im Aufgabenregister bis zum Abschluss seiner Abhängigkeit `M8-26` offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt; M8-26d und das M8-Gate bleiben daher offen.
