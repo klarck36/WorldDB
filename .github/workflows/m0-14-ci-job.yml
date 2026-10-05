@@ -1,0 +1,63 @@
+name: M0-14 CI job
+
+on:
+  workflow_call:
+    inputs:
+      job_id:
+        description: Job id declared in policy/ci-matrix.tsv
+        required: true
+        type: string
+      runs_on:
+        description: GitHub-hosted runner label for this matrix row
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ inputs.job_id }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 120
+    env:
+      WORLDDB_CI_ARTIFACT_ROOT: ${{ runner.temp }}/worlddb/ci-jobs
+    steps:
+      - name: Check out clean commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.19.0
+
+      - name: Install declared Rust toolchains
+        run: |
+          rustup toolchain install 1.85.0 --profile minimal --component clippy --component rustfmt
+          rustup toolchain install 1.88.0 --profile minimal
+
+      - name: Install pinned cargo-deny
+        run: cargo "+1.88.0" install cargo-deny --version 0.20.2 --locked --force
+
+      - name: Run provider-neutral CI job
+        run: python -B -X utf8 tools/run_ci_job.py --job-id ${{ inputs.job_id }}
+
+      - name: Archive CI job evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: m0-14-${{ inputs.job_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/worlddb/ci-jobs/M0-14-${{ inputs.job_id }}-*/ci-job.json
+            ${{ runner.temp }}/worlddb/ci-jobs/M0-14-${{ inputs.job_id }}-*/steps.tsv
+            ${{ runner.temp }}/worlddb/ci-jobs/M0-14-${{ inputs.job_id }}-*/verify.stdout.txt
+            ${{ runner.temp }}/worlddb/ci-jobs/M0-14-${{ inputs.job_id }}-*/verify.stderr.txt
+          if-no-files-found: warn
+          retention-days: 30

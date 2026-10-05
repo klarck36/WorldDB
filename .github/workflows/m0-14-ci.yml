@@ -1,0 +1,40 @@
+name: M0-14 CI matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      matrix:
+        description: Select the platform scope for this run
+        required: true
+        type: choice
+        default: windows-only
+        options:
+          - windows-only
+          - full-matrix
+
+permissions:
+  contents: read
+
+jobs:
+  windows-msrv:
+    name: Windows MSRV
+    uses: ./.github/workflows/m0-14-ci-job.yml
+    with:
+      job_id: windows-msrv
+      runs_on: windows-latest
+
+  linux-msrv:
+    name: Linux MSRV
+    if: ${{ inputs.matrix == 'full-matrix' }}
+    uses: ./.github/workflows/m0-14-ci-job.yml
+    with:
+      job_id: linux-msrv
+      runs_on: ubuntu-latest
+
+  macos-msrv:
+    name: macOS MSRV
+    if: ${{ inputs.matrix == 'full-matrix' }}
+    uses: ./.github/workflows/m0-14-ci-job.yml
+    with:
+      job_id: macos-msrv
+      runs_on: macos-latest
