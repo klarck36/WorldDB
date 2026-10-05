@@ -26,13 +26,13 @@ Der Repository-Baselinecommit `0bb3c85` ist bereits reproduzierbar und belegt de
 
 ## Plattform- und Dateisystem-Testhosts
 
-Die Plattformziele kommen aus Abschnitt 1 des Arbeitsplans. Die späteren nativen E2E-Runs gehören zu M8-26d. Eine Plattformzelle ist erst verfügbar, wenn ein konkreter Host, Betreiber und Laufprotokoll eingetragen sind.
+Die Plattformziele kommen aus Abschnitt 1 des Arbeitsplans. Windows-E2E gehört zu M8-26d; die späteren nativen APFS/ext4-E2E-Runs gehören zu M9-07. Eine Plattformzelle ist erst verfügbar, wenn ein konkreter Host, Betreiber und Laufprotokoll eingetragen sind.
 
 | Zielprofil | Hoststatus | Dateisystem | Zuständigkeit / Termin | Nachweisstatus |
 |---|---|---|---|---|
 | Windows | Aktuelle Workspace-Umgebung vorhanden: OS-API `10.0.26200.0` | NTFS auf `C:` | Betreiber für spätere Produkt-Runs nicht separat benannt; M8-26d | Umgebung erkannt; kein WorldDB-Datenbanklauf ausgeführt |
-| macOS | Host nicht zugeordnet | APFS | Host/Betreiber unbesetzt; vor M9-13a bereitstellen, nativer Lauf M8-26d | Kein Host oder Nachweis vorhanden |
-| Linux | Host nicht zugeordnet | ext4 | Host/Betreiber unbesetzt; vor M9-13a bereitstellen, nativer Lauf M8-26d | Kein Host oder Nachweis vorhanden |
+| macOS | Host nicht zugeordnet | APFS | Host/Betreiber unbesetzt; vor M9-13a bereitstellen, nativer Lauf M9-07/M8-26b | Kein Host oder Nachweis vorhanden |
+| Linux | Host nicht zugeordnet | ext4 | Host/Betreiber unbesetzt; vor M9-13a bereitstellen, nativer Lauf M9-07/M8-26c | Kein Host oder Nachweis vorhanden |
 
 Diese Tabelle weist die drei erforderlichen Profile samt Dateisystemen aus; sie behauptet nicht, dass macOS-/Linux-Hosts bereits verfügbar sind. Keine Durability-, Crash- oder Performancefreigabe erfolgt durch diese Inventur.
 

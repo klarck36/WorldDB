@@ -3071,7 +3071,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M3-10a; Evidenzklasse PT,E2E; vorhandene Test-/Implementierungsangabe PT, E2E; Folgebelege M8-26d.
+**Prüfzuordnung:** Primäraufgabe M3-10a; Evidenzklasse PT,E2E; vorhandene Test-/Implementierungsangabe PT, E2E; Folgebelege M9-07.
 
 ### WDB-API-003
 
@@ -3099,7 +3099,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M3-11; Evidenzklasse E2E,PF; vorhandene Test-/Implementierungsangabe Budget E2E; Folgebelege M6-11,M8-26d.
+**Prüfzuordnung:** Primäraufgabe M3-11; Evidenzklasse E2E,PF; vorhandene Test-/Implementierungsangabe Budget E2E; Folgebelege M6-11,M9-07.
 
 ### WDB-API-005
 
@@ -3113,7 +3113,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M3-10a; Evidenzklasse E2E,ST; vorhandene Test-/Implementierungsangabe E2E, key rotation tests; Folgebelege M8-26d.
+**Prüfzuordnung:** Primäraufgabe M3-10a; Evidenzklasse E2E,ST; vorhandene Test-/Implementierungsangabe E2E, key rotation tests; Folgebelege M9-07.
 
 ### WDB-CON-001
 
@@ -3463,7 +3463,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M5-13; Evidenzklasse PT,CR,E2E; vorhandene Test-/Implementierungsangabe Corruption E2E; Folgebelege M8-26d.
+**Prüfzuordnung:** Primäraufgabe M5-13; Evidenzklasse PT,CR,E2E; vorhandene Test-/Implementierungsangabe Corruption E2E; Folgebelege M9-07.
 
 ### WDB-REC-004
 
@@ -3491,7 +3491,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M5-14; Evidenzklasse E2E; vorhandene Test-/Implementierungsangabe E2E; Folgebelege M8-26d.
+**Prüfzuordnung:** Primäraufgabe M5-14; Evidenzklasse E2E; vorhandene Test-/Implementierungsangabe E2E; Folgebelege M9-07.
 
 ### WDB-REF-001
 
@@ -3759,7 +3759,7 @@ For each rule, the owner of the listed primary task owns implementation evidence
 
 **Quellgrenze:** The exact source_statement is the complete confirmed requirement; source_context_refs are context only and do not enlarge its semantics.
 
-**Prüfzuordnung:** Primäraufgabe M1-19; Evidenzklasse PT,E2E; vorhandene Test-/Implementierungsangabe E2E, PT; Folgebelege M8-26d.
+**Prüfzuordnung:** Primäraufgabe M1-19; Evidenzklasse PT,E2E; vorhandene Test-/Implementierungsangabe E2E, PT; Folgebelege M9-07.
 
 ### WDB-WIR-005
 

@@ -14,7 +14,7 @@
       "working_file": "WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_file": "docs/source/WorldDB_Finaler_Vollstaendiger_Plan_vNext.md",
       "source_sha256": "d5ba2016741f4475c982039d7c9022b1e8fb037e7307de99b3e80e7471ef2064",
-      "working_sha256": "1a029531503bac380bc228ab5ef078459bcfaa13ae6c8d13e480fc2598dde9ee",
+      "working_sha256": "e8186acf9cfebc6db00abb90e8f9812b97cf3831e750239561702369663e4978",
       "byte_identical": false
     },
     {
@@ -105,7 +105,7 @@
     {
       "task": "M0-02a",
       "specification": "docs/contract/source_gap_resolution.md",
-      "specification_sha256": "7d024616f9a2ff1bfb2ca3dbacb1025dca3074825d83a2d9d100f13a3328e412",
+      "specification_sha256": "55c131054c5d8f69f7ed5a50cccb66b85cc6f483ff38c2feac02217587a51814",
       "decision_record": "docs/contract/ADR-039-source-gap-resolution.md",
       "decision_record_sha256": "ec38ad858797cf04fa78b76f8507e2488e81c0da543d0ff380f85f41f09fd49a",
       "status": "accepted working contract"
@@ -589,7 +589,7 @@
     "decision_record": "docs/contract/ADR-039-source-gap-resolution.md",
     "normative_supplement": "docs/contract/source_gap_resolution.md",
     "binding_registry": "docs/contract/source_gap_bindings.tsv",
-    "binding_registry_sha256": "363978efb9069c965b5d3dec08903c9bc4fb3aef38ac5da5a99d61179e59e780",
+    "binding_registry_sha256": "bd62c59a4c0cd2fb8b2447947c1d409ac7b52528c29aff18d105d9e8ca28766f",
     "confirmed_hard_gap_count": 52,
     "confirmed_hard_gap_ids": [
       "WDB-API-001",

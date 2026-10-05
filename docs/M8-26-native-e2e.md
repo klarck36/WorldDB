@@ -39,11 +39,11 @@ Die saubere Wiederholung auf Commit `5536b0b2bb71be5784795bd19891a9d9123a0e71` i
 
 Die vollständige saubere Wiederholung mit dieser Korrektur besteht in `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T214149Z-8fe0f706/manifest.json`: auf Commit `f0655830971602899ec8f4bbb27b5fb36130f231`, `dirty=false`, Windows 11/NTFS, 11/11 Fälle und 140 Prüfpunkte `PASS`, null Fehler und null nicht ausgeführte Fälle. JSON-Schema sowie SHA-256 und Bytezahl aller elf Artefakte wurden geprüft.
 
-Der Windows/NTFS-Profillauf mit dem aktuellen Katalog ist auf sauberem Commit bestanden. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
+Der Windows/NTFS-Profillauf mit dem aktuellen Katalog ist auf sauberem Commit bestanden. M8-26, M8-26a und die Windows-Abnahme M8-26d sind damit abgeschlossen. Die APFS- und ext4-Treiber/Runs bleiben als M8-26b/c bis M9-07 zurückgestellt; M9-07 hängt ausdrücklich von diesen Profilen und den 18 invariantenspezifischen Folgebelegen ab. M8-27 kann das Windows-Profil jetzt abnehmen, ohne die späteren Plattformprüfungen zu überspringen.
 
 ## Plattformstatus
 
-Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. M8-26 und das M8-Gate bleiben bis zur Umsetzung und Ausführung der fehlenden Plattformtreiber sowie der gemeinsamen Abnahme offen.
+Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.
 
 ## Ausführung
 

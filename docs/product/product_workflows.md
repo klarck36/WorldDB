@@ -159,4 +159,4 @@ Vor dem Start zeigt der Dialog Backup-Profil, Ziel, `safe_revision`, Audit-Scope
 | Verifizierbare Sicherung und Restore | 13 |
 | Lokale Produktgrenze ohne 1.0-Netzwerkdienst oder stille Migration | 1, 3–4 |
 
-Diese Schritte sind die späteren manuellen Desktop-/CLI-End-to-End-Abnahmen. M0-05 prüft ihre Dokumentation und Contract-Referenzen; tatsächliche UX, Accessibility, Tastaturabläufe und Laufzeitresultate folgen M8-26/M8-26d.
+Diese Schritte sind die späteren manuellen Desktop-/CLI-End-to-End-Abnahmen. M0-05 prüft ihre Dokumentation und Contract-Referenzen; Windows-UX, Accessibility, Tastaturabläufe und Laufzeitresultate sind in M8-26a/M8-26d belegt. APFS/ext4 und die 18 plattformübergreifenden Invariant-Folgebelege sind M9-07 zugeordnet.

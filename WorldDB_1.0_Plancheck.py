@@ -181,6 +181,12 @@ def main() -> int:
             # APFS measurement is a deferred platform acceptance task. The local
             # M4 gate can proceed only with unverified platform writes fail-closed.
             expected_gate_dependencies.discard("M4-15")
+        if milestone == "M8":
+            # M8-27 is the Windows/local acceptance gate. Native APFS/ext4 runs
+            # are explicitly deferred to M9-07, which remains a prerequisite
+            # for the RC gate; they are not part of this local milestone gate.
+            expected_gate_dependencies.discard("M8-26b")
+            expected_gate_dependencies.discard("M8-26c")
         if milestone != "M10" and set(dep_graph[ids[-1]]) != expected_gate_dependencies:
             errors.append(f"{milestone}: gate dependencies differ from the declared milestone gate scope")
         if milestone != "M0":
@@ -286,11 +292,21 @@ def main() -> int:
             and m5_10_status in {"BLOCKED", "WAITING_EXTERNAL"}
             and m5_23_status != "DONE"
         )
+        m8_26b_status = task_by_id.get("M8-26b", {}).get("status")
+        m8_26c_status = task_by_id.get("M8-26c", {}).get("status")
+        deferred_m8_platform = (
+            args.gate_precheck == "M8"
+            and m8_26b_status in {"BLOCKED", "WAITING_EXTERNAL"}
+            and m8_26c_status in {"BLOCKED", "WAITING_EXTERNAL"}
+            and task_by_id.get("M8-26d", {}).get("status") == "DONE"
+        )
         for task_id in milestone_ids[:-1]:
             if task_by_id[task_id]["status"] != "DONE":
                 if args.gate_precheck == "M0" and task_id == "M0-14" and deferred_ci:
                     continue
                 if task_id == "M4-15" and deferred_m4_platform:
+                    continue
+                if deferred_m8_platform and task_id in {"M8-26b", "M8-26c"}:
                     continue
                 errors.append(f"{args.gate_precheck}: prerequisite task {task_id} is not DONE")
         if args.gate_precheck != "M0":
@@ -349,6 +365,8 @@ def main() -> int:
             print("DEFERRED PLATFORM PREREQUISITE: M4-15 remains open; APFS Machine-durability is unsupported until M5-10/M5-23 platform evidence passes")
         if deferred_m5_platform:
             print("DEFERRED PLATFORM PREREQUISITE: M5-08/M5-10/M5-23 remain open; M6-M8 local work is allowed after M5-22a, but RC and publication remain blocked")
+        if deferred_m8_platform:
+            print("DEFERRED PLATFORM PREREQUISITE: M8-26b/M8-26c remain open for M9-07; the M8 Windows/local gate does not approve cross-platform readiness")
     return 0
 
 
