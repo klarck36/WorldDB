@@ -90,6 +90,14 @@
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
         <button id="reconcile-operations" type="button" hidden>Schreibstatus erneut prüfen</button>
       </section>
+      <section id="diagnostic-panel" class="card" aria-labelledby="diagnostic-heading" hidden>
+        <h2 id="diagnostic-heading">Fehler und Diagnose</h2>
+        <p class="muted">Fehlermeldungen zeigen einen stabilen Code, einen Lokalisierungsschlüssel, eine nächste Aktion und – falls nötig – die OperationId. Der technische Export kann interne Ursachen und lokale Pfade enthalten. Er wird nur mit den aktuellen Rechten AuditRead und AuditExport für dieses Projekt erstellt.</p>
+        <div class="actions">
+          <button id="diagnostic-export" type="button" disabled>Technischen Diagnoseexport speichern</button>
+        </div>
+        <p id="diagnostic-status" class="muted" role="status" aria-live="polite"></p>
+      </section>
       <section id="migration-panel" class="card" aria-labelledby="migration-heading">
         <h2 id="migration-heading">Schema-Migration prüfen</h2>
         <p class="muted">Migrationen laufen nur bei geschlossenem Projekt. Zuerst werden Plan, Quelldatensätze, Dry Run und Ressourcenbedarf geprüft. Der Plan wird erst nach einer ausdrücklichen Aktion ausgeführt.</p>

@@ -250,6 +250,12 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
             $purgeRendererPathsRejected = @($operations | Where-Object {
                 $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:purge-renderer-paths:rejected'
             }).Count -gt 0
+            $diagnosticCanaryRejected = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:diagnostic-canary:rejected'
+            }).Count -gt 0
+            $diagnosticRendererPathsRejected = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:diagnostic-renderer-paths:rejected'
+            }).Count -gt 0
             $spanClosures = @($operations | Where-Object { $_.operation -eq 'close_event_span' -and $_.succeeded }).Count
             $catalogs = @($operations | Where-Object { $_.operation -eq 'snapshot' -and $_.succeeded }).Count
             $lifecycle = @($operations | Where-Object { $_.operation -eq 'lifecycle' -and $_.succeeded })
@@ -296,6 +302,7 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
                 $sources -ge 1 -and $sourceSupersessions -ge 1 -and $evidence -ge 1 -and
                 $provenance -ge 1 -and $evidenceRetractions -ge 1 -and $provenanceRetractions -ge 1 -and
                 $metaHistoryComplete -and $projectSmokeComplete -and $recoverySmokeComplete -and $backupRendererPathsRejected -and $exportImportRendererPathsRejected -and $purgeRendererPathsRejected -and
+                $diagnosticCanaryRejected -and $diagnosticRendererPathsRejected -and
                 $allTimes -ge 7 -and $points -ge 1 -and
                 $historyQueries -ge 1 -and $explainQueries -ge 1 -and
                 $tokenSearchPages -ge 1 -and $tokenSearchCompletePages -ge 1 -and
@@ -589,6 +596,8 @@ try {
         backup_renderer_paths_rejected_before_host_dialogs = 'PASS'
         export_import_renderer_paths_rejected_before_host_dialogs = 'PASS'
         purge_renderer_paths_rejected_before_host_dialogs = 'PASS'
+        diagnostic_public_error_canary_rejected = 'PASS'
+        diagnostic_renderer_paths_rejected_before_host_dialogs = 'PASS'
         filesystem_plugin_command_rejected_in_both_windows = 'PASS'
         host_principal_not_selected_by_environment = 'PASS'
         core_network_listeners = 'PASS'

@@ -5,6 +5,9 @@ const projectStatus = document.querySelector("#project-status");
 const projectDetails = document.querySelector("#project-details");
 const operationStatus = document.querySelector("#operation-status");
 const reconcileOperationsButton = document.querySelector("#reconcile-operations");
+const diagnosticPanel = document.querySelector("#diagnostic-panel");
+const diagnosticExportButton = document.querySelector("#diagnostic-export");
+const diagnosticStatus = document.querySelector("#diagnostic-status");
 const projectName = document.querySelector("#project-name");
 const createButton = document.querySelector("#create-project");
 const openButton = document.querySelector("#open-project");
@@ -389,15 +392,32 @@ const userMessages = {
   project_already_open: "Es ist bereits ein anderes Projekt geöffnet. Schließe es zuerst.",
   project_unavailable: "Dieses Konto hat keinen Zugriff auf das Projekt.",
   invalid_project: "Der ausgewählte Ordner enthält kein gültiges WorldDB-Projekt.",
+  invalid_job_id: "Der Job konnte nicht eindeutig zugeordnet werden.",
+  invalid_operation_id: "Die Vorgangskennung ist ungültig. Lade den Projektstatus neu.",
   recovery_required: "Das Projekt benötigt eine Prüfung oder Wiederherstellung und wurde nicht geöffnet.",
   recovery_inspection_unavailable: "Das Projekt konnte nicht read-only geprüft werden. Es wurde nicht geöffnet oder repariert.",
   journaled_recovery_rejected: "Die journalisierte Recovery wurde abgelehnt oder ist für diesen Befund nicht sicher.",
   salvage_rejected: "Salvage wurde abgelehnt. Das Quellprojekt blieb unverändert.",
   explicit_confirmation_required: "Diese Aktion benötigt eine eigene ausdrückliche Bestätigung.",
+  backup_rejected: "Sicherung oder Wiederherstellung wurde abgelehnt. Prüfe Projekt, Eingabe und Berechtigung.",
+  backup_unavailable: "Sicherungs- oder Wiederherstellungsdienste sind nicht verfügbar.",
+  diagnostic_export_rejected: "Der Diagnoseexport wurde abgelehnt. Prüfe Berechtigung und gewählten Dateinamen.",
+  diagnostic_export_unavailable: "Der Diagnoseexport konnte nicht gespeichert werden.",
+  engine_unavailable: "Die WorldDB-Engine ist nicht verfügbar. Öffne das Projekt erneut.",
+  export_import_rejected: "Export oder Import wurde abgelehnt. Prüfe Projekt, Eingabe und Berechtigung.",
+  export_import_unavailable: "Export- und Importdienste sind nicht verfügbar.",
+  ipc_diagnostic_unavailable: "Die interne Diagnose konnte nicht aufgezeichnet werden.",
+  job_cancel_unavailable: "Der Job konnte nicht abgebrochen werden. Aktualisiere die Jobliste.",
+  job_state_unavailable: "Der Jobstatus konnte nicht geladen werden.",
   migration_unavailable: "Die Migration kann gerade nicht geändert werden. Prüfe, ob ein anderes Fenster eine Auswahl oder Ausführung geöffnet hat.",
+  migration_rejected: "Die Migration wurde abgelehnt. Prüfe den Plan und den aktuellen Projektstand.",
   host_unavailable: "Der lokale WorldDB-Host ist gerade nicht verfügbar.",
   selection_cancelled: "Die Auswahl wurde abgebrochen.",
   invalid_request: "Bitte prüfe die Eingabe.",
+  unauthorized: "Diese Aktion ist für das aktuelle Konto oder Projekt nicht freigegeben.",
+  unsupported_protocol: "Die App und die Engine verwenden unterschiedliche Protokollversionen.",
+  purge_rejected: "Der Purge wurde abgelehnt. Prüfe Plan, Referenzen und Berechtigung.",
+  purge_unavailable: "Der Purge-Dienst ist gerade nicht verfügbar.",
   "query cursor is invalidated; restart the search": "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.",
   "query session state is unavailable": "Die Suchsitzung ist nicht verfügbar. Starte die Suche erneut.",
   "query cursor state is unavailable": "Die Suchsitzung ist nicht verfügbar. Starte die Suche erneut.",
@@ -439,6 +459,7 @@ let securityPolicyUnavailable = false;
 let branchLayerBusy = false;
 let transferBusy = false;
 let factBusy = false;
+let diagnosticExportBusy = false;
 let factsSmokeActive = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
@@ -467,47 +488,96 @@ let stagedEventRoles = [];
 let stagedEventAttributes = [];
 let stagedLifecycleChanges = [];
 
+const localErrorCodes = new Set([
+  "commit_conflict",
+  "commit_confirmed",
+  "not_committed",
+  "unresolved_operation",
+  "pending_storage_unavailable",
+]);
+
+const nextActionMessages = {
+  "worlddb.error.action.resolve_operation": "Den Vorgangsstatus abgleichen, bevor du erneut schreibst.",
+  "worlddb.error.action.refresh_and_review": "Aktualisiere die Daten und prüfe die Aktion erneut.",
+  "worlddb.error.action.open_recovery": "Öffne die Recovery-Prüfung.",
+  "worlddb.error.action.check_access": "Prüfe die Freigabe im aktuellen Projekt.",
+  "worlddb.error.action.review_input": "Prüfe Eingabe und aktuellen Projektstand.",
+  "worlddb.error.action.none": "Keine weiteren Schritte erforderlich.",
+  "worlddb.error.action.contact_support": "Notiere Fehlercode und Vorgangskennung für den Support.",
+};
+
 function errorCode(error) {
-  if (typeof error === "string") return error;
-  return error?.code ?? error?.message ?? "host_unavailable";
+  const candidate = typeof error === "string" ? error : error?.code ?? error?.message;
+  if (typeof candidate !== "string") return "host_unavailable";
+  if (Object.hasOwn(userMessages, candidate) || localErrorCodes.has(candidate)) return candidate;
+  return "host_unavailable";
+}
+
+function safeOperationId(value) {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : null;
+}
+
+function safeRevision(value) {
+  const text = String(value ?? "");
+  return /^(0|[1-9][0-9]{0,19})$/.test(text) ? text : "unbekannt";
+}
+
+function nextActionKey(code) {
+  if (code === "unknown_commit_outcome") return "worlddb.error.action.resolve_operation";
+  if (code === "commit_conflict") return "worlddb.error.action.refresh_and_review";
+  if (code === "recovery_required" || code === "recovery_inspection_unavailable") {
+    return "worlddb.error.action.open_recovery";
+  }
+  if (code === "unauthorized" || code === "project_unavailable") return "worlddb.error.action.check_access";
+  if (code === "invalid_request" || code === "explicit_confirmation_required") {
+    return "worlddb.error.action.review_input";
+  }
+  if (code === "selection_cancelled") return "worlddb.error.action.none";
+  return "worlddb.error.action.contact_support";
+}
+
+function errorMetadataText(error, code) {
+  const messageKey = `worlddb.error.${code}`;
+  const actionKey = nextActionKey(code);
+  const operationId = safeOperationId(error?.operation_id);
+  const operation = operationId ? ` · OperationId ${operationId}` : "";
+  return `\nFehlercode ${code} · Lokalisierung ${messageKey} · Nächster Schritt: ${nextActionMessages[actionKey]}${operation}`;
 }
 
 function showError(error) {
   const code = errorCode(error);
+  let message;
   if (code === "commit_conflict") {
-    const expected = error.expected_base_revision ?? "unbekannt";
-    const current = error.current_revision ?? "unbekannt";
-    return `Konfliktbericht: Die Projektbasis ist von Revision ${expected} auf ${current} fortgeschritten. Es wurde nichts gespeichert. Lade die aktuellen Daten und prüfe die Aktion erneut.`;
-  }
-  if (code === "commit_confirmed") {
-    return `Commit bestätigt · Operation ${error.operation_id} · Revision ${error.revision}. Lade die aktuellen Daten, um den gespeicherten Stand zu sehen.`;
-  }
-  if (code === "not_committed") {
-    return `WAL-Status bestätigt: Es wurde nichts gespeichert. ${error.detail ?? "Prüfe die Eingabe und versuche es erneut."}`;
-  }
-  if (code === "unresolved_operation") {
-    return "Eine vorherige Schreibaktion ist noch nicht geklärt. Prüfe zuerst ihren Status; neue Schreibaktionen bleiben bis dahin gesperrt.";
-  }
-  if (code === "pending_storage_unavailable") {
-    return "Der Schreibstatus kann auf diesem Gerät nicht dauerhaft vorgemerkt werden. Es wurde nichts gesendet.";
-  }
-  if (code === "unknown_commit_outcome") {
-    const operationId = error.operation_id ?? "(Operation-ID nicht zurückgegeben)";
-    return `Der Schreibstatus bleibt unklar. Operation ${operationId} bleibt vorgemerkt; öffne das betroffene Projekt, damit der WAL-Status abgeglichen wird.`;
-  }
-  if (/cursor/i.test(code) && /(invalid|expir|session)/i.test(code)) {
+    const expected = safeRevision(error?.expected_base_revision);
+    const current = safeRevision(error?.current_revision);
+    message = `Konfliktbericht: Die Projektbasis ist von Revision ${expected} auf ${current} fortgeschritten. Es wurde nichts gespeichert.`;
+  } else if (code === "commit_confirmed") {
+    const operationId = safeOperationId(error?.operation_id) ?? "nicht verfügbar";
+    const revision = safeRevision(error?.revision);
+    message = `Commit bestätigt · Operation ${operationId} · Revision ${revision}. Lade die aktuellen Daten, um den gespeicherten Stand zu sehen.`;
+  } else if (code === "not_committed") {
+    message = "WAL-Status bestätigt: Es wurde nichts gespeichert. Prüfe die Eingabe und versuche es erneut.";
+  } else if (code === "unresolved_operation") {
+    message = "Eine vorherige Schreibaktion ist noch nicht geklärt. Prüfe zuerst ihren Status; neue Schreibaktionen bleiben bis dahin gesperrt.";
+  } else if (code === "pending_storage_unavailable") {
+    message = "Der Schreibstatus kann auf diesem Gerät nicht dauerhaft vorgemerkt werden. Es wurde nichts gesendet.";
+  } else if ([
+    "query cursor is invalidated; restart the search",
+    "query session state is unavailable",
+    "query cursor state is unavailable",
+  ].includes(code)) {
     invalidateFactsSearch();
-    return "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.";
+    message = "Der Suchcursor ist abgelaufen oder nicht mehr gültig. Starte die Suche erneut.";
+  } else {
+    message = userMessages[code] ?? "Die Aktion konnte nicht abgeschlossen werden.";
   }
-  return userMessages[code] ?? userMessages[code.split(":").at(-1)] ?? "Die Aktion konnte nicht abgeschlossen werden.";
+  return `${message}${errorMetadataText(error, code)}`;
 }
 
 function backupErrorText(error) {
-  const code = errorCode(error);
-  if (code === "selection_cancelled") return "Ordnerauswahl abgebrochen; es wurde keine Sicherung oder Wiederherstellung gestartet.";
-  if (code === "backup_rejected" && typeof error?.detail === "string") {
-    return `Sicherung/Restore abgelehnt: ${error.detail}`;
-  }
   return showError(error);
 }
 
@@ -901,7 +971,6 @@ async function invokeManagedCommand(ipcCommand, command, activeSessionId, valida
         throw conflict;
       }
       const rejected = Object.assign(new Error("not_committed"), {
-        detail: showError(writeError),
         write_error_code: errorCode(writeError),
       });
       throw rejected;
@@ -1048,6 +1117,7 @@ function updateProjectControls() {
   updateBackupControls();
   updateExportImportControls();
   updatePurgeControls();
+  updateDiagnosticControls();
 }
 
 function updateRecoveryControls() {
@@ -1068,6 +1138,37 @@ function updateBackupControls() {
   backupCreateButton.disabled = blocked;
   backupVerifyButton.disabled = blocked;
   backupRestoreButton.disabled = blocked;
+}
+
+function updateDiagnosticControls() {
+  const blocked = !sessionId || !projectOpen || diagnosticExportBusy || projectBusy || jobsBusy
+    || recoveryBusy || backupBusy || exportImportBusy || purgeBusy || migrationBusy || schemaBusy
+    || entityBusy || perspectiveBusy || securityPolicyBusy || branchLayerBusy || transferBusy || factBusy;
+  diagnosticExportButton.disabled = blocked;
+}
+
+async function exportDiagnostics() {
+  if (!sessionId || !projectOpen || diagnosticExportBusy) return;
+  diagnosticExportBusy = true;
+  diagnosticStatus.textContent = "Prüfe die aktuellen AuditRead- und AuditExport-Rechte …";
+  updateProjectControls();
+  try {
+    const result = await invoke("export_diagnostics", {
+      sessionId,
+      request: { protocol_version: 1 },
+    });
+    if (result?.protocol_version !== 1 || typeof result.file_name !== "string"
+      || !Number.isSafeInteger(result.record_count) || !Number.isSafeInteger(result.bytes)
+      || !/^[0-9a-f]{64}$/.test(result.digest)) {
+      throw new Error("unsupported_protocol");
+    }
+    diagnosticStatus.textContent = `Diagnoseexport gespeichert · ${result.file_name} · ${result.record_count} Einträge · ${result.bytes} Byte · BLAKE3 ${result.digest}`;
+  } catch (error) {
+    diagnosticStatus.textContent = showError(error);
+  } finally {
+    diagnosticExportBusy = false;
+    updateProjectControls();
+  }
 }
 
 function migrationEntry(container, label, value) {
@@ -1304,9 +1405,6 @@ function appendPurgeList(container, label, values, remaining = 0) {
 }
 
 function purgeErrorText(error) {
-  const code = errorCode(error);
-  if (code === "selection_cancelled") return "Auswahl abgebrochen; der Purgeplan wurde nicht ausgeführt.";
-  if (code === "purge_rejected" && typeof error?.detail === "string") return `Purge abgelehnt: ${error.detail}`;
   return showError(error);
 }
 
@@ -1374,11 +1472,6 @@ function initializeExportClassChoices() {
 }
 
 function exportImportErrorText(error) {
-  const code = errorCode(error);
-  if (code === "selection_cancelled") return "Auswahl abgebrochen; es wurde kein Export und keine Importaktion ausgeführt.";
-  if (code === "export_import_rejected" && typeof error?.detail === "string") {
-    return `Export/Import abgelehnt: ${error.detail}`;
-  }
   return showError(error);
 }
 
@@ -1730,7 +1823,6 @@ async function refreshMigrationState(activeSessionId = sessionId) {
 }
 
 function migrationErrorText(error) {
-  if (typeof error?.detail === "string" && error.detail.length > 0) return error.detail;
   return showError(error);
 }
 
@@ -1795,6 +1887,7 @@ function renderProject(project) {
   transferPanel.hidden = !projectOpen;
   factsPanel.hidden = !projectOpen;
   jobsPanel.hidden = !projectOpen;
+  diagnosticPanel.hidden = !projectOpen;
   recoveryPanel.hidden = projectOpen;
   migrationPanel.hidden = projectOpen;
   backupPanel.hidden = projectOpen;
@@ -5149,6 +5242,41 @@ async function createFactsMaskBranch(activeSessionId, parentHistorySpaceId, cuto
 }
 
 async function runFactsSmoke(activeSessionId) {
+  const privateCanary = "WDB_INTERNAL_CAUSE_CANARY_93D1";
+  const publicError = await invoke("diagnostic_smoke_canary", { sessionId: activeSessionId });
+  const serializedError = JSON.stringify(publicError);
+  const displayedError = showError({
+    ...publicError,
+    detail: privateCanary,
+    technical_detail: privateCanary,
+    message: privateCanary,
+    message_key: privateCanary,
+    next_action_key: privateCanary,
+  });
+  diagnosticStatus.textContent = displayedError;
+  if (publicError?.code !== "migration_rejected"
+    || publicError?.message_key !== "worlddb.error.migration_rejected"
+    || serializedError.includes(privateCanary)
+    || diagnosticStatus.textContent.includes(privateCanary)) {
+    throw new Error("Die öffentliche Diagnose hat interne Fehlerdetails offengelegt.");
+  }
+  await recordFactsSmokeStage("diagnostic-canary:rejected");
+
+  let rendererDiagnosticPathRejected = false;
+  try {
+    await invoke("export_diagnostics", {
+      sessionId: activeSessionId,
+      request: { protocol_version: 1, path: "C:/renderer/selected/diagnostics.json" },
+    });
+  } catch {
+    rendererDiagnosticPathRejected = true;
+  }
+  if (!rendererDiagnosticPathRejected) {
+    throw new Error("Der Diagnoseexport hat einen Rendererpfad angenommen.");
+  }
+  await recordFactsSmokeStage("diagnostic-renderer-paths:rejected");
+  diagnosticStatus.textContent = "";
+
   factsQueryRecordedAsOf.dataset.auto = "true";
   factsQuerySchemaRevision.dataset.auto = "true";
   factsQueryOperation.value = "resolved";
@@ -5315,7 +5443,7 @@ async function runFactsSmoke(activeSessionId) {
     || unknownCommit.operation_id !== unknownCommitOperationId
     || !operationStatus.textContent.includes(unknownCommitOperationId)
     || !operationStatus.textContent.includes(`Revision ${unknownCommit.revision}`)) {
-    throw new Error(`the lost commit reply was not reconciled as committed under its original OperationId (code=${errorCode(unknownCommit)}, writeError=${unknownCommit?.write_error_code ?? "none"}, detail=${unknownCommit?.detail ?? "none"}, id=${unknownCommit?.operation_id ?? "missing"}, expectedBase=${unknownCommitBaseRevision}, current=${projectRevision}, pending=${pendingOperations.length}, status=${operationStatus.textContent})`);
+    throw new Error(`the lost commit reply was not reconciled as committed under its original OperationId (code=${errorCode(unknownCommit)}, writeError=${unknownCommit?.write_error_code ?? "none"}, id=${safeOperationId(unknownCommit?.operation_id) ?? "missing"}, expectedBase=${safeRevision(unknownCommitBaseRevision)}, current=${safeRevision(projectRevision)}, pending=${pendingOperations.length}, status=${operationStatus.textContent})`);
   }
   await refreshFactsCatalog(activeSessionId);
   if (factCatalog.revision !== unknownCommit.revision) {
@@ -6819,7 +6947,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
   purgePreviewButton.addEventListener("click", () => { void runPurgePreview(); });
   purgeExecuteButton.addEventListener("click", () => { void runPurgeExecution(); });
   purgeDiscardButton.addEventListener("click", () => { void discardPurgePlan(); });
+  diagnosticExportButton.addEventListener("click", () => { void exportDiagnostics(); });
   updatePurgeControls();
+  updateDiagnosticControls();
 
   closeButton.addEventListener("click", async () => {
     if (!sessionId) return;

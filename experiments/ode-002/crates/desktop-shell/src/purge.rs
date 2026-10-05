@@ -771,9 +771,9 @@ mod tests {
 
     #[test]
     fn purge_request_rejects_renderer_paths() {
-        let request = serde_json::from_str::<PurgeRequestV1>(&format!(
-            "{{\"protocol_version\":1,\"targets\":[\"entity:00000000-0000-0000-0000-000000000000\"],\"mode\":\"cascade\",\"external_inventory_complete\":false,\"known_external_artifacts\":[],\"source_path\":\"C:/secret\",\"destination_path\":\"C:/secret\"}}"
-        ));
+        let request = serde_json::from_str::<PurgeRequestV1>(
+            r#"{"protocol_version":1,"targets":["entity:00000000-0000-0000-0000-000000000000"],"mode":"cascade","external_inventory_complete":false,"known_external_artifacts":[],"source_path":"C:/secret","destination_path":"C:/secret"}"#,
+        );
         assert!(request.is_err());
     }
 

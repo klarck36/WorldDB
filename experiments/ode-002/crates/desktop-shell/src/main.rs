@@ -25,6 +25,7 @@ use worlddb_ode_engine::{
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
 mod backup;
+mod diagnostics;
 mod export_import;
 mod host_session;
 mod migration;
@@ -193,6 +194,7 @@ fn run() -> Result<(), String> {
             export_data,
             create_import_plan,
             prepare_import,
+            export_diagnostics,
             preview_purge,
             execute_purge,
             discard_purge_plan,
@@ -205,6 +207,7 @@ fn run() -> Result<(), String> {
             manage_history_space_transfer,
             manage_facts,
             facts_smoke_diagnostic,
+            diagnostic_smoke_canary,
             manage_perspectives,
             manage_security_policy
         ])
@@ -248,12 +251,12 @@ struct HealthResponseV1 {
     project: ProjectStatusV1,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 struct IpcErrorV1 {
     protocol_version: u16,
     code: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    message_key: String,
+    next_action_key: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +267,34 @@ struct IpcErrorV1 {
 struct SecuritySmokeModeV1 {
     protocol_version: u16,
     enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnosticExportRequestV1 {
+    protocol_version: u16,
+}
+
+#[tauri::command]
+fn diagnostic_smoke_canary(
+    window: tauri::WebviewWindow,
+    session_id: String,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<IpcErrorV1, IpcErrorV1> {
+    if !cfg!(debug_assertions)
+        || project_smoke_root().is_none()
+        || std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_none()
+    {
+        return Err(IpcErrorV1::new("unauthorized"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    Ok(backend.record_diagnostic_error(
+        "migration_rejected",
+        "WDB_INTERNAL_CAUSE_CANARY_93D1".to_owned(),
+    ))
 }
 
 #[derive(Serialize, Clone)]
@@ -542,47 +573,8 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code,
-            detail: None,
-            operation_id: None,
-            database_id: None,
-        }
-    }
-
-    fn migration_rejected(detail: String) -> Self {
-        Self {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            code: "migration_rejected",
-            detail: Some(detail),
-            operation_id: None,
-            database_id: None,
-        }
-    }
-
-    fn backup_rejected(detail: String) -> Self {
-        Self {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            code: "backup_rejected",
-            detail: Some(detail),
-            operation_id: None,
-            database_id: None,
-        }
-    }
-
-    fn export_import_rejected(detail: String) -> Self {
-        Self {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            code: "export_import_rejected",
-            detail: Some(detail),
-            operation_id: None,
-            database_id: None,
-        }
-    }
-
-    fn purge_rejected(detail: String) -> Self {
-        Self {
-            protocol_version: IPC_PROTOCOL_VERSION,
-            code: "purge_rejected",
-            detail: Some(detail),
+            message_key: diagnostics::localization_key(code),
+            next_action_key: diagnostics::next_action_key(code),
             operation_id: None,
             database_id: None,
         }
@@ -592,10 +584,25 @@ impl IpcErrorV1 {
         Self {
             protocol_version: IPC_PROTOCOL_VERSION,
             code: "unknown_commit_outcome",
-            detail: None,
+            message_key: diagnostics::localization_key("unknown_commit_outcome"),
+            next_action_key: diagnostics::next_action_key("unknown_commit_outcome"),
             operation_id: Some(operation_id.to_string()),
             database_id,
         }
+    }
+}
+
+impl std::fmt::Debug for IpcErrorV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IpcErrorV1")
+            .field("protocol_version", &self.protocol_version)
+            .field("code", &self.code)
+            .field("message_key", &self.message_key)
+            .field("next_action_key", &self.next_action_key)
+            .field("operation_id", &self.operation_id)
+            .field("database_id", &self.database_id)
+            .finish()
     }
 }
 
@@ -859,7 +866,7 @@ async fn select_migration_plan(
             return Err(error);
         }
     }
-    .map_err(IpcErrorV1::migration_rejected)?;
+    .map_err(|detail| backend.record_diagnostic_error("migration_rejected", detail))?;
     let _ = app.emit("migration-state-changed", ());
     Ok(MigrationPlanResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
@@ -927,7 +934,7 @@ async fn preview_migration(
             return Err(error);
         }
     }
-    .map_err(IpcErrorV1::migration_rejected)?;
+    .map_err(|detail| backend.record_diagnostic_error("migration_rejected", detail))?;
     let _ = app.emit("migration-state-changed", ());
     Ok(MigrationPreviewResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
@@ -965,7 +972,7 @@ fn resolve_migration_items(
     }
     let state = backend
         .set_migration_omissions(indexes)
-        .map_err(IpcErrorV1::migration_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("migration_rejected", detail))?;
     let _ = app.emit("migration-state-changed", ());
     Ok(MigrationPanelResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
@@ -1028,7 +1035,8 @@ async fn run_migration(
         restore_parent,
     );
     let _ = app.emit("migration-state-changed", ());
-    let result = completion.map_err(IpcErrorV1::migration_rejected)?;
+    let result = completion
+        .map_err(|detail| backend.record_diagnostic_error("migration_rejected", detail))?;
     Ok(MigrationRunResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
@@ -1076,7 +1084,8 @@ async fn resume_migration(
     };
     let completion = backend.finish_migration_resume(request.confirmed_breaking, restore_parent);
     let _ = app.emit("migration-state-changed", ());
-    let result = completion.map_err(IpcErrorV1::migration_rejected)?;
+    let result = completion
+        .map_err(|detail| backend.record_diagnostic_error("migration_rejected", detail))?;
     Ok(MigrationRunResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
@@ -1143,7 +1152,7 @@ async fn create_backup(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::backup_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("backup_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1188,7 +1197,7 @@ async fn verify_backup(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::backup_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("backup_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1245,7 +1254,7 @@ async fn restore_backup(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::backup_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("backup_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1270,7 +1279,8 @@ async fn export_data(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
-    export_import::validate_export_request(&request).map_err(IpcErrorV1::export_import_rejected)?;
+    export_import::validate_export_request(&request)
+        .map_err(|_| IpcErrorV1::new("export_import_rejected"))?;
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
         .map_err(map_session_error)?;
@@ -1311,7 +1321,7 @@ async fn export_data(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::export_import_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("export_import_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1336,7 +1346,8 @@ async fn create_import_plan(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
-    export_import::validate_plan_request(&request).map_err(IpcErrorV1::export_import_rejected)?;
+    export_import::validate_plan_request(&request)
+        .map_err(|_| IpcErrorV1::new("export_import_rejected"))?;
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
         .map_err(map_session_error)?;
@@ -1372,7 +1383,7 @@ async fn create_import_plan(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::export_import_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("export_import_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1431,7 +1442,7 @@ async fn prepare_import(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::export_import_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("export_import_rejected", detail))?;
         Ok::<_, IpcErrorV1>(result)
     }
     .await;
@@ -1442,6 +1453,66 @@ async fn prepare_import(
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
     })
+}
+
+#[tauri::command]
+async fn export_diagnostics(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    request: DiagnosticExportRequestV1,
+    sessions: tauri::State<'_, HostSessionManager>,
+    backend: tauri::State<'_, Backend>,
+) -> Result<diagnostics::DiagnosticExportViewV1, IpcErrorV1> {
+    if request.protocol_version != IPC_PROTOCOL_VERSION {
+        return Err(IpcErrorV1::new("unsupported_protocol"));
+    }
+    sessions
+        .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
+        .map_err(map_session_error)?;
+    let (database_id, permit) = backend
+        .diagnostic_export_context()
+        .map_err(|_| IpcErrorV1::new("unauthorized"))?;
+    if permit.is_none() {
+        return Err(IpcErrorV1::new("unauthorized"));
+    }
+    let path = pick_output_file(
+        app,
+        window.clone(),
+        "Technischen WorldDB-Diagnoseexport speichern",
+        "WorldDB Diagnosedaten",
+        &["json"],
+        "WorldDB-Diagnose.json",
+    )
+    .await?;
+    let (current_database_id, current_permit) = backend
+        .diagnostic_export_context()
+        .map_err(|_| IpcErrorV1::new("unauthorized"))?;
+    if current_database_id != database_id || current_permit.is_none() {
+        return Err(IpcErrorV1::new("unauthorized"));
+    }
+    let bundle = backend
+        .diagnostic_bundle(
+            &database_id,
+            current_permit
+                .as_ref()
+                .expect("authorization permit checked immediately above"),
+        )
+        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || diagnostics::write_export(&path, &bundle))
+            .await
+            .map_err(|_| IpcErrorV1::new("host_unavailable"))?
+            .map_err(|error| {
+                IpcErrorV1::new(match error {
+                    diagnostics::DiagnosticWriteError::InvalidTarget
+                    | diagnostics::DiagnosticWriteError::TargetExists
+                    | diagnostics::DiagnosticWriteError::TooLarge => "diagnostic_export_rejected",
+                    diagnostics::DiagnosticWriteError::Encode
+                    | diagnostics::DiagnosticWriteError::Io => "diagnostic_export_unavailable",
+                })
+            })?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1456,7 +1527,7 @@ async fn preview_purge(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
-    purge::validate_request(&request).map_err(IpcErrorV1::purge_rejected)?;
+    purge::validate_request(&request).map_err(|_| IpcErrorV1::new("purge_rejected"))?;
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
         .map_err(map_session_error)?;
@@ -1492,7 +1563,7 @@ async fn preview_purge(
         })
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?
-        .map_err(IpcErrorV1::purge_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("purge_rejected", detail))?;
         backend
             .stage_purge_draft(draft)
             .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
@@ -1520,7 +1591,7 @@ async fn execute_purge(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
-    purge::validate_run_request(&request).map_err(IpcErrorV1::purge_rejected)?;
+    purge::validate_run_request(&request).map_err(|_| IpcErrorV1::new("purge_rejected"))?;
     sessions
         .authorize(window.label(), &session_id, HostCapability::ProjectOpen)
         .map_err(map_session_error)?;
@@ -1531,7 +1602,9 @@ async fn execute_purge(
     let outcome = tauri::async_runtime::spawn_blocking(move || purge::run(draft, &fingerprint))
         .await
         .map_err(|_| IpcErrorV1::new("host_unavailable"))
-        .and_then(|result| result.map_err(IpcErrorV1::purge_rejected));
+        .and_then(|result| {
+            result.map_err(|detail| backend.record_diagnostic_error("purge_rejected", detail))
+        });
     backend
         .clear_purge_draft()
         .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
@@ -1560,7 +1633,7 @@ fn discard_purge_plan(
         .map_err(map_session_error)?;
     backend
         .discard_purge_draft()
-        .map_err(IpcErrorV1::purge_rejected)?;
+        .map_err(|detail| backend.record_diagnostic_error("purge_rejected", detail))?;
     Ok(purge::PurgeDiscardResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         discarded: true,
@@ -3090,11 +3163,12 @@ fn chunk_metadata(headers: &tauri::http::HeaderMap) -> Result<ChunkMetadata<'_>,
 #[cfg(test)]
 mod ipc_security_tests {
     use super::{
-        CloseProjectRequestV1, CreateProjectRequestV1, HealthRequestV1, IpcErrorV1,
-        MigrationRequestV1, MigrationResolutionRequestV1, MigrationRunRequestV1,
+        CloseProjectRequestV1, CreateProjectRequestV1, DiagnosticExportRequestV1, HealthRequestV1,
+        IpcErrorV1, MigrationRequestV1, MigrationResolutionRequestV1, MigrationRunRequestV1,
         OpenProjectRequestV1, RecoveryApplyRequestV1, RecoveryRequestV1, RecoverySalvageRequestV1,
         chunk_metadata, validate_project_name,
     };
+    use crate::diagnostics;
     use std::str::FromStr;
     use tauri::http::{HeaderMap, HeaderValue};
     use worlddb_core::{DatabaseId, OperationId};
@@ -3144,6 +3218,47 @@ mod ipc_security_tests {
             "principal": "renderer-selected-principal"
         });
         assert!(serde_json::from_value::<HealthRequestV1>(invalid).is_err());
+    }
+
+    #[test]
+    fn diagnostic_export_request_rejects_renderer_selected_paths() {
+        assert!(
+            serde_json::from_value::<DiagnosticExportRequestV1>(serde_json::json!({
+                "protocol_version": 1,
+                "path": "C:/renderer/chosen/diagnostics.json"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DiagnosticExportRequestV1>(serde_json::json!({
+                "protocol_version": 1
+            }))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn public_ipc_error_and_debug_never_include_internal_cause_canary() {
+        const CANARY: &str = "WDB_INTERNAL_CAUSE_CANARY_93D1";
+        let store = diagnostics::DiagnosticStore::new();
+        store.record(Some("db-a"), "migration_rejected", CANARY);
+        let error = IpcErrorV1::new("migration_rejected");
+        let serialized = serde_json::to_string(&error).expect("safe public IPC error");
+        let debug = format!("{error:?}");
+        let permit =
+            diagnostics::authorize_export(&["audit_read".to_owned(), "audit_export".to_owned()])
+                .expect("explicit audit export permissions");
+        let internal = store
+            .export_bundle("db-a", &permit)
+            .expect("host diagnostic bundle");
+        let authorized_export = serde_json::to_string(&internal).expect("diagnostic export");
+
+        assert!(serialized.contains("migration_rejected"));
+        assert!(serialized.contains("worlddb.error.migration_rejected"));
+        assert!(serialized.contains("worlddb.error.action.contact_support"));
+        assert!(!serialized.contains(CANARY));
+        assert!(!debug.contains(CANARY));
+        assert!(authorized_export.contains(CANARY));
     }
 
     #[test]
@@ -3240,6 +3355,11 @@ mod ipc_security_tests {
         let error = IpcErrorV1::unknown_commit(operation_id, Some(database_id.to_string()));
         let value = serde_json::to_value(error).expect("serializable project failure");
         assert_eq!(value["code"], "unknown_commit_outcome");
+        assert_eq!(value["message_key"], "worlddb.error.unknown_commit_outcome");
+        assert_eq!(
+            value["next_action_key"],
+            "worlddb.error.action.resolve_operation"
+        );
         assert_eq!(value["operation_id"], operation_id.to_string());
         assert_eq!(value["database_id"], database_id.to_string());
     }
@@ -3329,6 +3449,7 @@ struct BackendState {
 
 struct Backend {
     state: Mutex<BackendState>,
+    diagnostics: diagnostics::DiagnosticStore,
 }
 
 impl Backend {
@@ -3359,7 +3480,53 @@ impl Backend {
                 migration_dialog_active: false,
                 windows: HashMap::new(),
             }),
+            diagnostics: diagnostics::DiagnosticStore::new(),
         })
+    }
+
+    fn record_diagnostic_error(&self, code: &'static str, detail: String) -> IpcErrorV1 {
+        let database_id = self.state.lock().ok().and_then(|state| {
+            state
+                .project
+                .as_ref()
+                .map(|project| project.database_id().to_string())
+        });
+        self.diagnostics
+            .record(database_id.as_deref(), code, &detail);
+        IpcErrorV1::new(code)
+    }
+
+    fn diagnostic_export_context(
+        &self,
+    ) -> Result<(String, Option<diagnostics::DiagnosticExportPermit>), String> {
+        let database_id = self
+            .state
+            .lock()
+            .map_err(|_| "host project state is unavailable".to_owned())?
+            .project
+            .as_ref()
+            .map(|project| project.database_id().to_string())
+            .ok_or_else(|| "no WorldDB project is open".to_owned())?;
+        let snapshot =
+            match self.security_policy_with_operation_id(SecurityPolicyCommand::Snapshot, None) {
+                Ok(SecurityPolicyResponse::Snapshot(snapshot)) => snapshot,
+                Ok(SecurityPolicyResponse::Published(_)) => {
+                    return Err("security policy snapshot unavailable".to_owned());
+                }
+                Err(_) => return Err("security policy snapshot unavailable".to_owned()),
+            };
+        Ok((
+            database_id,
+            diagnostics::authorize_export(&snapshot.capabilities),
+        ))
+    }
+
+    fn diagnostic_bundle(
+        &self,
+        database_id: &str,
+        permit: &diagnostics::DiagnosticExportPermit,
+    ) -> Result<diagnostics::DiagnosticBundle, diagnostics::DiagnosticStoreError> {
+        self.diagnostics.export_bundle(database_id, permit)
     }
 
     fn health(&self) -> Result<Option<Response>, String> {
