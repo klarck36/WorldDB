@@ -3,3 +3,4 @@
 **/node_modules/
 __pycache__/
 *.py[cod]
+/experiments/ode-002/evidence/native-e2e/*/raw/

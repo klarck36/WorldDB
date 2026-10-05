@@ -87,6 +87,14 @@ fn run() -> Result<(), String> {
             {
                 return Err("two native windows were not created".into());
             }
+            #[cfg(debug_assertions)]
+            if env_enabled("WORLDDB_ODE_SHOW_WINDOWS") {
+                for label in ["primary", "secondary"] {
+                    app.get_webview_window(label)
+                        .ok_or_else(|| format!("missing native window {label}"))?
+                        .show()?;
+                }
+            }
             let state = app.state::<Backend>();
             let engine_at_start = state
                 .health()

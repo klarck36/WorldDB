@@ -6,11 +6,15 @@ param(
     [string]$ExecutablePath,
     [string]$EngineExecutablePath,
     [switch]$KeepArtifacts,
+    [string]$ArtifactsRoot,
     [ValidateRange(30, 600)]
     [int]$FactsTimeoutSeconds = 600
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ArtifactsRoot -and -not $KeepArtifacts) {
+    throw 'ArtifactsRoot requires KeepArtifacts.'
+}
 if (-not ('WorldDbIpcSmokeNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -626,7 +630,20 @@ finally {
         throw 'Refusing to remove a smoke-test directory outside the system temp directory.'
     }
     if ($KeepArtifacts -and -not $smokePassed) {
-        Write-Warning "Preserved failed smoke artifacts at $resolvedRoot"
+        $retainedRoot = $resolvedRoot
+        if ($ArtifactsRoot) {
+            $destination = [System.IO.Path]::GetFullPath($ArtifactsRoot)
+            if ($destination.StartsWith($resolvedRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $destination)) {
+                throw 'The artifact destination must be new and outside the temporary smoke directory.'
+            }
+            $destinationParent = [System.IO.Path]::GetDirectoryName($destination)
+            $null = New-Item -ItemType Directory -Path $destinationParent -Force
+            $null = New-Item -ItemType Directory -Path $destination
+            Get-ChildItem -LiteralPath $resolvedRoot -Force | Copy-Item -Destination $destination -Recurse
+            Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+            $retainedRoot = $destination
+        }
+        Write-Warning "Preserved failed smoke artifacts at $retainedRoot"
     } elseif (Test-Path -LiteralPath $resolvedRoot) {
         Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
     }

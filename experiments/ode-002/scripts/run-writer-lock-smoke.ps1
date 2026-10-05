@@ -3,10 +3,15 @@ param(
     [ValidateSet('in-process', 'sidecar')]
     [string]$Mode,
     [string]$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
-    [string]$ExecutablePath = (Join-Path $WorkspaceRoot 'target\ode-002\debug\worlddb-ode-desktop-shell.exe')
+    [string]$ExecutablePath = (Join-Path $WorkspaceRoot 'target\ode-002\debug\worlddb-ode-desktop-shell.exe'),
+    [switch]$KeepArtifacts,
+    [string]$ArtifactsRoot
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ArtifactsRoot -and -not $KeepArtifacts) {
+    throw 'ArtifactsRoot requires KeepArtifacts.'
+}
 
 $executable = [System.IO.Path]::GetFullPath($ExecutablePath)
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
@@ -23,6 +28,7 @@ $reopenResult = Join-Path $testRoot 'reopen.json'
 $first = $null
 $second = $null
 $reopen = $null
+$smokePassed = $false
 
 function Start-HiddenWorldDbApp([string]$Name, [string]$ResultPath, [int]$HoldMs) {
     $env:WORLDDB_ODE_DATABASE = $databaseRoot
@@ -104,7 +110,7 @@ try {
         throw 'The sidecar process remained alive after its parent application exited.'
     }
 
-    [pscustomobject]@{
+    $summary = [pscustomobject]@{
         mode = $Mode
         two_native_windows = 'PASS'
         first_writer_lock = 'PASS'
@@ -112,7 +118,9 @@ try {
         reopen_after_shutdown = 'PASS'
         sidecar_children_reaped = if ($Mode -eq 'sidecar') { 'PASS' } else { 'not_applicable' }
         expected_webview_teardown_diagnostic = 'Chrome_WidgetWin_0 / 1412 may be logged by WebView2 on shutdown'
-    } | ConvertTo-Json -Compress
+    }
+    $summary | ConvertTo-Json -Compress
+    $smokePassed = $true
 }
 finally {
     foreach ($process in @($first, $second, $reopen)) {
@@ -129,7 +137,22 @@ finally {
     if (-not $resolvedTestRoot.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'Refusing to remove a test directory outside the system temp directory.'
     }
-    if (Test-Path -LiteralPath $resolvedTestRoot) {
+    if ($KeepArtifacts -and -not $smokePassed) {
+        $retainedRoot = $resolvedTestRoot
+        if ($ArtifactsRoot) {
+            $destination = [System.IO.Path]::GetFullPath($ArtifactsRoot)
+            if ($destination.StartsWith($resolvedTestRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase) -or (Test-Path -LiteralPath $destination)) {
+                throw 'The artifact destination must be new and outside the temporary test directory.'
+            }
+            $destinationParent = [System.IO.Path]::GetDirectoryName($destination)
+            $null = New-Item -ItemType Directory -Path $destinationParent -Force
+            $null = New-Item -ItemType Directory -Path $destination
+            Get-ChildItem -LiteralPath $resolvedTestRoot -Force | Copy-Item -Destination $destination -Recurse
+            Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
+            $retainedRoot = $destination
+        }
+        Write-Warning "Preserved failed writer-lock artifacts at $retainedRoot"
+    } elseif (Test-Path -LiteralPath $resolvedTestRoot) {
         Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
     }
     Remove-Item Env:\WORLDDB_ODE_DATABASE -ErrorAction SilentlyContinue

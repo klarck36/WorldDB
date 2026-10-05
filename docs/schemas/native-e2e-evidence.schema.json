@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worlddb.invalid/schemas/native-e2e-evidence-v1.json",
+  "title": "WorldDB native desktop end-to-end run evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite_id",
+    "suite_version",
+    "task_id",
+    "run_id",
+    "status",
+    "started_at",
+    "finished_at",
+    "repository",
+    "environment",
+    "builds",
+    "recovery_cli",
+    "cases",
+    "artifacts",
+    "failures"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite_id": { "const": "worlddb-ode-native-e2e" },
+    "suite_version": { "type": "string", "minLength": 1 },
+    "task_id": { "enum": ["M8-26a", "M8-26b", "M8-26c"] },
+    "run_id": { "type": "string", "pattern": "^m8-26[abc]-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "status": { "enum": ["PASS", "INCOMPLETE", "FAIL"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commit", "dirty", "branch"],
+      "properties": {
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+        "dirty": { "type": "boolean" },
+        "branch": { "type": "string", "minLength": 1 }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "os_version", "architecture", "filesystem", "filesystem_root", "shell", "runner", "rustc", "cargo"],
+      "properties": {
+        "os": { "enum": ["Windows", "macOS", "Linux"] },
+        "os_version": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "filesystem": { "enum": ["NTFS", "APFS", "ext4"] },
+        "filesystem_root": { "type": "string", "minLength": 1 },
+        "shell": { "type": "string", "minLength": 1 },
+        "runner": { "type": "string", "minLength": 1 },
+        "rustc": { "type": "string", "minLength": 1 },
+        "cargo": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "os": { "const": "Windows" } }, "required": ["os"] },
+          "then": { "properties": { "filesystem": { "const": "NTFS" } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "macOS" } }, "required": ["os"] },
+          "then": { "properties": { "filesystem": { "const": "APFS" } } }
+        },
+        {
+          "if": { "properties": { "os": { "const": "Linux" } }, "required": ["os"] },
+          "then": { "properties": { "filesystem": { "const": "ext4" } } }
+        }
+      ]
+    },
+    "builds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode", "app_path", "app_sha256", "app_bytes", "engine_path", "engine_sha256", "engine_bytes"],
+        "properties": {
+          "mode": { "enum": ["in-process", "sidecar"] },
+          "app_path": { "type": "string", "minLength": 1 },
+          "app_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "app_bytes": { "type": "integer", "minimum": 1 },
+          "engine_path": { "type": ["string", "null"] },
+          "engine_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+          "engine_bytes": { "type": ["integer", "null"], "minimum": 1 }
+        }
+      }
+    },
+    "recovery_cli": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "bytes"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "bytes": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "mode", "status", "started_at", "finished_at", "exit_code", "checks_passed", "details", "artifacts"],
+        "properties": {
+          "case_id": { "type": "string", "minLength": 1 },
+          "mode": { "enum": ["in-process", "sidecar", "both"] },
+          "status": { "enum": ["PASS", "FAIL", "NOT_RUN", "DEFERRED"] },
+          "started_at": { "type": ["string", "null"], "format": "date-time" },
+          "finished_at": { "type": ["string", "null"], "format": "date-time" },
+          "exit_code": { "type": ["integer", "null"] },
+          "checks_passed": { "type": "integer", "minimum": 0 },
+          "details": { "type": "string" },
+          "artifacts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "message", "artifact_paths"],
+        "properties": {
+          "case_id": { "type": "string", "minLength": 1 },
+          "message": { "type": "string", "minLength": 1 },
+          "artifact_paths": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "task_id": { "const": "M8-26a" } }, "required": ["task_id"] },
+      "then": { "properties": { "environment": { "properties": { "os": { "const": "Windows" }, "filesystem": { "const": "NTFS" } } } } }
+    },
+    {
+      "if": { "properties": { "task_id": { "const": "M8-26b" } }, "required": ["task_id"] },
+      "then": { "properties": { "environment": { "properties": { "os": { "const": "macOS" }, "filesystem": { "const": "APFS" } } } } }
+    },
+    {
+      "if": { "properties": { "task_id": { "const": "M8-26c" } }, "required": ["task_id"] },
+      "then": { "properties": { "environment": { "properties": { "os": { "const": "Linux" }, "filesystem": { "const": "ext4" } } } } }
+    }
+  ]
+}

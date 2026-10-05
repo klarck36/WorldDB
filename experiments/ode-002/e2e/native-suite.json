@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26",
+  "platform_profiles": {
+    "windows": {
+      "filesystem": "NTFS",
+      "runner": "scripts/run-native-e2e.ps1",
+      "state": "available"
+    },
+    "macos": {
+      "filesystem": "APFS",
+      "runner": null,
+      "state": "deferred",
+      "deferred_until": "M9-07"
+    },
+    "linux": {
+      "filesystem": "ext4",
+      "runner": null,
+      "state": "deferred",
+      "deferred_until": "M9-07"
+    }
+  },
+  "cases": [
+    {
+      "id": "native_ipc_in_process",
+      "scope": "core_workflows; two native windows; renderer manipulation; read-only inspection and explicit recovery",
+      "driver": "scripts/run-ipc-security-smoke.ps1",
+      "modes": ["in-process"],
+      "required": true
+    },
+    {
+      "id": "native_ipc_sidecar",
+      "scope": "core_workflows; two native windows; renderer manipulation; read-only inspection and explicit recovery",
+      "driver": "scripts/run-ipc-security-smoke.ps1",
+      "modes": ["sidecar"],
+      "required": true
+    },
+    {
+      "id": "competing_process_in_process",
+      "scope": "second process is denied the writer lock; reopen succeeds after shutdown",
+      "driver": "scripts/run-writer-lock-smoke.ps1",
+      "modes": ["in-process"],
+      "required": true
+    },
+    {
+      "id": "competing_process_sidecar",
+      "scope": "second process is denied the writer lock; reopen succeeds and sidecar children are reaped",
+      "driver": "scripts/run-writer-lock-smoke.ps1",
+      "modes": ["sidecar"],
+      "required": true
+    },
+    {
+      "id": "keyboard_navigation",
+      "scope": "native keyboard text entry, Tab traversal, and Enter activation across the primary workflow",
+      "driver": "scripts/run-keyboard-smoke.ps1",
+      "modes": ["in-process", "sidecar"],
+      "required": true
+    },
+    {
+      "id": "commit_crash_recovery",
+      "scope": "terminate the native app during durable commit, reopen, and verify committed-prefix/recovery outcome",
+      "driver": null,
+      "modes": ["in-process", "sidecar"],
+      "required": true
+    }
+  ]
+}

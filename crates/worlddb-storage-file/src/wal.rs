@@ -1639,6 +1639,23 @@ impl WalPrepareLog {
             return Err(error);
         }
         drop(prepared.file);
+        #[cfg(debug_assertions)]
+        // Debug-only native E2E failpoint: crash after the WAL commit marker is durable.
+        if std::env::var("WORLDDB_M8_26_CRASH_AFTER_WAL_COMMIT_SYNC")
+            .is_ok_and(|value| value == "1")
+        {
+            if let Some(signal_path) = std::env::var_os("WORLDDB_M8_26_CRASH_SIGNAL_PATH") {
+                let signal = format!(
+                    "checkpoint=after_wal_commit_sync\nprocess_id={}\nexit_code=86\n",
+                    std::process::id()
+                );
+                if let Ok(mut signal_file) = File::create(signal_path) {
+                    let _ = signal_file.write_all(signal.as_bytes());
+                    let _ = signal_file.sync_all();
+                }
+            }
+            std::process::exit(86);
+        }
         Ok(prepared.receipt)
     }
 
