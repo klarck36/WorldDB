@@ -346,7 +346,6 @@ try {
         }
         Activate-TestWindow $window
         Click-TestElement $nameInput $window
-        $nameInput.SetFocus()
         Start-Sleep -Milliseconds 150
         $null = Assert-KeyboardTarget $nameInput $window 'Neuer Projektname' ([System.Windows.Automation.ControlType]::Edit)
         Ensure-TestElementVisible $createButton
@@ -358,7 +357,6 @@ try {
     } else {
         Activate-TestWindow $window
         Click-TestElement $nameInput $window
-        $nameInput.SetFocus()
         Start-Sleep -Milliseconds 150
         $null = Assert-KeyboardTarget $nameInput $window 'Neuer Projektname' ([System.Windows.Automation.ControlType]::Edit)
         Send-NativeChord 0x11 0x41

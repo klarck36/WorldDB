@@ -13,6 +13,7 @@ Beide Keyboard-Fälle und beide Commit-Crash-Fälle scheiterten beim UI-Automati
 - Jeder Lauf erhält ein eigenes WebView2-Datenverzeichnis; die Testläufe erzeugen darin jeweils einen eigenen `EBWebView`-Profilordner.
 - Auf dem Host setzte die automatisierte Zeichenfolge den Accessibility-Wert nicht korrekt zusammen; zuletzt wurde nur das eingegebene Zeichen gemeldet. Die Tab-Prüfung blieb auf `Neuer Projektname`.
 - Ein Folgeversuch mit dem nativen Erstellen-Steuerelement erreichte den WAL-Crash-Failpoint nicht. Die read-only CLI-Prüfung des temporären Datenbankverzeichnisses meldete `safe_revision = 0`, `disposition = Clean`, `source_modified = false`. Der Storage-Crash-Recovery-Einzeltest besteht, ersetzt aber den fehlenden Desktopnachweis nicht.
+- Zwei Ursachen im E2E-Runner gefunden: `run-keyboard-smoke.ps1` setzte `WORLDDB_ODE_PROJECT_SMOKE_ROOT` nicht und fiel deshalb in den nativen Ordnerdialog; außerdem warf `AutomationElement.SetFocus()` auf dem WebView2-Eingabefeld nach dem nativen Klick „Target element cannot receive focus“. Commit `5e9354f` setzt und restauriert die Umgebungsvariable pro Lauf auf `<testRoot>\project`; der redundante UIA-Fokusaufruf ist entfernt, die vorhandene Prüfung kontrolliert weiterhin den tatsächlichen Fokus. Parser, Plancheck, Sourcecheck und `git diff --check` bestehen; der native Vierfachlauf steht noch aus.
 
 ## Status
 
