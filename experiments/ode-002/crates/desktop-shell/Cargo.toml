@@ -25,3 +25,4 @@ worlddb-core = { path = "../../../../crates/worlddb-core" }
 worlddb-cli = { path = "../../../../crates/worlddb-cli" }
 worlddb-process-adapter = { path = "../../../../crates/worlddb-process-adapter" }
 worlddb-ode-engine = { path = "../ode-engine" }
+worlddb-storage-file = { path = "../../../../crates/worlddb-storage-file" }

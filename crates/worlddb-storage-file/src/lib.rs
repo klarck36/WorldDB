@@ -126,9 +126,9 @@ pub use sharing_export::{
     SharingExport, SharingExportError, SharingExportManager, SharingExportScope,
 };
 pub use storage_upgrade::{
-    StorageFormatProfile, StorageUpgradeAdminAction, StorageUpgradeBudget, StorageUpgradeError,
-    StorageUpgradeManager, StorageUpgradePlan, StorageUpgradeReceipt, StorageUpgradeRestoreTargets,
-    StorageUpgradeSafeRestorePoint, StorageUpgradeTransform,
+    CurrentPointerFormat, StorageFormatProfile, StorageUpgradeAdminAction, StorageUpgradeBudget,
+    StorageUpgradeError, StorageUpgradeManager, StorageUpgradePlan, StorageUpgradeReceipt,
+    StorageUpgradeRestoreTargets, StorageUpgradeSafeRestorePoint, StorageUpgradeTransform,
 };
 pub use verify::{
     StorageDamageClass, StorageVerifier, StorageVerifyAction, StorageVerifyError,

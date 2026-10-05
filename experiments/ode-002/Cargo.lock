@@ -4475,6 +4475,7 @@ dependencies = [
  "worlddb-core",
  "worlddb-ode-engine",
  "worlddb-process-adapter",
+ "worlddb-storage-file",
 ]
 
 [[package]]

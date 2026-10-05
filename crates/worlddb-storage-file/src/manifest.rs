@@ -406,6 +406,16 @@ impl ManifestStore {
     /// Reads and verifies the manifest named by `CURRENT`; missing `CURRENT`
     /// is returned as `Ok(None)` for a new database or pre-recovery state.
     pub fn read_current(&self) -> Result<Option<Manifest>, ManifestError> {
+        self.read_current_with_format()
+            .map(|current| current.map(|(manifest, _)| manifest))
+    }
+
+    /// Reads and verifies the manifest and its `CURRENT` pointer format together.
+    /// The read is non-mutating and both values come from the same pointer frame.
+    pub fn read_current_with_format(
+        &self,
+    ) -> Result<Option<(Manifest, crate::storage_upgrade::CurrentPointerFormat)>, ManifestError>
+    {
         let Some(pointer) = self.read_current_pointer()? else {
             return Ok(None);
         };
@@ -426,7 +436,11 @@ impl ManifestStore {
         {
             return Err(ManifestError::InvalidManifest);
         }
-        Ok(Some(manifest))
+        let current_pointer_format = match pointer.version {
+            CurrentPointerVersion::V1 => crate::storage_upgrade::CurrentPointerFormat::V1,
+            CurrentPointerVersion::V2 => crate::storage_upgrade::CurrentPointerFormat::V2,
+        };
+        Ok(Some((manifest, current_pointer_format)))
     }
 
     /// Publishes one immutable manifest generation, then atomically points

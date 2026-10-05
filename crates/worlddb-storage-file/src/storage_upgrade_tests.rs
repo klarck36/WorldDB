@@ -1,7 +1,7 @@
 use super::{
-    CurrentPointerVersion, JOURNAL_RECORD_BYTES, JournalPhase, StorageUpgradeBudget,
-    StorageUpgradeError, StorageUpgradeFaultPoint, StorageUpgradeManager, UpgradeExecutionRequest,
-    inspect_source_locked, profile_fingerprint, validate_recovery_phase,
+    CurrentPointerFormat, CurrentPointerVersion, JOURNAL_RECORD_BYTES, JournalPhase,
+    StorageUpgradeBudget, StorageUpgradeError, StorageUpgradeFaultPoint, StorageUpgradeManager,
+    UpgradeExecutionRequest, inspect_source_locked, profile_fingerprint, validate_recovery_phase,
 };
 use crate::{
     ContentDigest, DatabaseLayout, ManifestSnapshot, ManifestStore, StorageVerifier, WalPrepareLog,
@@ -459,6 +459,13 @@ fn current_upgrade_reopens_at_source_or_target_and_resumes_every_publish_boundar
         .read_current()
         .map_err(|error| error.to_string())?
         .ok_or("upgraded manifest missing")?;
+    assert_eq!(
+        ManifestStore::new(layout.clone())
+            .read_current_with_format()
+            .map_err(|error| error.to_string())?
+            .map(|(_, format)| format),
+        Some(CurrentPointerFormat::V2)
+    );
     assert_eq!(
         upgraded_manifest.generation(),
         original_manifest.generation()

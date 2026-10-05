@@ -1905,7 +1905,12 @@ function renderProject(project) {
     return;
   }
   projectStatus.textContent = project.project_name ?? "WorldDB-Projekt geöffnet";
-  projectDetails.textContent = `Rolle: ${project.role ?? "unbekannt"} · Stand: ${project.revision ?? "–"}`;
+  const storageFormatLabels = {
+    current_v1: "CURRENT v1",
+    current_v2: "CURRENT v2",
+  };
+  const storageFormat = storageFormatLabels[project.compatibility?.storage_format] ?? "unbekannt";
+  projectDetails.textContent = `Rolle: ${project.role ?? "unbekannt"} · Stand: ${project.revision ?? "–"} · Format: ${storageFormat} · Format- und Schemakonvertierungen nur ausdrücklich`;
   updateSchemaControls();
   updateProjectControls();
 }

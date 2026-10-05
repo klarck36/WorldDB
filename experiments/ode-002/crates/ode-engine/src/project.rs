@@ -12,9 +12,9 @@ use worlddb_core::{
     SecurityPolicyVersion, Symbol,
 };
 use worlddb_storage_file::{
-    DatabaseLayout, HistorySegmentStore, ManifestSegmentKind, ManifestSegmentReference,
-    ManifestStore, RecoveryDisposition, RecoveryManager, SecurityPolicyHistoryStore,
-    StorageVerifier, WalOperationStatus, WalPrepareLog,
+    CurrentPointerFormat, DatabaseLayout, HistorySegmentStore, ManifestSegmentKind,
+    ManifestSegmentReference, ManifestStore, RecoveryDisposition, RecoveryManager,
+    SecurityPolicyHistoryStore, StorageVerifier, WalOperationStatus, WalPrepareLog,
 };
 
 /// A safe host-facing failure class for project create/open.
@@ -58,6 +58,7 @@ pub struct ProjectAccess {
     revision: Revision,
     role_symbol: String,
     principal_id: PrincipalId,
+    current_pointer_format: CurrentPointerFormat,
 }
 
 impl ProjectAccess {
@@ -74,6 +75,12 @@ impl ProjectAccess {
     #[must_use]
     pub const fn revision(&self) -> Revision {
         self.revision
+    }
+
+    /// Recognized `CURRENT` pointer format read during the read-only open check.
+    #[must_use]
+    pub const fn current_pointer_format(&self) -> CurrentPointerFormat {
+        self.current_pointer_format
     }
 
     #[must_use]
@@ -256,8 +263,9 @@ pub(crate) fn resolve_open_access(
     if verification.disposition() != RecoveryDisposition::Clean {
         return Err(ProjectError::RecoveryRequired);
     }
-    let manifest = ManifestStore::new(layout.clone())
-        .read_current()
+    let manifest_store = ManifestStore::new(layout.clone());
+    let (manifest, current_pointer_format) = manifest_store
+        .read_current_with_format()
         .map_err(|_| ProjectError::InvalidProject)?
         .ok_or(ProjectError::InvalidProject)?;
     let security_segments = manifest
@@ -293,6 +301,7 @@ pub(crate) fn resolve_open_access(
         revision: manifest.revision(),
         role_symbol,
         principal_id,
+        current_pointer_format,
     })
 }
 
@@ -480,7 +489,9 @@ mod tests {
     use worlddb_core::{
         Capability, OperationId, PolicyTarget, PrincipalId, Revision, SchemaMode, SchemaRevision,
     };
-    use worlddb_storage_file::{DatabaseLayout, WalOperationStatus, WalPrepareLog};
+    use worlddb_storage_file::{
+        CurrentPointerFormat, DatabaseLayout, WalOperationStatus, WalPrepareLog,
+    };
 
     use super::{ProjectError, create_project, create_project_with_operation_id, open_project};
     use crate::EngineHost;
@@ -540,6 +551,28 @@ mod tests {
         ));
         drop(verified);
         let _ = std::fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn opening_reports_current_format_without_rewriting_the_pointer() -> Result<(), String> {
+        let root = root();
+        let creator = principal(30)?;
+        let created = create_project(&root, creator).map_err(|error| error.to_string())?;
+        assert_eq!(created.current_pointer_format(), CurrentPointerFormat::V1);
+
+        let layout = DatabaseLayout::open(&root).map_err(|error| error.to_string())?;
+        let current_path = layout.current_file();
+        let before = std::fs::read(&current_path).map_err(|error| error.to_string())?;
+        let reopened = open_project(&root, creator).map_err(|error| error.to_string())?;
+        let after = std::fs::read(&current_path).map_err(|error| error.to_string())?;
+
+        assert_eq!(reopened.current_pointer_format(), CurrentPointerFormat::V1);
+        assert_eq!(
+            after, before,
+            "open must not rewrite CURRENT or upgrade its format"
+        );
+        std::fs::remove_dir_all(root).map_err(|error| error.to_string())?;
         Ok(())
     }
 

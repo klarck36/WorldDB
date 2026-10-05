@@ -84,7 +84,7 @@ function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $creates = @($primary | Where-Object { $_.operation -eq 'create' -and $_.succeeded }).Count
             $batchCount = @($primary | Where-Object { $_.operation -eq 'set_lifecycle_batch' }).Count
-            $currentReadCount = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
+            $currentReadCount = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' -and $_.succeeded }).Count
             $timelineStates = @($primary | ForEach-Object { $_.definitions } | Where-Object { $_.family -eq 'timeline' -and $_.symbol -eq 'ipc_smoke_timeline' } | Select-Object -ExpandProperty lifecycle -Unique)
             $timeUnitStates = @($primary | ForEach-Object { $_.definitions } | Where-Object { $_.family -eq 'time_unit' -and $_.symbol -eq 'ipc_smoke_max_scale' } | Select-Object -ExpandProperty lifecycle -Unique)
             $timelineComplete = @('active', 'deprecated', 'retired' | Where-Object { $timelineStates -contains $_ }).Count -eq 3
@@ -387,11 +387,14 @@ try {
         if ($entry.Value.protocol_version -ne 1 -or $entry.Value.window -ne $entry.Label -or -not $entry.Value.project_open -or $entry.Value.revision -lt 1 -or $entry.Value.role -ne 'gm' -or [string]::IsNullOrWhiteSpace($entry.Value.snapshot_id) -or $null -eq $entry.Value.engine.engine_process_id) {
             throw "The $($entry.Label) window did not complete the authenticated project open/create flow."
         }
+        if ($entry.Value.compatibility.storage_format -ne 'current_v1' -or $entry.Value.compatibility.format_upgrade_policy -ne 'explicit_only' -or $entry.Value.compatibility.schema_migration_policy -ne 'explicit_only' -or $entry.Value.compatibility.migration_applied_during_open -ne $false) {
+            throw "The $($entry.Label) window did not report the read-only format and migration compatibility result."
+        }
     }
     if ($primaryProject.database_id -ne $secondaryProject.database_id) { throw 'Both windows did not resolve the same WorldDB project.' }
     if ($primaryProject.snapshot_id -eq $secondaryProject.snapshot_id) { throw 'The native windows received the same project snapshot identity.' }
     if (@($primarySchema | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The primary window had a rejected schema IPC operation.' }
-    if (@($secondarySchema | Where-Object { -not $_.succeeded }).Count -gt 0) { throw 'The secondary window had a rejected schema read.' }
+    if (@($secondarySchema | Where-Object { -not $_.succeeded -and $_.project_open -ne $false }).Count -gt 0) { throw 'The secondary window had a rejected schema read while a project was open.' }
     $requiredSchemaOperations = @('snapshot_current', 'create', 'snapshot_historical', 'snapshot_explicit')
     foreach ($operation in $requiredSchemaOperations) {
         if (@($primarySchema | Where-Object { $_.operation -eq $operation }).Count -eq 0) {

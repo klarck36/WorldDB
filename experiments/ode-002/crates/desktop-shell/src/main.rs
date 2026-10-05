@@ -43,6 +43,7 @@ use transfer::{
 use worlddb_core::CancellationRequestDisposition;
 use worlddb_core::{JobId, OperationId, PrincipalId};
 use worlddb_ode_engine::ProjectError;
+use worlddb_storage_file::CurrentPointerFormat;
 
 #[cfg(feature = "sidecar")]
 const FRAME_DATA: u8 = 1;
@@ -308,6 +309,43 @@ struct ProjectStatusV1 {
     revision: Option<u64>,
     role: Option<String>,
     snapshot_id: Option<String>,
+    compatibility: Option<ProjectCompatibilityV1>,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ProjectStorageFormatV1 {
+    CurrentV1,
+    CurrentV2,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ProjectMigrationPolicyV1 {
+    ExplicitOnly,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct ProjectCompatibilityV1 {
+    storage_format: ProjectStorageFormatV1,
+    format_upgrade_policy: ProjectMigrationPolicyV1,
+    schema_migration_policy: ProjectMigrationPolicyV1,
+    migration_applied_during_open: bool,
+}
+
+impl ProjectCompatibilityV1 {
+    const fn from_pointer_format(format: CurrentPointerFormat) -> Self {
+        let storage_format = match format {
+            CurrentPointerFormat::V1 => ProjectStorageFormatV1::CurrentV1,
+            CurrentPointerFormat::V2 => ProjectStorageFormatV1::CurrentV2,
+        };
+        Self {
+            storage_format,
+            format_upgrade_policy: ProjectMigrationPolicyV1::ExplicitOnly,
+            schema_migration_policy: ProjectMigrationPolicyV1::ExplicitOnly,
+            migration_applied_during_open: false,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1764,14 +1802,14 @@ fn manage_schema(
     let operation = schema_smoke_operation(&request.command);
     match backend.schema_with_operation_id(request.command, operation_id) {
         Ok(result) => {
-            record_schema_smoke(window.label(), operation, true, Some(&result))?;
+            record_schema_smoke(window.label(), operation, true, Some(&result), &backend)?;
             Ok(SchemaResponseV1 {
                 protocol_version: IPC_PROTOCOL_VERSION,
                 result,
             })
         }
         Err(_) => {
-            record_schema_smoke(window.label(), operation, false, None)?;
+            record_schema_smoke(window.label(), operation, false, None, &backend)?;
             Err(IpcErrorV1::new("schema_rejected"))
         }
     }
@@ -2268,6 +2306,7 @@ fn record_project_smoke(
         "revision": status.revision,
         "role": status.role,
         "snapshot_id": status.snapshot_id,
+        "compatibility": status.compatibility,
         "engine": engine,
     });
     std::fs::write(
@@ -3017,6 +3056,7 @@ fn record_schema_smoke(
     operation: &str,
     succeeded: bool,
     result: Option<&SchemaResponse>,
+    backend: &Backend,
 ) -> Result<(), IpcErrorV1> {
     let Some(result_prefix) = std::env::var_os("WORLDDB_ODE_SCHEMA_SMOKE_RESULT") else {
         return Ok(());
@@ -3062,10 +3102,15 @@ fn record_schema_smoke(
                 serde_json::Value::Array(definitions),
             )
         });
+    let project_open = backend
+        .project_status(window_label)
+        .ok()
+        .map(|status| status.project_open);
     let record = serde_json::json!({
         "window": window_label,
         "operation": operation,
         "succeeded": succeeded,
+        "project_open": project_open,
         "revision": revision,
         "definition_count": definition_count,
         "definitions": definitions,
@@ -3550,13 +3595,14 @@ impl Backend {
             .state
             .lock()
             .map_err(|_| ProjectError::HostUnavailable)?;
-        let Some((root, database_id, project_revision, role_symbol)) =
+        let Some((root, database_id, project_revision, role_symbol, current_pointer_format)) =
             state.project.as_ref().map(|project| {
                 (
                     project.canonical_root().to_owned(),
                     project.database_id(),
                     project.revision().value(),
                     project.role_symbol().to_owned(),
+                    project.current_pointer_format(),
                 )
             })
         else {
@@ -3569,6 +3615,7 @@ impl Backend {
                 revision: None,
                 role: None,
                 snapshot_id: None,
+                compatibility: None,
             });
         };
         if !state.windows.contains_key(window_label) {
@@ -3600,6 +3647,9 @@ impl Backend {
             revision: Some(view.revision),
             role: Some(role_symbol),
             snapshot_id: Some(view.snapshot_id.clone()),
+            compatibility: Some(ProjectCompatibilityV1::from_pointer_format(
+                current_pointer_format,
+            )),
         })
     }
 
@@ -4152,7 +4202,7 @@ impl Backend {
         if !state.windows.contains_key(window_label) {
             attach_window_snapshot(state, window_label)?;
         }
-        let (root, database_id, role_symbol) = state
+        let (root, database_id, role_symbol, current_pointer_format) = state
             .project
             .as_ref()
             .map(|project| {
@@ -4160,6 +4210,7 @@ impl Backend {
                     project.canonical_root().to_owned(),
                     project.database_id(),
                     project.role_symbol().to_owned(),
+                    project.current_pointer_format(),
                 )
             })
             .ok_or(ProjectError::HostUnavailable)?;
@@ -4183,6 +4234,9 @@ impl Backend {
             revision: Some(view.0),
             role: Some(role_symbol),
             snapshot_id: Some(view.1),
+            compatibility: Some(ProjectCompatibilityV1::from_pointer_format(
+                current_pointer_format,
+            )),
         })
     }
 
