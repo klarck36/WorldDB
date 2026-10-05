@@ -2,3 +2,5 @@
 docs/source/* -text
 docs/contract/* -text
 crates/worlddb-testkit/testdata/m0-13/** -text
+# The M7-16h baseline hashes these fixture bytes directly; preserve them on Windows.
+crates/worlddb-storage-file/tests/fixtures/m7-16h/** -text
