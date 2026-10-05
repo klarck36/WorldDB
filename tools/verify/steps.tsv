@@ -28,6 +28,8 @@ step	dev	crate-graph	run	python	-B -X utf8 tools/check_crate_graph.py	-
 step	dev	crate-graph-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_crate_graph.py -v	-
 step	dev	contract-sources	run	python	-B -X utf8 docs/contract/build_contract_sources.py --verify-only	-
 step	dev	contract-docs	run	python	-B -X utf8 docs/contract/verify_contract_docs.py	-
+step	dev	native-e2e-suite-contract	run	python	-B -X utf8 tools/check_native_e2e_suite.py	-
+step	dev	native-e2e-suite-contract-tests	run	python	-B -X utf8 -m unittest discover -s tools -p test_native_e2e_suite.py -v	-
 step	dev	source-check	run	python	-B -X utf8 WorldDB_1.0_Sourcecheck.py	-
 step	dev	plan-check	run	python	-B -X utf8 WorldDB_1.0_Plancheck.py	-
 step	dev	m6-14a-corpus-manifest	run	python	-B -X utf8 tools/m6-14a/verify_corpus.py --metadata-only	-

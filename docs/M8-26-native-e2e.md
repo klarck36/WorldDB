@@ -4,6 +4,10 @@
 
 `experiments/ode-002/e2e/native-suite.json` definiert die gemeinsamen Fall-IDs für Desktopabläufe, getrennte Fenster, konkurrierende Prozesse, Renderer-Manipulation, Recovery, Tastaturbedienung und einen Abbruch am Commitpunkt. Der Windows-Einstieg ist `experiments/ode-002/scripts/run-native-e2e.ps1`. Er baut In-Process- und Sidecar-Binärdateien getrennt und führt beide Profile auf dem echten Tauri-Desktop aus.
 
+Jeder Fall benennt ein plattformneutrales `scenario` und getrennte `drivers` für Windows, macOS und Linux. Der Windows-Einstieg löst Fall-ID, Prozessmodus und Treiber aus diesem Katalog auf, statt die PowerShell-Treiber zusätzlich fest zu verdrahten. `tools/check_native_e2e_suite.py` prüft eindeutige IDs, vollständige Szenario-/Prozessmodusabdeckung, OS-/Dateisystembindungen, sichere Treiberpfade sowie Übereinstimmung zwischen verfügbaren Plattformen und vorhandenen Treibern. Neun Mutationsprüfungen in `tools/test_native_e2e_suite.py` schützen diese Regeln; beide Prüfungen laufen in `cargo xtask verify`. Der Gesamtverifier bestand auf Windows mit 41 Schritten, einem vorgesehenen Skip und null Fehlern.
+
+Für Windows/NTFS sind die nativen Treiber verfügbar. macOS/APFS und Linux/ext4 haben im gemeinsamen Katalog weiterhin `state: deferred`, keinen Suite-Einstieg und keine Falltreiber. Das ist die vereinbarte Verschiebung der nativen Ausführung und Belege bis M9-07; die portablen Szenariodefinitionen bleiben bereits jetzt gemeinsam.
+
 Jeder Lauf erhält eine eindeutige Run-ID und ein `manifest.json` nach `docs/schemas/native-e2e-evidence.schema.json`. Das Manifest hält Commit und Dirty-Zustand, OS-Version, Dateisystem, Toolchain, SHA-256-Hashes der Builds, Fallresultate und gehashte Ausgabedateien fest. Die nativen Smoke-Skripte archivieren ihre temporären Projektdaten und Prozesslogs im Run-Ordner. Fehler behalten dadurch die Eingaben und Logs, die zur Reproduktion benötigt werden.
 
 ## Windows-Fälle
@@ -29,11 +33,13 @@ Der Keyboard-Smoke umgeht die Cursor- und Mausklickpfade jetzt über UIA-Fokus d
 
 Die saubere Wiederholung `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T202012Z-69fd53ff/manifest.json` meldet auf Commit `c23af94e5ad5016beef2d0f9109536e78b171d45` mit `dirty=false` ebenfalls `PASS`: 11/11 Fälle, 140 Prüfschritte, null Fehler und null übersprungene Fälle. Schema und SHA-256-Artefakte wurden geprüft. `cargo xtask verify` bestand mit 39 Schritten, einem vorgesehenen Skip und null Fehlern. M8-26a ist auf Windows/NTFS damit belegt; die übergeordnete M8-26-Aufgabe bleibt wegen der bis M9-07 verschobenen macOS-/Linux-Profile und Runner offen.
 
+Nach der Umstellung auf den gemeinsamen Szenario-/Treiberkatalog bestand `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T204554Z-dbbf7db0/manifest.json` auf Windows 11/NTFS erneut mit `PASS`: 11/11 Fälle, 140 Prüfungen, null Fehler und null nicht ausgeführte Fälle. Der Lauf verwendete den Windows-Treiber aus der jeweiligen `drivers.windows`-Angabe und war wegen der noch uncommitteten Katalogänderung `dirty=true`. Das Manifest entspricht `docs/schemas/native-e2e-evidence.schema.json`; alle 11 aufgeführten Artefakte stimmten bei SHA-256 und Bytezahl. Eine saubere Wiederholung auf dem Commit mit dem neuen Katalog folgt.
+
 Der Windows/NTFS-Profillauf ist auf sauberem Commit bestanden. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
 
 ## Plattformstatus
 
-Windows/NTFS ist lokal ausgeführt und bestanden. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. M8-26 und das M8-Gate bleiben bis zu den fehlenden Plattformläufen und der gemeinsamen Abnahme offen.
+Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. M8-26 und das M8-Gate bleiben bis zur Umsetzung und Ausführung der fehlenden Plattformtreiber sowie der gemeinsamen Abnahme offen.
 
 ## Ausführung
 

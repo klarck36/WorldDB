@@ -10,9 +10,27 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 $workspaceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..'))
 $odeRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $PSScriptRoot '..\e2e\native-suite.json'
-$ipcScript = Join-Path $PSScriptRoot 'run-ipc-security-smoke.ps1'
-$writerScript = Join-Path $PSScriptRoot 'run-writer-lock-smoke.ps1'
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$caseSpecs = @{}
+$caseDrivers = @{}
+foreach ($caseSpec in @($manifest.cases)) {
+    $caseId = [string]$caseSpec.id
+    if ([string]::IsNullOrWhiteSpace($caseId) -or $caseSpecs.ContainsKey($caseId)) {
+        throw 'The native E2E case catalog contains a missing or duplicate case id.'
+    }
+    $relativeDriver = [string]$caseSpec.drivers.windows
+    if ([string]::IsNullOrWhiteSpace($relativeDriver) -or [System.IO.Path]::IsPathRooted($relativeDriver) -or $relativeDriver.Contains('..')) {
+        throw "The Windows driver for native E2E case '$caseId' is missing or not repository-relative."
+    }
+    $driverPath = [System.IO.Path]::GetFullPath((Join-Path $odeRoot $relativeDriver.Replace('/', [System.IO.Path]::DirectorySeparatorChar)))
+    $odeRootPrefix = $odeRoot.TrimEnd([char[]]@('\', '/')) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $driverPath.StartsWith($odeRootPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $driverPath -PathType Leaf)) {
+        throw "The Windows driver for native E2E case '$caseId' is missing or escapes the suite root."
+    }
+    $caseSpecs[$caseId] = $caseSpec
+    $caseDrivers[$caseId] = $driverPath
+}
 $gitCommit = (& git -C $workspaceRoot rev-parse HEAD 2>&1 | Out-String).Trim()
 $gitBranch = (& git -C $workspaceRoot branch --show-current 2>&1 | Out-String).Trim()
 $gitDirty = @(& git -C $workspaceRoot status --porcelain).Count -gt 0
@@ -191,6 +209,17 @@ function Invoke-Smoke([string]$CaseId, [string]$Mode, [string]$ScriptPath, [hash
     Add-CaseResult $CaseId $Mode $status $started $finished $exitCode $checksPassed $details $artifacts
 }
 
+function Invoke-ConfiguredSmoke([string]$CaseId, [string]$Mode, [hashtable]$Arguments, [int]$MinimumPassChecks) {
+    if (-not $script:caseSpecs.ContainsKey($CaseId)) {
+        throw "Native E2E case '$CaseId' is not declared in the shared case catalog."
+    }
+    $caseSpec = $script:caseSpecs[$CaseId]
+    if (@($caseSpec.modes) -notcontains $Mode) {
+        throw "Native E2E case '$CaseId' does not declare process mode '$Mode'."
+    }
+    Invoke-Smoke $CaseId $Mode $script:caseDrivers[$CaseId] $Arguments $MinimumPassChecks
+}
+
 function Add-NotRun([string]$CaseId, [string]$Mode, [string]$Details) {
     Add-CaseResult $CaseId $Mode 'NOT_RUN' $null $null $null 0 $Details @()
 }
@@ -209,25 +238,25 @@ try {
         Mode = 'in-process'
         ExecutablePath = $appPath
     }
-    Invoke-Smoke 'native_ipc_in_process' 'in-process' $ipcScript $profileArgs 50
+    Invoke-ConfiguredSmoke 'native_ipc_in_process' 'in-process' $profileArgs 50
     $profileArgs = @{
         Mode = 'in-process'
         WorkspaceRoot = $workspaceRoot
         ExecutablePath = $appPath
     }
-    Invoke-Smoke 'competing_process_in_process' 'in-process' $writerScript $profileArgs 4
+    Invoke-ConfiguredSmoke 'competing_process_in_process' 'in-process' $profileArgs 4
     $profileArgs = @{
         Mode = 'in-process'
         ExecutablePath = $appPath
     }
-    Invoke-Smoke 'keyboard_navigation' 'in-process' (Join-Path $PSScriptRoot 'run-keyboard-smoke.ps1') $profileArgs 4
+    Invoke-ConfiguredSmoke 'keyboard_navigation' 'in-process' $profileArgs 4
     $profileArgs = @{
         Mode = 'in-process'
         ExecutablePath = $appPath
         CrashDuringCommit = $true
         RecoveryCliPath = (Join-Path $workspaceRoot 'target\debug\worlddb-cli.exe')
     }
-    Invoke-Smoke 'commit_crash_recovery' 'in-process' (Join-Path $PSScriptRoot 'run-keyboard-smoke.ps1') $profileArgs 3
+    Invoke-ConfiguredSmoke 'commit_crash_recovery' 'in-process' $profileArgs 3
 
     Invoke-Build 'sidecar' @('build', '--locked', '--offline', '--manifest-path', $manifestPath, '--workspace', '--no-default-features', '--features', 'sidecar') $appPath $enginePath
     $profileArgs = @{
@@ -235,25 +264,25 @@ try {
         ExecutablePath = $appPath
         EngineExecutablePath = $enginePath
     }
-    Invoke-Smoke 'native_ipc_sidecar' 'sidecar' $ipcScript $profileArgs 50
+    Invoke-ConfiguredSmoke 'native_ipc_sidecar' 'sidecar' $profileArgs 50
     $profileArgs = @{
         Mode = 'sidecar'
         WorkspaceRoot = $workspaceRoot
         ExecutablePath = $appPath
     }
-    Invoke-Smoke 'competing_process_sidecar' 'sidecar' $writerScript $profileArgs 5
+    Invoke-ConfiguredSmoke 'competing_process_sidecar' 'sidecar' $profileArgs 5
     $profileArgs = @{
         Mode = 'sidecar'
         ExecutablePath = $appPath
     }
-    Invoke-Smoke 'keyboard_navigation' 'sidecar' (Join-Path $PSScriptRoot 'run-keyboard-smoke.ps1') $profileArgs 4
+    Invoke-ConfiguredSmoke 'keyboard_navigation' 'sidecar' $profileArgs 4
     $profileArgs = @{
         Mode = 'sidecar'
         ExecutablePath = $appPath
         CrashDuringCommit = $true
         RecoveryCliPath = (Join-Path $workspaceRoot 'target\debug\worlddb-cli.exe')
     }
-    Invoke-Smoke 'commit_crash_recovery' 'sidecar' (Join-Path $PSScriptRoot 'run-keyboard-smoke.ps1') $profileArgs 3
+    Invoke-ConfiguredSmoke 'commit_crash_recovery' 'sidecar' $profileArgs 3
 } catch {
     $message = $_.Exception.Message
     if ($failures.Count -eq 0 -or $failures[$failures.Count - 1].message -ne $message) {

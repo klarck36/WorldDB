@@ -5,12 +5,15 @@ mod windows_tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use worlddb_cli::adapter_protocol::{
         AdapterBudget, AdapterCapability, AdapterManifest, AdapterOperation,
     };
+
+    static TEMPORARY_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn test_manifest(timeout_millis: u64, memory_limit_bytes: u64) -> Option<AdapterManifest> {
         let budget = AdapterBudget::new(timeout_millis, memory_limit_bytes, 1_024, 1_024).ok()?;
@@ -30,9 +33,10 @@ mod windows_tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
+        let sequence = TEMPORARY_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "worlddb-adapter-e2e-{}-{nonce}",
-            std::process::id()
+            "worlddb-adapter-e2e-{}-{nonce}-{sequence}",
+            std::process::id(),
         ))
     }
 
