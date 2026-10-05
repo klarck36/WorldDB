@@ -13,17 +13,19 @@ Jeder Lauf erhält eine eindeutige Run-ID und ein `manifest.json` nach `docs/sch
 - Die Keyboard-Suite zeigt die nativen Fenster nur in Debug-Builds, prüft Prozessbaum und Vordergrundfenster vor jeder Tastatureingabe und isoliert Datenbank sowie WebView2-Profil pro Lauf. Sie schreibt den Projektnamen mit Tastatureingaben, navigiert mit Tab zum Erstellen-Knopf und löst ihn mit Enter aus. Das Testprojekt liegt unter einem eindeutigen temporären Verzeichnis.
 - Der Crashfall verwendet denselben nativen Erstellen-Ablauf und einen Debug-only-Failpoint direkt nach dem `sync_all` des WAL-Commitmarkers. Die In-Process-App oder der Sidecar-Engineprozess muss sich mit Exitcode 86 beenden. Danach prüft `worlddb-cli v1 recovery inspect` den gespeicherten sicheren Präfix ohne Reparatur.
 
-## Windows-Zwischenstand
+## Windows-Ergebnis
 
-Der erste vollständige Windows-Lauf steht in `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T012844Z-823933db/manifest.json`. Builds, IPC-Smokes (56/56 je Modus) und konkurrierende Schreiber (4 In-Process, 5 Sidecar) bestehen. Tastatur- und Commit-Crashfälle bestehen noch nicht: Der UI-Automation-Fokus erreichte das Eingabefeld nicht, daher wurden diese Fälle im Voll-Lauf als `FAIL` erfasst.
+Der erste vollständige Windows-Lauf steht in `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T012844Z-823933db/manifest.json`. Builds, IPC-Smokes und Writer-Locks bestanden; die Tastaturfälle scheiterten damals, bevor Eingabe oder Commit-Failpoint erreicht wurden.
 
-Folgeprüfungen haben den WebView2-Eingabeprozess dem gestarteten Desktopprozess zugeordnet, das Primärfenster erst nach bestätigtem Vordergrund aktiviert und offscreen liegende Bedienelemente über `ScrollItemPattern` sichtbar gemacht. Die simulierte Eingabe hält im Accessibility-Wertmuster weiterhin nur das jeweils letzte Zeichen; Tab lässt den Fokus auf dem Eingabefeld. Ein nativer Erstellenversuch erreichte keinen WAL-Commitmarker; die anschließende read-only Recovery-Prüfung meldete Revision 0 und `Clean`. Der Storage-Crash-Failpoint selbst besteht separat mit einem Test. Diese Teilnachweise ersetzen die fehlenden nativen Desktopfälle nicht.
+Nach den Korrekturen bestanden Tastatureingabe, Tab/Enter und Commit-Crash samt read-only Recovery. Ein Zwischenlauf scheiterte nur beim Löschen noch gesperrter temporärer WebView2-Profile. Der Keyboard-Smoke wartet nun begrenzt auf die Profilfreigabe und archiviert den flüchtigen WebView2-Cache bei Fehlern nicht.
 
-`M8-26a` bleibt offen, bis beide Windows-Modi für Keyboard- und Crash-Recovery-Fälle belegt sind. `docs/M8-26a-windows-progress.md` enthält den Detailstand. Linux/macOS bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt.
+Der vollständige Wiederholungslauf `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T140119Z-29c16683/manifest.json` meldet auf Windows 11/NTFS `PASS`: 11/11 Fälle, 138 Prüfschritte, null Fehler. Beide IPC-Profile, konkurrierende Schreiber, Tastaturabläufe und Crash-Recovery-Fälle bestanden. `docs/M8-26a-windows-progress.md` enthält die Einzelergebnisse und den historischen Verlauf.
+
+Der Windows-Lauf ist damit belegt. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
 
 ## Plattformstatus
 
-Windows/NTFS ist der lokal ausführbare Profil. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. Ein vollständiger M8-26-Abschluss und das M8-Gate dürfen daher erst nach den fehlenden Plattformläufen und der gemeinsamen Abnahme erfolgen.
+Windows/NTFS ist lokal ausgeführt und bestanden. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. M8-26 und das M8-Gate bleiben bis zu den fehlenden Plattformläufen und der gemeinsamen Abnahme offen.
 
 ## Ausführung
 
