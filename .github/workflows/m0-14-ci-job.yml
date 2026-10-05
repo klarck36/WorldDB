@@ -20,8 +20,6 @@ jobs:
     name: ${{ inputs.job_id }}
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 120
-    env:
-      WORLDDB_CI_ARTIFACT_ROOT: ${{ runner.temp }}/worlddb/ci-jobs
     steps:
       - name: Check out clean commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +45,8 @@ jobs:
         run: cargo "+1.88.0" install cargo-deny --version 0.20.2 --locked --force
 
       - name: Run provider-neutral CI job
+        env:
+          WORLDDB_CI_ARTIFACT_ROOT: ${{ runner.temp }}/worlddb/ci-jobs
         run: python -B -X utf8 tools/run_ci_job.py --job-id ${{ inputs.job_id }}
 
       - name: Archive CI job evidence
