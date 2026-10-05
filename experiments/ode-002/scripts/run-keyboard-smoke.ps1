@@ -75,7 +75,7 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
 }
 $testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('worlddb-ode002-keyboard-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $testRoot
-$databaseRoot = Join-Path $testRoot 'database'
+$databaseRoot = Join-Path $testRoot 'KeyboardSuiteProject'
 $stdoutPath = Join-Path $testRoot 'desktop.stdout.log'
 $stderrPath = Join-Path $testRoot 'desktop.stderr.log'
 $resultPath = Join-Path $testRoot 'keyboard-result.json'
@@ -86,7 +86,7 @@ if ($CrashDuringCommit -and -not (Test-Path -LiteralPath $recoveryCli -PathType 
     throw 'The recovery CLI executable does not exist.'
 }
 $savedEnvironment = @{}
-foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_SHOW_WINDOWS', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_M8_26_CRASH_AFTER_WAL_COMMIT_SYNC', 'WORLDDB_M8_26_CRASH_SIGNAL_PATH', 'WEBVIEW2_USER_DATA_FOLDER')) {
+foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_PROJECT_SMOKE_SKIP_AUTORUN', 'WORLDDB_ODE_SHOW_WINDOWS', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_M8_26_CRASH_AFTER_WAL_COMMIT_SYNC', 'WORLDDB_M8_26_CRASH_SIGNAL_PATH', 'WEBVIEW2_USER_DATA_FOLDER')) {
     $existing = Get-Item "Env:\$name" -ErrorAction SilentlyContinue
     $savedEnvironment[$name] = if ($null -eq $existing) { $null } else { $existing.Value }
 }
@@ -299,8 +299,9 @@ function Send-NativeChord([byte]$ModifierVirtualKey, [byte]$VirtualKey) {
 }
 
 try {
-    $env:WORLDDB_ODE_DATABASE = $databaseRoot
-    $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = Join-Path $testRoot 'project'
+    Remove-Item Env:\WORLDDB_ODE_DATABASE -ErrorAction SilentlyContinue
+    $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = $databaseRoot
+    $env:WORLDDB_ODE_PROJECT_SMOKE_SKIP_AUTORUN = '1'
     $env:WORLDDB_ODE_SHOW_WINDOWS = '1'
     $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $testRoot 'webview-profile'
     $null = New-Item -ItemType Directory -Path $env:WEBVIEW2_USER_DATA_FOLDER -Force

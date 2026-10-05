@@ -1,0 +1,103 @@
+{
+  "record_type": "native_e2e_manual_supplement",
+  "record_version": 1,
+  "task_id": "M8-26a",
+  "created_at_utc": "2026-10-05T09:39:43Z",
+  "repository": {
+    "base_commit": "1f362156f1af5eb12960963f7ee7ede22c740f31",
+    "branch": "codex/worlddb-project-integration",
+    "worktree_dirty": true
+  },
+  "environment": {
+    "os": "Windows",
+    "filesystem": "NTFS"
+  },
+  "status": "INCOMPLETE",
+  "builds": [
+    {
+      "mode": "in-process",
+      "status": "PASS",
+      "checks": [
+        "cargo build --locked --offline --manifest-path experiments/ode-002/Cargo.toml --workspace --no-default-features --features in-process",
+        "cargo clippy --locked --offline --manifest-path experiments/ode-002/Cargo.toml --workspace --all-targets --no-default-features --features in-process -- -D warnings"
+      ]
+    },
+    {
+      "mode": "sidecar",
+      "status": "PASS",
+      "checks": [
+        "cargo build --locked --offline --manifest-path experiments/ode-002/Cargo.toml --workspace --no-default-features --features sidecar",
+        "cargo clippy --locked --offline --manifest-path experiments/ode-002/Cargo.toml --workspace --all-targets --no-default-features --features sidecar -- -D warnings"
+      ]
+    }
+  ],
+  "results": [
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "method": "manual native desktop interaction",
+      "status": "PASS",
+      "checks": {
+        "native_window_accessibility": "PASS",
+        "keyboard_text_entry": "PASS",
+        "tab_navigation_to_create": "PASS",
+        "enter_activated_create": "PASS",
+        "created_project_name": "KeyboardSuiteProject",
+        "recovery": {
+          "status": "completed",
+          "safe_revision": "1",
+          "disposition": "Clean",
+          "finding_count": "0",
+          "source_modified": false
+        }
+      }
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "method": "manual native desktop interaction",
+      "status": "PASS",
+      "crash_checkpoint": "after_wal_commit_sync",
+      "process_exit_code": 86,
+      "recovery": {
+        "status": "completed",
+        "safe_revision": "1",
+        "disposition": "RecoveryRequired",
+        "finding_count": "1",
+        "source_modified": false
+      }
+    },
+    {
+      "case_id": "sidecar_project_bootstrap",
+      "mode": "sidecar",
+      "method": "direct engine process invocation",
+      "status": "PASS",
+      "normal_bootstrap_exit_code": 0,
+      "normal_recovery": {
+        "safe_revision": "1",
+        "disposition": "Clean",
+        "source_modified": false
+      }
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "method": "direct engine process invocation",
+      "status": "PASS",
+      "crash_checkpoint": "after_wal_commit_sync",
+      "process_exit_code": 86,
+      "recovery": {
+        "status": "completed",
+        "safe_revision": "1",
+        "disposition": "RecoveryRequired",
+        "finding_count": "1",
+        "source_modified": false
+      }
+    }
+  ],
+  "remaining": [
+    "rerun the complete native Windows suite and capture its official manifest",
+    "run the Sidecar keyboard navigation case",
+    "rerun both IPC and competing-writer cases after the bootstrap change"
+  ]
+}

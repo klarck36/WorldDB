@@ -6623,7 +6623,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       await refreshProject(sessionId);
       await refreshMigrationState(sessionId);
 
-      if (projectMode.enabled) {
+      if (projectMode.enabled && projectMode.startup_smoke_enabled) {
         operationStatus.textContent = "Zwei-Fenster-Projektprüfung läuft …";
         await runProjectSmoke(sessionId);
         if (role === "primary") {

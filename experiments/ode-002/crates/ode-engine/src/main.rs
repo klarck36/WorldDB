@@ -24,14 +24,45 @@ fn main() {
     };
     let mut host_authenticated = false;
     let mut recovery_only = false;
-    for argument in arguments {
+    let mut bootstrap_project = None;
+    while let Some(argument) = arguments.next() {
         if argument == OsStr::new("--host-account") && !host_authenticated {
             host_authenticated = true;
         } else if argument == OsStr::new("--recovery-only") && !recovery_only {
             recovery_only = true;
+        } else if argument == OsStr::new("--bootstrap-project") && bootstrap_project.is_none() {
+            let Some(operation_id) = arguments
+                .next()
+                .and_then(|value| value.into_string().ok())
+                .and_then(|value| OperationId::from_str(&value).ok())
+            else {
+                std::process::exit(64);
+            };
+            bootstrap_project = Some(operation_id);
         } else {
             std::process::exit(64);
         }
+    }
+    if let Some(operation_id) = bootstrap_project {
+        if !host_authenticated || recovery_only {
+            std::process::exit(64);
+        }
+        #[cfg(windows)]
+        {
+            let principal_id = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
+            if worlddb_ode_engine::create_project_with_operation_id(
+                &database_root,
+                principal_id,
+                operation_id,
+            )
+            .is_err()
+            {
+                std::process::exit(73);
+            }
+            return;
+        }
+        #[cfg(not(windows))]
+        std::process::exit(73);
     }
     if recovery_only {
         if !host_authenticated {

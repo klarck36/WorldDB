@@ -1,20 +1,25 @@
 # M8-26a – Windows-E2E-Zwischenstand
 
-## Vollständiger Lauf
+## Ausgangslauf
 
-Der vollständige Windows/NTFS-Lauf vom 2026-10-05 (`m8-26a-20261005T012844Z-823933db`) endete mit `FAIL`. Die In-Process- und Sidecar-Builds sowie beide IPC-Fälle bestanden; die IPC-Smokes meldeten jeweils 56 bestandene Prüfungen. Die Writer-Lock-Fälle bestanden mit 4 In-Process- und 5 Sidecar-Prüfungen.
+Der vollständige Windows/NTFS-Lauf vom 2026-10-05 (`m8-26a-20261005T012844Z-823933db`) endete mit `FAIL`. Builds, IPC-Smokes (56/56 je Profil) und konkurrierende Schreiber (4 In-Process-, 5 Sidecar-Prüfungen) bestanden. Die vier Tastatur- und Commit-Crashfälle scheiterten beim UI-Automation-Aufruf `SetFocus`, bevor Tastatureingabe oder Commit-Failpoint erreicht wurden.
 
-Beide Keyboard-Fälle und beide Commit-Crash-Fälle scheiterten beim UI-Automation-Aufruf `SetFocus` auf dem Fensterwurzelelement. Der Voll-Lauf erreichte deshalb noch keine Tastatureingabe und keinen injizierten Desktop-Prozessabbruch.
+## Korrekturen
 
-## Folgeprüfungen
+- Der Keyboard-Smoke setzt nun `WORLDDB_ODE_PROJECT_SMOKE_ROOT` auf den erwarteten Projektpfad und deaktiviert den automatischen Startup-Smoke. `WORLDDB_ODE_DATABASE` wird entfernt, weil es das Projekt bereits beim App-Start öffnet und damit die Erstellungsprüfung stört.
+- Der Sidecar-Modus legte das Projekt bisher im Desktop-Prozess an und startete den Engine-Sidecar erst danach. Der Bootstrap-Commit läuft nun in einem host-authentifizierten Sidecar-Prozess; nach dessen Erfolg öffnet der Desktop das Projekt und startet den dauerhaften Engine-Prozess. Der WAL-Failpoint kann damit den tatsächlichen Sidecar-Prozess beenden.
 
-- Das sichtbare WorldDB-Primärfenster gehört dem gestarteten Desktopprozess. Das Texteingabefeld wird vom gestarteten `msedgewebview2.exe`-Kindprozess bereitgestellt; die Prozessbaumprüfung akzeptiert diesen Kindprozess, während Tastaturaktionen zusätzlich den WorldDB-Vordergrundprozess und das konkrete fokussierte Steuerelement verlangen.
-- Das Erstellen-Steuerelement liegt anfänglich außerhalb des sichtbaren Fensters (`IsOffscreen = true`). `ScrollItemPattern.ScrollIntoView()` macht es sichtbar; der native Klickpunkt bleibt auf das WorldDB-Fenster begrenzt.
-- Jeder Lauf erhält ein eigenes WebView2-Datenverzeichnis; die Testläufe erzeugen darin jeweils einen eigenen `EBWebView`-Profilordner.
-- Auf dem Host setzte die automatisierte Zeichenfolge den Accessibility-Wert nicht korrekt zusammen; zuletzt wurde nur das eingegebene Zeichen gemeldet. Die Tab-Prüfung blieb auf `Neuer Projektname`.
-- Ein Folgeversuch mit dem nativen Erstellen-Steuerelement erreichte den WAL-Crash-Failpoint nicht. Die read-only CLI-Prüfung des temporären Datenbankverzeichnisses meldete `safe_revision = 0`, `disposition = Clean`, `source_modified = false`. Der Storage-Crash-Recovery-Einzeltest besteht, ersetzt aber den fehlenden Desktopnachweis nicht.
-- Zwei Ursachen im E2E-Runner gefunden: `run-keyboard-smoke.ps1` setzte `WORLDDB_ODE_PROJECT_SMOKE_ROOT` nicht und fiel deshalb in den nativen Ordnerdialog; außerdem warf `AutomationElement.SetFocus()` auf dem WebView2-Eingabefeld nach dem nativen Klick „Target element cannot receive focus“. Commit `5e9354f` setzt und restauriert die Umgebungsvariable pro Lauf auf `<testRoot>\project`; der redundante UIA-Fokusaufruf ist entfernt, die vorhandene Prüfung kontrolliert weiterhin den tatsächlichen Fokus. Parser, Plancheck, Sourcecheck und `git diff --check` bestehen; der native Vierfachlauf steht noch aus.
+## Verifikation am 2026-10-05
+
+- `cargo fmt --manifest-path experiments/ode-002/Cargo.toml --all -- --check`: PASS.
+- Workspace-Builds für `in-process` und `sidecar`: PASS.
+- Striktes Clippy für beide Desktopprofile: PASS.
+- `cargo xtask verify`: 39 PASS, 1 erwarteter CI-Matrix-SKIP, 0 FAIL; Plancheck und Sourcecheck: PASS.
+- Manuelle native In-Process-Tastaturprüfung: PASS. Texteingabe, Tab, Enter, Projektname und read-only Recovery wurden geprüft.
+- In-Process-Commit-Crash: Desktopprozess endete mit Exitcode 86 nach `after_wal_commit_sync`. Read-only Recovery meldete `safe_revision=1`, `RecoveryRequired`, `source_modified=false`.
+- Sidecar-Bootstrap: normaler Prozesslauf endete mit 0 und read-only Recovery meldete `safe_revision=1`, `Clean`. Mit aktiviertem Failpoint endete der Engine-Prozess mit 86; Recovery meldete `safe_revision=1`, `RecoveryRequired`, `source_modified=false`.
+- Die gekürzten Resultate stehen in `experiments/ode-002/evidence/native-e2e/m8-26a-manual-results-20261005/manual-supplement.json`. Das offizielle Vollmanifest folgt nach dem vollständigen Runnerlauf.
 
 ## Status
 
-`M8-26a` ist noch nicht abgeschlossen. Erforderlich sind erfolgreiche Keyboard- und Commit-Crash-Fälle jeweils in In-Process und Sidecar sowie ein vollständiges PASS-Manifest. macOS/APFS und Linux/ext4 bleiben wie vereinbart bis M9-07 zurückgestellt.
+`M8-26a` bleibt `PLANNED`, bis der vorbereitende Task `M8-26` abgeschlossen ist. Danach fehlen für M8-26a der erneute vollständige Native-E2E-Lauf, der Sidecar-Tastaturfall und die erneute IPC-/Writer-Lock-Prüfung. Der historische `FAIL`-Lauf bleibt als unveränderte Ausgangsevidenz erhalten. macOS/APFS und Linux/ext4 bleiben wie vereinbart bis M9-07 zurückgestellt.

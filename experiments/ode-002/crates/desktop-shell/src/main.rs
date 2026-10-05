@@ -612,6 +612,7 @@ struct SecurityPolicyResponseV1 {
 struct ProjectDialogModeV1 {
     protocol_version: u16,
     enabled: bool,
+    startup_smoke_enabled: bool,
 }
 
 impl IpcErrorV1 {
@@ -715,6 +716,9 @@ fn project_dialog_mode() -> ProjectDialogModeV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         enabled: cfg!(debug_assertions)
             && std::env::var_os("WORLDDB_ODE_PROJECT_SMOKE_ROOT").is_some(),
+        startup_smoke_enabled: cfg!(debug_assertions)
+            && std::env::var_os("WORLDDB_ODE_PROJECT_SMOKE_ROOT").is_some()
+            && !env_enabled("WORLDDB_ODE_PROJECT_SMOKE_SKIP_AUTORUN"),
     }
 }
 
@@ -3678,8 +3682,22 @@ impl Backend {
         if state.project.is_some() || state.engine.is_some() {
             return Err(ProjectError::AlreadyOpen);
         }
+        #[cfg(feature = "in-process")]
         let access =
             worlddb_ode_engine::create_project_with_operation_id(root, principal_id, operation_id)?;
+        #[cfg(feature = "sidecar")]
+        let access = {
+            if root.exists() {
+                return Err(ProjectError::AlreadyExists);
+            }
+            Sidecar::create_project(root, operation_id).map_err(|_| {
+                ProjectError::UnknownCommitOutcome {
+                    operation_id,
+                    database_id: None,
+                }
+            })?;
+            worlddb_ode_engine::open_project(root, principal_id)?
+        };
         let database_id = access.database_id();
         let canonical_root = access.canonical_root().to_owned();
         #[cfg(feature = "in-process")]
@@ -4855,6 +4873,28 @@ impl Sidecar {
     fn start(database_root: &Path) -> Result<Self, String> {
         let executable = sidecar_executable()?;
         Self::start_with(database_root, &executable)
+    }
+
+    fn create_project(database_root: &Path, operation_id: OperationId) -> Result<(), String> {
+        use std::process::{Command, Stdio};
+
+        let executable = sidecar_executable()?;
+        let status = Command::new(executable)
+            .arg(database_root)
+            .arg("--host-account")
+            .arg("--bootstrap-project")
+            .arg(operation_id.to_string())
+            .env_remove("WORLDDB_ODE_ENGINE_PRINCIPAL_ID")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| "engine sidecar could not bootstrap the project".to_owned())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("engine sidecar project bootstrap failed".to_owned())
+        }
     }
 
     fn start_for_project(database_root: &Path) -> Result<Self, String> {
