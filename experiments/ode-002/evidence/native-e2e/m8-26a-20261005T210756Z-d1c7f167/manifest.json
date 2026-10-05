@@ -1,0 +1,684 @@
+{
+  "schema_version": 1,
+  "suite_id": "worlddb-ode-native-e2e",
+  "suite_version": "1.0",
+  "task_id": "M8-26a",
+  "run_id": "m8-26a-20261005T210756Z-d1c7f167",
+  "status": "FAIL",
+  "started_at": "2026-10-05T21:07:56.427Z",
+  "finished_at": "2026-10-05T21:16:58.382Z",
+  "repository": {
+    "commit": "5536b0b2bb71be5784795bd19891a9d9123a0e71",
+    "dirty": false,
+    "branch": "codex/worlddb-project-integration"
+  },
+  "environment": {
+    "os": "Windows",
+    "os_version": "Microsoft Windows 11 Home 10.0.26200 (build 26200)",
+    "architecture": "X64",
+    "filesystem": "NTFS",
+    "filesystem_root": "C:\\",
+    "shell": "PowerShell 7.6.5",
+    "runner": "scripts/run-native-e2e.ps1",
+    "rustc": "rustc 1.85.0 (4d91de4e4 2025-02-17)",
+    "cargo": "cargo 1.85.0 (d73d2caf9 2024-12-31)"
+  },
+  "builds": [
+    {
+      "mode": "in-process",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "734f60a7026d08e36375ebd84430b0777d817b9c6392eed94812cd003fa975ff",
+      "app_bytes": 37052416,
+      "engine_path": null,
+      "engine_sha256": null,
+      "engine_bytes": null
+    },
+    {
+      "mode": "sidecar",
+      "app_path": "experiments\\ode-002\\target\\debug\\worlddb-ode-desktop-shell.exe",
+      "app_sha256": "24390c48e345ad9e95873ff3d5b90ff2591d3506e56945399caf9999f9efb614",
+      "app_bytes": 30188544,
+      "engine_path": "experiments\\ode-002\\target\\debug\\worlddb_ode_engine.exe",
+      "engine_sha256": "5646a964ad32b857ee44d411b61c9d353a2eccd0c78cbeda042ce39149152a63",
+      "engine_bytes": 17479168
+    }
+  ],
+  "recovery_cli": {
+    "path": "target\\debug\\worlddb-cli.exe",
+    "sha256": "37bb00f55561826ba680987fd2b336ea5433fc57c7e4ca513b80a89578294266",
+    "bytes": 8614400
+  },
+  "cases": [
+    {
+      "case_id": "build_recovery_cli",
+      "mode": "both",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Read-only recovery CLI built for crash-recovery verification.",
+      "artifacts": [
+        "logs\\build-recovery-cli.log"
+      ]
+    },
+    {
+      "case_id": "build_in-process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-in-process.log",
+      "artifacts": [
+        "logs\\build-in-process.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_in_process",
+      "mode": "in-process",
+      "status": "FAIL",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 0,
+      "details": "Timed out waiting for complete branch/layer IPC workflows. Primary: {\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":true,\"layer_changed\":false,\"layer_count\":null,\"operation\":\"create_child\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_explicit\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":false,\"layer_changed\":true,\"layer_count\":null,\"operation\":\"create_layer\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":false,\"layer_changed\":true,\"layer_count\":null,\"operation\":\"revise_layer\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_explicit\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":null,\"operation\":\"create_child\",\"revision\":null,\"succeeded\":false,\"window\":\"primary\"}\n Secondary: {\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n",
+      "artifacts": [
+        "logs\\native_ipc_in_process-in-process.log",
+        "raw\\native_ipc_in_process-in-process"
+      ]
+    },
+    {
+      "case_id": "competing_process_in_process",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\competing_process_in_process-in-process.log.",
+      "artifacts": [
+        "logs\\competing_process_in_process-in-process.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\keyboard_navigation-in-process.log.",
+      "artifacts": [
+        "logs\\keyboard_navigation-in-process.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "in-process",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\commit_crash_recovery-in-process.log.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-in-process.log"
+      ]
+    },
+    {
+      "case_id": "build_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 1,
+      "details": "Cargo native build completed; log: logs\\build-sidecar.log",
+      "artifacts": [
+        "logs\\build-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "native_ipc_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 56,
+      "details": "56 checks passed; summary is recorded in logs\\native_ipc_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\native_ipc_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "competing_process_sidecar",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 5,
+      "details": "5 checks passed; summary is recorded in logs\\competing_process_sidecar-sidecar.log.",
+      "artifacts": [
+        "logs\\competing_process_sidecar-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "keyboard_navigation",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\keyboard_navigation-sidecar.log.",
+      "artifacts": [
+        "logs\\keyboard_navigation-sidecar.log"
+      ]
+    },
+    {
+      "case_id": "commit_crash_recovery",
+      "mode": "sidecar",
+      "status": "PASS",
+      "started_at": null,
+      "finished_at": null,
+      "exit_code": null,
+      "checks_passed": 4,
+      "details": "4 checks passed; summary is recorded in logs\\commit_crash_recovery-sidecar.log.",
+      "artifacts": [
+        "logs\\commit_crash_recovery-sidecar.log"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "logs/build-in-process.log",
+      "sha256": "2cdb44ebec2a5375c06ca558a57789e87c4746c24bd957868b68319ec6436c38",
+      "bytes": 176
+    },
+    {
+      "path": "logs/build-recovery-cli.log",
+      "sha256": "8c798c75014ca8e4571a98e4be7530a89ec2ce9032dc7862466150bbd077d744",
+      "bytes": 73
+    },
+    {
+      "path": "logs/build-sidecar.log",
+      "sha256": "bee786da94a5df4e80f180432956d963a35618ae30f90c65af2696aae7506e06",
+      "bytes": 176
+    },
+    {
+      "path": "logs/commit_crash_recovery-in-process.log",
+      "sha256": "99a52618363f9e45e34cc45f31de7134e3c9ffff6baaf027c7ec2200450cb08c",
+      "bytes": 223
+    },
+    {
+      "path": "logs/commit_crash_recovery-sidecar.log",
+      "sha256": "0ea20504253dc267510f07f911c9fec33b18349d51fcc516d11aa87fb592dee6",
+      "bytes": 220
+    },
+    {
+      "path": "logs/competing_process_in_process-in-process.log",
+      "sha256": "5b8f0be6d4883997956dc9252cb4b0fc25e2a0cfa031631acc565755c8e697d9",
+      "bytes": 292
+    },
+    {
+      "path": "logs/competing_process_sidecar-sidecar.log",
+      "sha256": "2c2ac2c9c94effc19bc8fd7e95db813e10bc9556f335893177d2f22e59d0e3a7",
+      "bytes": 279
+    },
+    {
+      "path": "logs/keyboard_navigation-in-process.log",
+      "sha256": "7c17a6050a326c50728f604fc32a694f24f7d3166db796ffa33278522fcb388a",
+      "bytes": 201
+    },
+    {
+      "path": "logs/keyboard_navigation-sidecar.log",
+      "sha256": "22658b49bcd283a854e9e4c9b14c748721ebb66715dce2dd373a6f3bab565641",
+      "bytes": 198
+    },
+    {
+      "path": "logs/native_ipc_in_process-in-process.log",
+      "sha256": "8c1e302e65f736937be1c209b984995ca2aaf375201963a0d58dd111a1d010ea",
+      "bytes": 9987
+    },
+    {
+      "path": "logs/native_ipc_sidecar-sidecar.log",
+      "sha256": "c998a37252dd66ea7748a259892a029bdaa6b2d2ea688d3caadbf4a34857e1d3",
+      "bytes": 2870
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-branch-layer-primary.jsonl",
+      "sha256": "2cc49f89bd1096f716b1239d527e56dad3ee29f5595df7bbda865642e6700886",
+      "bytes": 5890
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-branch-layer-secondary.jsonl",
+      "sha256": "d59dde39d41be7f5fa98e254f234470b549290a3d519806cde3608444efb2b4d",
+      "bytes": 4016
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-entity-primary.jsonl",
+      "sha256": "fd59172a025178901f49fc365e4d5060f47862f2532486c14c28befe67658163",
+      "bytes": 9402
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-entity-secondary.jsonl",
+      "sha256": "abdda011912145d06c732c972246f5fc2b2f57d056c59b42024e5ddf482d5ad2",
+      "bytes": 4660
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-facts-primary.jsonl",
+      "sha256": "f7d1df84d53dbcd0a0013a4a19bd816b982b65c059d9ced10bc03781bee44a21",
+      "bytes": 3147
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-facts-secondary.jsonl",
+      "sha256": "116ec0b961c77135e4ec52d414a76ed65415c666b5d03d61b17995939af29557",
+      "bytes": 3167
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-perspective-primary.jsonl",
+      "sha256": "04471ba2ce1f787db4590cac8f0943f914b68127fd790a0ebc018089875e021f",
+      "bytes": 2280
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-perspective-secondary.jsonl",
+      "sha256": "419fe37f614dc33d64ba161066f5abbdef00e074e78624460d5e9bb7fe63eccc",
+      "bytes": 2316
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-primary.json",
+      "sha256": "579aa45053fc8ff5d403b079263f6d8d30d4a1fd7b8b74a1d648309f32a82498",
+      "bytes": 100
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-project-primary.json",
+      "sha256": "c1fefb3a84ab26ea0782d2264653173fc884ba7cac00c29effbdbf1ee1ebb26b",
+      "bytes": 429
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-project-secondary.json",
+      "sha256": "45dc8f42be6fac7a69b0b301601a76072d55a2a7e8d9eed0dc247a7145c32961",
+      "bytes": 431
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-schema-primary.jsonl",
+      "sha256": "2f21fca24f85e3446c40806635db6b1ce4f682d337a00f5648b5dc322105851d",
+      "bytes": 34723
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-schema-secondary.jsonl",
+      "sha256": "363a50849bee7cce5afd7277b80907d29a65171e41bb3b2aba322b1bb55ec573",
+      "bytes": 7844
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-secondary.json",
+      "sha256": "66de0d959b222c4eccef24ec2807a9a99d9c5e53b8f930076c9f4f9adfbe01dd",
+      "bytes": 102
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-security-policy-primary.jsonl",
+      "sha256": "35341b60ccf52a77e090c646291d128217d8a0a194b0b0f21a43135adffe9578",
+      "bytes": 2292
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-security-policy-secondary.jsonl",
+      "sha256": "5b7d0dd56e4fe4208b6009f380ea4e9337dcfce17e4fd89409b7a59735349f21",
+      "bytes": 2053
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-transfer-primary.jsonl",
+      "sha256": "d56e249a18df5cbd0cd1251b7147de282c03287d73b8d8e3cc0e1be12e5da6ce",
+      "bytes": 298
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc-transfer-secondary.jsonl",
+      "sha256": "c730e8fad3a21378987e3043b8d658310747e0909fbda1c94e5a8a1ca515178f",
+      "bytes": 302
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/ipc.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/startup.json",
+      "sha256": "ca5e04e87c96984e3c2d5499c37d173ff5d0f2d3d86213b2a3d2b555d0b56d27",
+      "bytes": 187
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/CURRENT",
+      "sha256": "a2cd07b0fef94699f1f6b2334c4b3de8475e8e096a4d27d2a496aeb816d9e63a",
+      "bytes": 80
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/DATABASE_ID",
+      "sha256": "6701106005526d3076bac005edda623b26d4475add42fa9ced951fdf771071a9",
+      "bytes": 16
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/FORMAT",
+      "sha256": "aba3763318d243bd554b3a8eb5ee88c646756dfb0ce0f09667995d7fb318c2c4",
+      "bytes": 72
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000001.wdbm",
+      "sha256": "f694a4f9833714957cef798b58889c4e253959e54812310a7e578764e7788d19",
+      "bytes": 267
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000002.wdbm",
+      "sha256": "cdcb7657cde811180d91f0ab4c7971557a92458820b708831ae4eaa465bf7c50",
+      "bytes": 381
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000003.wdbm",
+      "sha256": "3853d0eab533e9bc2d3b456003445b3f014aabd6cdbbac96388ec1dbea5c5d6b",
+      "bytes": 495
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000004.wdbm",
+      "sha256": "de67250b41b53f514126ee801bcb0867309559ff29c7d6074f3487050b3c9cb3",
+      "bytes": 609
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000005.wdbm",
+      "sha256": "40b3386c60d2f2cd42e43fe5f3291990712f4955467becba549fc116fc2aab62",
+      "bytes": 723
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000006.wdbm",
+      "sha256": "669188fcd32c76edf5796850728242ec649eca7c91a8903ed39a611e23b52720",
+      "bytes": 837
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000007.wdbm",
+      "sha256": "ca4dd5e7984b1e06d06b014037b15779d8b1bfa632eef596b8866e3690fb6c07",
+      "bytes": 951
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000008.wdbm",
+      "sha256": "9eb3b6b86f5abe8cf57e7d53d990aa44ec48e665cb03d0f662badde1dd6c2ade",
+      "bytes": 1065
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000009.wdbm",
+      "sha256": "12f5bd1c27eafec72b0a76a581d206b77d16c7154f5fbf9296254932d35a08e3",
+      "bytes": 1179
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000010.wdbm",
+      "sha256": "e134de91134c07c4431525953ada9f1bd0c6832dd25d47ad207f1c49eae8ee5c",
+      "bytes": 1293
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000011.wdbm",
+      "sha256": "75d148371714b08d852b7c63a5fd232b1fdef1fa3721f95e2df030a64ffdd4b6",
+      "bytes": 1407
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000012.wdbm",
+      "sha256": "f1d691485bbb44f05a6a28cfaa1f83e59d7122f69937307113dbce451ef5064e",
+      "bytes": 1521
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000013.wdbm",
+      "sha256": "46f5fcdc4d8e34eeac81fc4a803276e638105d0d2ffebdb6110f5f900a306c45",
+      "bytes": 1635
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000014.wdbm",
+      "sha256": "50ff662a225bde43fbb9e59f2b834e67b8c6a7467c0e85c6477d06ce4ed1a6cf",
+      "bytes": 1749
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000015.wdbm",
+      "sha256": "5b2905c47feee138c3596efc8de207d85d73505c9ac45d2f1e7486e7afd125c9",
+      "bytes": 1863
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000016.wdbm",
+      "sha256": "c4a3accbef73da7696920104a40fa3ae885f812549c06b3328448dc44070668b",
+      "bytes": 1977
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000017.wdbm",
+      "sha256": "9a94872567623effb399e22fd0ea7e5c74c90e327ae789d13824236e30de59da",
+      "bytes": 2091
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000018.wdbm",
+      "sha256": "6a77fa3cfc16536781761b6c06ff1845c4ce51a68c4bafa4a3542ef7caadcaa5",
+      "bytes": 2205
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/manifests/manifest-00000000000000000019.wdbm",
+      "sha256": "5f1c0521d9a9ac48bee11c294f755c93402e20150f7a9a18832173e5ec79459d",
+      "bytes": 2319
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-0394bc34-37b6-4017-b76a-cb9ba67134fe.wdbseg",
+      "sha256": "5ea63c1d4e0d0748611c5d3bfa6bd8b5ed21826d1bd4c51cb4e3e3acfb983fcb",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-05537e5c-3052-4572-9c34-c481f3f7b01d.wdbseg",
+      "sha256": "af646e8db42c4f3bb90334ff483593f7c208e9fdd8ba16ac22828fc274dcf1a2",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-06f443bd-49a5-4c21-9e38-f5692c03d369.wdbseg",
+      "sha256": "0d7a05f42b04230039c6aecbde17d424b7c13e59e4415d77c02e8f854d563770",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-23af9112-5a8f-4e98-9f80-c58d58afcc79.wdbseg",
+      "sha256": "348afb87633555cbba803ee4ef4f662981c805b55a6a631e52ed64b4730ff70c",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-25271513-5d2e-4488-97b8-61089c2ac88e.wdbseg",
+      "sha256": "b8733a266d2bc116ac77c857052e1af31b4e98f67371fd3fb8af189cd0a44ea7",
+      "bytes": 553
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-31d4efa2-99dc-4dc1-b59e-ddbc0106c837.wdbseg",
+      "sha256": "23b741a683feecfdc3e461a76e43a580c8a0b52b78ddbc43c3f36b3708da7c1d",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-39129a4e-84c3-4c57-bfcc-8ccd69766853.wdbseg",
+      "sha256": "d0718551696cc720b17ac5d9fb149042df4ec8083cf55e7da6b1abf972365916",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-392562dc-20cb-4ed6-88bb-8265cb375d3c.wdbseg",
+      "sha256": "03182cbaf4c899d951045ab43881494f2d143c3e9ff9534ea719560b492e4e92",
+      "bytes": 118
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-40753c9d-8be3-41e9-8522-b97f0a59a31f.wdbseg",
+      "sha256": "0706851328ce768572ee1c4e61a12945f4f60f0ad69ecf9b7f3ceb8fee3d7cef",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-657e4e4a-82e9-4e39-aa99-a57e42c1bd1f.wdbseg",
+      "sha256": "97a4e1d42cdaaf6603327159cb03f4afa977e6c7221470efd6b12f4ae217c30c",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-78c75d9b-af23-48a6-b616-ac9f4ec6eb22.wdbseg",
+      "sha256": "f094051ef71f256a60d602469a45f1bc393b105cc09f474b695daa21ede5ac9a",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-a1e0990b-bce4-4dbb-9779-1e5a6c7587dc.wdbseg",
+      "sha256": "e68e3dfe2ad4f5c34cfe243315029dc2e79fb77dc622b6d0bc9b7f1abb328795",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-a4860ebf-fb34-4f61-9ff3-ba68f9572e09.wdbseg",
+      "sha256": "ad870b6764d4408f7bb0cb3ed3a505b6958eea65235c728efd5a1e9c893ca1cf",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-a4c76639-f78a-47cd-a9f0-c0440788b897.wdbseg",
+      "sha256": "ed2c28f734528b67748f580975508c662abcad808ef084dd08e6e5f55b9f9c58",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-aae127c0-f9d8-41d0-a55f-6c718087bcca.wdbseg",
+      "sha256": "2f5f26a4be3d7816396be0cd6de89b111dbc1352524ed844e11c31921a4c35da",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-bfb03701-c0be-4835-9930-30b1ad8a7eae.wdbseg",
+      "sha256": "9e06b7b18809b7b5500187af1c02d603b00ab0f0f8182a5e940b212cc3fd1b26",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-c71a1494-a30c-4383-8dfd-8cbe55ca89c1.wdbseg",
+      "sha256": "e0936f1101cf700ca18bb7b764bcfcf8044a32ef24e6c77b008b76cf04d0eb37",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-daab6b2c-a05c-46a2-980b-88ef0cf66266.wdbseg",
+      "sha256": "cff955a9a9f7f70f1024cec75ec1f1d5d40061e2960b460e94e26192fd56d431",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-e764efc7-be11-4b2c-94c4-cebb08ee459b.wdbseg",
+      "sha256": "d180f98c3c9cdfe234fbbcf910a4a183ade01ee7f5be06d932b0de4f12eddde3",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/security/segments/segment-f5aa811a-d778-4d11-9234-3b15055d8e76.wdbseg",
+      "sha256": "d5c92009861dce52990dc72949d7f10e4fe9e6a9bfd69ca82089fb056347d7f7",
+      "bytes": 380
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-0a466df0-d885-4f66-a837-d4d905d88c93.wdbseg",
+      "sha256": "4dda1ae94fd0443548dc076094d7c6401ab712b475900afa59ac8d331d0556ba",
+      "bytes": 191
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-0c941b50-1d61-4b25-8752-b38defd0e495.wdbseg",
+      "sha256": "c106512d73110aed184efd1f71661027f559fdde43a1d0095b4dbeaefc9fbf59",
+      "bytes": 192
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-569073e3-3f69-475b-b1ea-d0fd596a6768.wdbseg",
+      "sha256": "124593430349dfd4e896d7fd8c27bc06fd69618b09ad58b665d53a6d9376e61a",
+      "bytes": 691
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-5910d5d8-9583-4173-b69b-a7293948e99c.wdbseg",
+      "sha256": "67e1e1e2220c428a678e0bc66099cd6c2f7a3775095eeb92f01515637c448944",
+      "bytes": 262
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-642fc4a3-cacc-45a5-8d4e-3ff87c9e3f2f.wdbseg",
+      "sha256": "01804d69b183b45da9690a996692be6fa629769f0b0b56e117f034a6fffaa597",
+      "bytes": 262
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-65fe024b-8a82-4e10-980d-7005d6078972.wdbseg",
+      "sha256": "93c07c3ad8a51099cbbca230ef1af355f8ad96c280107c481bb590c5e85fda04",
+      "bytes": 191
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-6c2e511d-6736-4b0e-b2d3-fdbb4a7219d5.wdbseg",
+      "sha256": "40c081aef97e6bd454123d4530f0ec2d152807825937985f84ab3a9c1106f3bc",
+      "bytes": 506
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-709ced0d-b184-4d0a-b771-7eaf7e543fbc.wdbseg",
+      "sha256": "5956ade12dfcb6eceb00cb6fbc7305d00477134b8d184595ee4ac1f8db45c3f8",
+      "bytes": 249
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-7289902c-3cec-4b21-a2f7-72daaca6dd30.wdbseg",
+      "sha256": "902f4f231f70e78097d48af63fbeb6c6f02114ffbb902b5b50d2f80bc846f20e",
+      "bytes": 219
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-7f8c8fbf-7506-4de1-8a6a-212e15140af9.wdbseg",
+      "sha256": "a6c6a68c91e94f948383f06d7cbd94822461cbdeb56dc3fd908c1ca6fb75f28c",
+      "bytes": 219
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-8b5b4b7b-0ca2-4444-a175-18ff64563ab3.wdbseg",
+      "sha256": "c2166ebad19f14f5542f2e67970b00e4c7823de7fae902502fe5b42ae05ff2bb",
+      "bytes": 219
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-a32d2c19-940e-4feb-92af-5a0e19272b30.wdbseg",
+      "sha256": "933f49d12862f0ab7da447bdfc08be38a59d80b42cd041dcacff3c18d57ff47e",
+      "bytes": 191
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-b5213458-7a8b-459b-aabb-666675286630.wdbseg",
+      "sha256": "4b7460933543b2a54ad0f084650032946b030555c5821a6295513c6e3b01b7e0",
+      "bytes": 538
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-b9bc878e-b17e-42f1-ad5b-b1a17e245c13.wdbseg",
+      "sha256": "baee469ebc9c81923d28ad5cdb7ceac0e860f8bd26c183439d4365467883ef0b",
+      "bytes": 191
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-cc007787-daed-4d18-8095-fbdd83140212.wdbseg",
+      "sha256": "ed527798de0aed0538bee7b8807510a41785cee0674cefbb4cdbe58c6d2a6917",
+      "bytes": 192
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-ccd0941c-0b88-45d9-8433-a85a824fca83.wdbseg",
+      "sha256": "9d265e61936c0d44a20b4d9589aeffb16736f82885984cc58e952d2bf97e03a9",
+      "bytes": 248
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-dd405806-a74b-44de-b677-cc6817daaffa.wdbseg",
+      "sha256": "5d1834d44364c80e827a70a8a17302c82e6f80a04ffa6837191808378771b222",
+      "bytes": 249
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-e1f85fbc-5852-406e-82bd-02893cfd0e58.wdbseg",
+      "sha256": "5a128cfbf6d3336c28a9874debf8dce5dcdae4d0dee86b0b43fe49be41071d9c",
+      "bytes": 192
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/segments/segment-e93c784c-885a-4c16-9624-a77b54d3a0fd.wdbseg",
+      "sha256": "8767261ac2f693b1bf034becc8c5dce54e47a44c4c888342630a69ca9635bdbe",
+      "bytes": 262
+    },
+    {
+      "path": "raw/native_ipc_in_process-in-process/database/wal/segment-00000000000000000001.wal",
+      "sha256": "d83e35170c01b3ebdbb7efd04868abd50dadee722b8e525d2b692bc5ad2aa56c",
+      "bytes": 35530
+    }
+  ],
+  "failures": [
+    {
+      "case_id": "native_ipc_in_process",
+      "message": "Timed out waiting for complete branch/layer IPC workflows. Primary: {\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":true,\"layer_changed\":false,\"layer_count\":null,\"operation\":\"create_child\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_explicit\",\"revision\":16,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":false,\"layer_changed\":true,\"layer_count\":null,\"operation\":\"create_layer\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":false,\"layer_changed\":true,\"layer_count\":null,\"operation\":\"revise_layer\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_explicit\",\"revision\":18,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"primary\"}\n{\"branch_count\":null,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":null,\"operation\":\"create_child\",\"revision\":null,\"succeeded\":false,\"window\":\"primary\"}\n Secondary: {\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":1,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":2,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":14,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":15,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":1,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":16,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":1,\"operation\":\"snapshot_current\",\"revision\":17,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n{\"branch_count\":2,\"branch_created\":null,\"layer_changed\":null,\"layer_count\":2,\"operation\":\"snapshot_current\",\"revision\":19,\"succeeded\":true,\"window\":\"secondary\"}\n",
+      "artifact_paths": [
+        "logs\\native_ipc_in_process-in-process.log",
+        "native_ipc_in_process-in-process"
+      ]
+    }
+  ]
+}
