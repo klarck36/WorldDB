@@ -86,7 +86,7 @@ if ($CrashDuringCommit -and -not (Test-Path -LiteralPath $recoveryCli -PathType 
     throw 'The recovery CLI executable does not exist.'
 }
 $savedEnvironment = @{}
-foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_SHOW_WINDOWS', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_M8_26_CRASH_AFTER_WAL_COMMIT_SYNC', 'WORLDDB_M8_26_CRASH_SIGNAL_PATH', 'WEBVIEW2_USER_DATA_FOLDER')) {
+foreach ($name in @('WORLDDB_ODE_DATABASE', 'WORLDDB_ODE_PROJECT_SMOKE_ROOT', 'WORLDDB_ODE_SHOW_WINDOWS', 'WORLDDB_ODE_AUTOCLOSE_MS', 'WORLDDB_M8_26_CRASH_AFTER_WAL_COMMIT_SYNC', 'WORLDDB_M8_26_CRASH_SIGNAL_PATH', 'WEBVIEW2_USER_DATA_FOLDER')) {
     $existing = Get-Item "Env:\$name" -ErrorAction SilentlyContinue
     $savedEnvironment[$name] = if ($null -eq $existing) { $null } else { $existing.Value }
 }
@@ -300,6 +300,7 @@ function Send-NativeChord([byte]$ModifierVirtualKey, [byte]$VirtualKey) {
 
 try {
     $env:WORLDDB_ODE_DATABASE = $databaseRoot
+    $env:WORLDDB_ODE_PROJECT_SMOKE_ROOT = Join-Path $testRoot 'project'
     $env:WORLDDB_ODE_SHOW_WINDOWS = '1'
     $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $testRoot 'webview-profile'
     $null = New-Item -ItemType Directory -Path $env:WEBVIEW2_USER_DATA_FOLDER -Force
