@@ -35,6 +35,20 @@ Am 05.10.2026 wurde auf Commit `142794d` eine frische, isolierte In-Process-Test
 
 Auf HEAD `8144905` funktionierte ein weiterer Screenshot-first-Aufruf von `get_window_state()` für eine isolierte In-Process-Instanz. Der Task-Manager lag sichtbar über dem WorldDB-Primärfenster. Ein Klick auf die sichtbare WorldDB-Titelleiste, `Raise` und `Tab` ergaben keine sichtbare Zustandsänderung; nach erneuter Aufnahme war kein WorldDB-Fokuselement gemeldet. Das Aktivieren des Task-Managers gelang, aber Minimize-Klick und `Alt+Space` änderten dessen sichtbaren Zustand ebenfalls nicht. Es wurde kein Projekt angelegt. Die Testinstanz läuft isoliert weiter, damit das Primärfenster manuell in den Vordergrund gebracht werden kann. Dies ist weiterhin nur Diagnostik, kein E2E-Nachweis; zur Fortsetzung ist ein vom Windows-Desktop angenommener Eingabefokus erforderlich.
 
+## Manueller CUA-Tastaturversuch
+
+Am 05.10.2026 wurde auf HEAD `82329e8` eine frische In-Process-Instanz mit dem Projektpfad `KeyboardSuiteProject` im isolierten Temp-Verzeichnis geprüft. Das frisch erfasste Primärfenster nahm den per Tastatur eingegebenen Namen an; nach `Tab` und `Enter` zeigte die App `Projekt wurde angelegt.` und `Stand: 1`. Die Datenbankmarker `CURRENT`, `DATABASE_ID`, `FORMAT` und `LOCK` sowie die erwarteten Speicherverzeichnisse waren vorhanden. Eine separate read-only Recovery-Prüfung bestätigte `safe_revision=1`, `disposition=Clean`, null Findings und `source_modified=false`. Das isolierte App-Fenster wurde danach geschlossen. Die Details stehen in `experiments/ode-002/evidence/native-e2e/m8-26a-manual-results-20261005/cua-probe-82329e8.json`.
+
+Dieser manuelle Versuch bestätigt die Tastatureingabe und Projekterstellung im In-Process-Profil. Der CUA-Fokusbericht blieb nach `Tab` auf dem WebArea; deshalb ist das genaue Tab-Ziel durch diesen Zusatzversuch nicht unabhängig belegt und er ersetzt keinen offiziellen E2E-Fall.
+
+Der automatisierte Keyboard-Smoke wurde inzwischen so geändert, dass er die UIA-Fokusmethode für das Eingabefeld und native `Tab`/`Enter`-Eingaben verwendet; die Cursorpositionierung und Mausklicks entfallen. Die PowerShell-Syntaxanalyse und `git diff --check` bestanden. Der vollständige native Windows-Lauf mit diesem Runner ist noch auszuführen; M8-26a bleibt bis zu dessen Ergebnis offen.
+
+## Vollständiger Lauf mit UIA-Fokus-Runner
+
+Das Manifest `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T200619Z-f2edcd1b/manifest.json` meldet `PASS`: 11/11 Fälle, 140 Prüfschritte, null Fehler und kein übersprungener Fall. Beide IPC-Profile bestanden je 56 Prüfungen; die Writer-Locks bestanden mit 4 In-Process- und 5 Sidecar-Prüfungen. Keyboard-Navigation sowie Commit-Crash und read-only Recovery bestanden in beiden Modi. Der Runner verwendet für den Eingabefokus UI Automation und sendet Tab/Enter nativ, ohne Cursorpositionierung.
+
+Der Lauf erfasste Commit `82329e8` mit `dirty=true`, weil Runner, Doku und Register noch uncommittet waren. Das Manifest entsprach dem JSON-Schema; alle elf gehashten Artefakte stimmten bei erneutem SHA-256-Abgleich. Ein gleichwertiger Lauf auf einem sauberen Commit ist vor Abschluss von M8-26a noch erforderlich.
+
 ## Status und Plattformgrenze
 
-Der vollständige Windows-Lauf vom Commit `73b65db` ist belegt; der aktuelle HEAD-Wiederholungslauf zeigt die oben dokumentierte Eingabegrenze. `M8-26a` bleibt im Aufgabenregister bis zum Abschluss seiner Abhängigkeit `M8-26` offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt; M8-26d und das M8-Gate bleiben daher offen.
+Der vollständige Windows-Lauf auf `82329e8` mit den aktuellen Änderungen ist bestanden; der saubere Wiederholungslauf steht noch aus. `M8-26a` bleibt bis zu diesem Lauf offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt; M8-26d und das M8-Gate bleiben daher offen.

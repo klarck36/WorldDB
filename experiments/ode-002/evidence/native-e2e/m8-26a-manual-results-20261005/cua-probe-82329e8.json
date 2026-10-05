@@ -1,0 +1,50 @@
+{
+  "record_type": "native_e2e_manual_probe",
+  "record_version": 1,
+  "task_id": "M8-26a",
+  "observed_at_utc": "2026-10-05T19:53:58Z",
+  "repository": {
+    "base_commit": "82329e8",
+    "branch": "codex/worlddb-project-integration",
+    "worktree_clean_before_probe": true
+  },
+  "environment": {
+    "os": "Windows 11",
+    "filesystem": "NTFS"
+  },
+  "scope": "Supplemental manual probe of an isolated In-Process desktop; not an official native E2E manifest.",
+  "status": "INCOMPLETE",
+  "result": {
+    "case_id": "keyboard_navigation",
+    "mode": "in-process",
+    "method": "Computer Use screenshot-grounded focus and native keyboard input",
+    "checks": {
+      "primary_window_selected_from_fresh_enumeration": "PASS",
+      "keyboard_text_entry": "PASS",
+      "tab_key_sent": "PASS",
+      "tab_focus_target_verified": "NOT_VERIFIED",
+      "enter_created_project": "PASS",
+      "application_status": "Projekt wurde angelegt.",
+      "project_name": "KeyboardSuiteProject",
+      "project_storage_markers_present": [
+        "CURRENT",
+        "DATABASE_ID",
+        "FORMAT",
+        "LOCK"
+      ],
+      "read_only_recovery_inspection": {
+        "status": "completed",
+        "safe_revision": "1",
+        "disposition": "Clean",
+        "finding_count": "0",
+        "source_modified": false,
+        "request_id": "8387a136-1ceb-4dda-ac22-175d50f3dfea"
+      },
+      "isolated_desktop_process_closed": "PASS"
+    },
+    "limitations": [
+      "After Tab, the Computer Use accessibility focus remained reported as the WebArea; this probe does not independently prove that Tab focused the create button.",
+      "The Sidecar keyboard case, both commit-crash cases, and the complete official Windows suite remain unverified on the current branch."
+    ]
+  }
+}

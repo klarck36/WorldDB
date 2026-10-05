@@ -23,7 +23,11 @@ Der vollständige Wiederholungslauf `experiments/ode-002/evidence/native-e2e/m8-
 
 Eine Wiederholung auf dem aktuellen Branch (`01ab573a620ade99f96ced7e46249734a2283c36`) ist im Manifest `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T154837Z-2b012994/manifest.json` als `FAIL` archiviert: 7/11 Fälle bestanden. Builds, IPC und Writer-Locks bestanden; Tastatur- und Commit-Recovery-Fälle brachen vor der Eingabe ab, weil `SetCursorPos` im aktuellen Windows-Eingabezustand `false` zurückgab. Die isolierte Wiederholung konnte denselben Win32-Aufruf sogar an der schon aktuellen Cursorposition nicht ausführen. Das frühere 11/11-Ergebnis bleibt ein Nachweis für seinen Build; der neue Lauf belegt keine Regression im WorldDB-Ablauf, lässt aber die Tastaturfälle auf dem aktuellen Host unbestätigt.
 
-Der Windows-Lauf ist damit belegt. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
+Ein manueller In-Process-Probeversuch auf HEAD `82329e8` bestätigte danach native Tastatureingabe und Enter-Erstellung eines isolierten Projekts. Die read-only Recovery-Prüfung meldete Revision 1 als `Clean`, ohne Findings und ohne Änderung der Quelle. Weil der CUA-Fokusbericht nach `Tab` weiterhin das WebArea meldete, ist dieser Versuch nur ein Zusatzbeleg und bestätigt nicht unabhängig das Tab-Ziel. Er ist dokumentiert unter `experiments/ode-002/evidence/native-e2e/m8-26a-manual-results-20261005/cua-probe-82329e8.json`.
+
+Der Keyboard-Smoke umgeht die Cursor- und Mausklickpfade jetzt über UIA-Fokus des Eingabefeldes sowie native `Tab`-/`Enter`-Tasten. Der vollständige Lauf `experiments/ode-002/evidence/native-e2e/m8-26a-20261005T200619Z-f2edcd1b/manifest.json` auf Commit `82329e8` meldet `PASS`: 11/11 Fälle, 140 Prüfschritte, null Fehler, null übersprungene Fälle. In-Process und Sidecar bestanden jeweils Keyboard-Navigation und WAL-Commit-Crash mit read-only Recovery. Das Manifest markiert den Arbeitsbaum als geändert; JSON-Schema und alle SHA-256-Artefakte wurden geprüft. Ein sauberer Wiederholungslauf steht vor dem Abschluss von M8-26a noch aus.
+
+Der Windows-Profil-Lauf ist auf dem aktuellen Änderungssatz bestanden; M8-26a bleibt bis zum sauberen Wiederholungslauf offen. Die nativen APFS- und ext4-Läufe sowie ihre Startbarkeit bleiben gemäß Nutzervorgabe bis M9-07 zurückgestellt. M8-26 und die gemeinsame Abnahme M8-26d bleiben bis zur Umsetzung dieser Profile offen.
 
 ## Plattformstatus
 

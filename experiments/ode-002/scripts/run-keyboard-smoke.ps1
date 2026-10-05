@@ -21,16 +21,11 @@ if ($CrashDuringCommit -and -not $RecoveryCliPath) {
 }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-Add-Type -AssemblyName System.Windows.Forms
 if (-not ('WorldDbKeyboardSmokeNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 public static class WorldDbKeyboardSmokeNative {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct NativeRect { public int Left; public int Top; public int Right; public int Bottom; }
-    [StructLayout(LayoutKind.Sequential)]
-    public struct NativePoint { public int X; public int Y; }
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll", SetLastError = true)]
@@ -47,18 +42,6 @@ public static class WorldDbKeyboardSmokeNative {
     public static extern IntPtr SetActiveWindow(IntPtr windowHandle);
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr SetFocus(IntPtr windowHandle);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool GetWindowRect(IntPtr windowHandle, out NativeRect rect);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern IntPtr WindowFromPoint(NativePoint point);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern IntPtr GetAncestor(IntPtr windowHandle, uint flags);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool SetCursorPos(int x, int y);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
-    public static extern IntPtr GetWindowLongPtr(IntPtr windowHandle, int index);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern short VkKeyScan(char character);
     [DllImport("user32.dll", SetLastError = true)]
@@ -214,29 +197,6 @@ function Activate-TestWindow([System.Windows.Automation.AutomationElement]$Windo
     try {
         $null = [WorldDbKeyboardSmokeNative]::ShowWindow($windowHandle, 5)
         $null = [WorldDbKeyboardSmokeNative]::BringWindowToTop($windowHandle)
-        $style = [WorldDbKeyboardSmokeNative]::GetWindowLongPtr($windowHandle, -16).ToInt64()
-        if (($style -band 0x00C00000) -ne 0x00C00000) {
-            throw 'The WorldDB test window has no safe title-bar activation point; no mouse or keyboard input was sent.'
-        }
-        $rect = [WorldDbKeyboardSmokeNative+NativeRect]::new()
-        if (-not [WorldDbKeyboardSmokeNative]::GetWindowRect($windowHandle, [ref]$rect)) {
-            throw 'Windows could not report the WorldDB test window bounds; no input was sent.'
-        }
-        $point = [WorldDbKeyboardSmokeNative+NativePoint]::new()
-        $point.X = $rect.Left + 60
-        $point.Y = $rect.Top + 10
-        $hitHandle = [WorldDbKeyboardSmokeNative]::WindowFromPoint($point)
-        $hitRoot = [WorldDbKeyboardSmokeNative]::GetAncestor($hitHandle, 2)
-        if ($hitRoot -ne $windowHandle) {
-            throw 'The visible title-bar point does not belong to the WorldDB test window; no mouse or keyboard input was sent.'
-        }
-        if (-not [WorldDbKeyboardSmokeNative]::SetCursorPos($point.X, $point.Y)) {
-            $cursorError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-            $cursorPosition = [System.Windows.Forms.Cursor]::Position
-            throw "Windows could not position the cursor over the verified WorldDB title bar (SetCursorPos error $cursorError; target=($($point.X),$($point.Y)); bounds=($($rect.Left),$($rect.Top),$($rect.Right),$($rect.Bottom)); cursor=($($cursorPosition.X),$($cursorPosition.Y))); no keyboard input was sent."
-        }
-        [WorldDbKeyboardSmokeNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-        [WorldDbKeyboardSmokeNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         $null = [WorldDbKeyboardSmokeNative]::SetForegroundWindow($windowHandle)
         $null = [WorldDbKeyboardSmokeNative]::SetActiveWindow($windowHandle)
         $null = [WorldDbKeyboardSmokeNative]::SetFocus($windowHandle)
@@ -272,33 +232,18 @@ function Ensure-TestElementVisible([System.Windows.Automation.AutomationElement]
     }
 }
 
-function Click-TestElement(
+function Focus-TestElement(
     [System.Windows.Automation.AutomationElement]$TargetElement,
     [System.Windows.Automation.AutomationElement]$WindowElement
 ) {
     Ensure-TestElementVisible $TargetElement
-    $clickablePoint = $null
     try {
-        $clickablePoint = $TargetElement.GetClickablePoint()
+        $TargetElement.SetFocus()
     } catch {
-        throw 'The target control has no accessibility-confirmed click point; no input was sent.'
+        throw "Windows UI Automation could not focus '$($TargetElement.Current.Name)'; no keyboard input was sent."
     }
-    $point = [WorldDbKeyboardSmokeNative+NativePoint]::new()
-    $point.X = [int][Math]::Round($clickablePoint.X)
-    $point.Y = [int][Math]::Round($clickablePoint.Y)
-    $hitHandle = [WorldDbKeyboardSmokeNative]::WindowFromPoint($point)
-    $hitRoot = [WorldDbKeyboardSmokeNative]::GetAncestor($hitHandle, 2)
-    if ($hitRoot -ne [IntPtr]$WindowElement.Current.NativeWindowHandle) {
-        throw 'The visible control point is occluded or outside the WorldDB window; no input was sent.'
-    }
-    if (-not [WorldDbKeyboardSmokeNative]::SetCursorPos($point.X, $point.Y)) {
-        $cursorError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        $cursorPosition = [System.Windows.Forms.Cursor]::Position
-        throw "Windows could not position the cursor over the verified WorldDB control (SetCursorPos error $cursorError; target=($($point.X),$($point.Y)); cursor=($($cursorPosition.X),$($cursorPosition.Y))); no input was sent."
-    }
-    [WorldDbKeyboardSmokeNative]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-    [WorldDbKeyboardSmokeNative]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 100
+    $null = Assert-KeyboardTarget $TargetElement $WindowElement $TargetElement.Current.Name $TargetElement.Current.ControlType
 }
 
 function Send-NativeCharacter([char]$Character) {
@@ -377,7 +322,7 @@ try {
             throw 'The crash-recovery controls did not belong to the launched WorldDB process.'
         }
         Activate-TestWindow $window
-        Click-TestElement $nameInput $window
+        Focus-TestElement $nameInput $window
         Start-Sleep -Milliseconds 150
         $null = Assert-KeyboardTarget $nameInput $window 'Neuer Projektname' ([System.Windows.Automation.ControlType]::Edit)
         Ensure-TestElementVisible $createButton
@@ -385,10 +330,13 @@ try {
         if (-not $createButton.Current.IsEnabled) {
             throw 'The crash-recovery create action was not enabled.'
         }
-        Click-TestElement $createButton $window
+        Send-NativeKey 0x09
+        Start-Sleep -Milliseconds 150
+        $null = Assert-KeyboardTarget $createButton $window 'Neues Projekt' ([System.Windows.Automation.ControlType]::Button)
+        Send-NativeKey 0x0D
     } else {
         Activate-TestWindow $window
-        Click-TestElement $nameInput $window
+        Focus-TestElement $nameInput $window
         Start-Sleep -Milliseconds 150
         $null = Assert-KeyboardTarget $nameInput $window 'Neuer Projektname' ([System.Windows.Automation.ControlType]::Edit)
         Send-NativeChord 0x11 0x41
@@ -399,7 +347,6 @@ try {
         if ($valuePattern.Current.Value -ne '') {
             throw 'Keyboard selection clearing did not empty the project-name input.'
         }
-        Click-TestElement $nameInput $window
         $null = Assert-KeyboardTarget $nameInput $window 'Neuer Projektname' ([System.Windows.Automation.ControlType]::Edit)
         Send-NativeKey 0x23
         $typingTrace = [System.Collections.Generic.List[string]]::new()
@@ -478,7 +425,8 @@ try {
         }
         $summary = [pscustomobject]@{
             mode = $Mode
-            create_action_activated_by_native_click = 'PASS'
+            keyboard_tab_to_create = 'PASS'
+            enter_activated_create = 'PASS'
             crash_after_durable_wal_commit = 'PASS'
             recovery_read_only_inspection = 'PASS'
             crashed_process_id = $crashedProcessId
