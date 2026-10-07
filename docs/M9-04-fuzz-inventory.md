@@ -42,15 +42,18 @@ incorrect task routing.
   requested duration, resource samples, and result. Rust runs merge LLVM
   instrumentation into LCOV using the active Rust toolchain; TypeScript runs
   retain Node V8 coverage JSON. Parser failures archive the complete input
-  bytes, and each run writes a hashed crash-corpus manifest.
+  bytes, and each run writes a hashed crash-corpus manifest. Results default to
+  `%LOCALAPPDATA%\WorldDB\fuzz-results`, outside the synchronized workspace.
 
 The core decoder and TypeScript transport runners already have executable
 campaign tests. The four additional Rust runner entry points now cover all 54
 additional targets. The M9-04a group passed a one-second route/seed preflight
 with no crashes and 632,274 calls; M9-04b/c passed 19 more routes with no
-crashes and 166,878 calls. The 92 core/TypeScript campaigns and all actual
-24-hour runs have **not** been started. M9-04a/b/c own those long runs;
-M9-04d owns crash triage and closure. Preflight results are recorded in
+crashes and 166,878 calls. The first `cli_arguments` run attempt was stopped
+after 239 seconds because its output path was under OneDrive; its manifest is
+retained as FAIL and it is not campaign evidence. No valid 24-hour campaign is
+active yet. M9-04a/b/c own those long runs; M9-04d owns crash triage and
+closure. Preflight results are recorded in
 [M9-04a runner preflight](M9-04a-runner-preflight.md) and
 [M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
 
@@ -85,4 +88,5 @@ does not match the current tracked source. The structured public surfaces and
 the other three persistent-format fingerprints match. The RC baseline was not
 rewritten as part of this fuzz work. Plancheck, fuzz-inventory checks, fmt,
 strict Clippy, the new target dispatch/preflight runs, and artifact-path probes
-pass. Production 24-hour campaigns remain pending.
+pass. The first production campaign attempt was discarded; all valid 24-hour
+campaigns remain pending.

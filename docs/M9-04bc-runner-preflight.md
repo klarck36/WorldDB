@@ -40,8 +40,8 @@ Valid logical-import-plan and desktop DTO/report seeds were added to the
 registered corpora so those targets receive canonical examples as well as
 mutations.
 
-Reports are under the ignored `target/fuzz-results/m9-04b-smoke` and
-`target/fuzz-results/m9-04c-smoke` directories. They were generated from a
+Reports are under `%LOCALAPPDATA%\WorldDB\fuzz-results\m9-04b-smoke` and
+`%LOCALAPPDATA%\WorldDB\fuzz-results\m9-04c-smoke`. They were generated from a
 working tree with uncommitted changes; the recorded base Git revision is not a
 source-tree identity for these edits. The long campaign runner requires a clean
 commit and writes a source-tree hash in its run manifest. The smoke reports do

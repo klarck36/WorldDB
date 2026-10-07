@@ -8,7 +8,7 @@ param(
 
     [switch] $PlanOnly,
 
-    [string] $ResultsRoot = 'target/fuzz-results'
+    [string] $ResultsRoot = "$env:LOCALAPPDATA\WorldDB\fuzz-results"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +50,11 @@ if ($null -eq $target) {
 if ($null -eq $runner) { throw "No runner is registered for $TargetId" }
 $profile = $resourceTable | Where-Object { $_.profile_id -ceq $resourceId } | Select-Object -First 1
 if ($null -eq $profile) { throw "No resource profile is registered for $TargetId" }
+$resultsAbsolute = if ([System.IO.Path]::IsPathRooted($ResultsRoot)) {
+    [System.IO.Path]::GetFullPath($ResultsRoot)
+} else {
+    [System.IO.Path]::GetFullPath((Join-Path $workspaceRoot $ResultsRoot))
+}
 
 function Get-FileSha256([string] $Path) {
     $stream = [System.IO.File]::OpenRead($Path)
@@ -202,10 +207,10 @@ function Get-RustCoverageTools {
     return @{ profdata = $profdata; cov = $cov }
 }
 
-function Write-RustCoverage([string] $BuildOutput, [string] $CoverageDirectory, [string] $ProfdataTool, [string] $CovTool) {
+function Write-RustCoverage([string] $BuildOutput, [string] $BuildError, [string] $CoverageDirectory, [string] $ProfdataTool, [string] $CovTool) {
     $rawProfiles = @(Get-ChildItem -LiteralPath $CoverageDirectory -Filter 'profile-*.profraw' -File -ErrorAction SilentlyContinue)
     if ($rawProfiles.Count -eq 0) { throw 'Rust campaign produced no LLVM profile data' }
-    $buildText = [System.IO.File]::ReadAllText($BuildOutput)
+    $buildText = [System.IO.File]::ReadAllText($BuildOutput) + "`n" + [System.IO.File]::ReadAllText($BuildError)
     $matches = [regex]::Matches($buildText, '(?m)Executable .*?\((?<path>[^()\r\n]+\.exe)\)')
     if ($matches.Count -eq 0) { throw 'Could not locate the instrumented Rust test executable in the build log' }
     $binaryPath = $matches[$matches.Count - 1].Groups['path'].Value.Trim()
@@ -262,7 +267,6 @@ $corpusManifest = Get-InputCorpusManifest $seedPaths ([long]$profile.max_input_b
 $safeTarget = $TargetId -replace '[^a-zA-Z0-9_.-]', '_'
 $startedAt = [DateTimeOffset]::UtcNow
 $runId = "M9-04-$safeTarget-$($Seed.Substring(2))-$($startedAt.ToString('yyyyMMddTHHmmssZ'))"
-$resultsAbsolute = Join-Path $workspaceRoot $ResultsRoot
 $runDirectory = Join-Path $resultsAbsolute $runId
 $relativeRunDirectory = [System.IO.Path]::GetRelativePath($workspaceRoot, $runDirectory).Replace('\', '/')
 $fuzzerReportRelative = "$relativeRunDirectory/fuzzer-report.json"
@@ -322,6 +326,7 @@ if ($PlanOnly) {
         MaxProcessRssBytes = $profile.max_process_rss_bytes
         MaxTempDiskBytes = $profile.max_temp_disk_bytes
         Seed = $Seed
+        ResultsRoot = $resultsAbsolute
     } | Format-List
     exit 0
 }
@@ -471,7 +476,7 @@ try {
     }
     try {
         if ($campaignStarted -and $runner.family -ne 'typescript_transport' -and $null -ne $rustCoverageTools -and (Test-Path -LiteralPath $buildOutput -PathType Leaf)) {
-            $coveragePath = Write-RustCoverage $buildOutput $coverageDirectory $rustCoverageTools.profdata $rustCoverageTools.cov
+            $coveragePath = Write-RustCoverage $buildOutput $buildError $coverageDirectory $rustCoverageTools.profdata $rustCoverageTools.cov
             $manifest.coverage_artifacts_path = [System.IO.Path]::GetRelativePath($workspaceRoot, $coveragePath).Replace('\', '/')
         } elseif ($campaignStarted -and $runner.family -eq 'typescript_transport') {
             $v8Files = @(Get-ChildItem -LiteralPath (Join-Path $coverageDirectory 'v8') -Filter '*.json' -File -ErrorAction SilentlyContinue)

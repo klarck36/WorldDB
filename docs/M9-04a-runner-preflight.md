@@ -10,7 +10,7 @@ with the registered seed corpus and deterministic seed `0x574f524c44444232`.
 They completed **35/35 routes**, 632,274 total parser calls, and **0 crashes**.
 These are short route and seed checks; none counts as a 24-hour campaign.
 
-The reports were generated under the ignored `target/fuzz-results` directory
+The reports were generated under `%LOCALAPPDATA%\WorldDB\fuzz-results`
 from a working tree with uncommitted M9-04a changes. The runner report's source
 revision therefore names the base commit and is not authoritative for the
 implementation. Long runs must use `tools/fuzz/run-target.ps1` from a clean
@@ -69,10 +69,30 @@ journal. The adapter host now sends the canonical manifest frame once. Its reade
 rebuilds a checked frame after validating the received payload, and the
 separate-process round-trip passes.
 
+## Long-run campaign status
+
+The first attempt was terminated after 239 seconds because the original
+default output path was inside the OneDrive-synchronized workspace. Its
+manifest is preserved as `FAIL` and the result is not campaign evidence:
+
+- Target: `cli_arguments`
+- Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T122651Z`
+- Seed: `0x574f524c44444232`
+- Source commit: `e878ed6`
+- Started: 7 October 2026, 14:26:51 CEST; stopped: 14:31:22 CEST
+- Result: `FAIL`; not counted toward M9-04a acceptance
+
+The runner default now writes its manifest, fuzzer report, resource samples,
+coverage, and crash-corpus manifest to `%LOCALAPPDATA%\WorldDB\fuzz-results`,
+outside the OneDrive-synchronized workspace. Coverage export also reads both
+Cargo build streams because Cargo writes the test-binary path to stderr. A
+valid campaign will start after this correction is committed and checked.
+
 ## Pending campaign work
 
-- Start all 92 core/TypeScript and 35 additional M9-04a campaigns for 86,400
-  seconds per target using their registered resource profiles.
+- Run all 92 core/TypeScript and 35 additional M9-04a campaigns for 86,400
+  seconds per target using their registered resource profiles; retry
+  `cli_arguments` first.
 - Preserve each run manifest, seed hashes, fuzzer report, resource samples,
-  and any crash inputs under `target/fuzz-results`.
+  and any crash inputs under `%LOCALAPPDATA%\WorldDB\fuzz-results`.
 - Triage crashes and resource-limit outcomes before M9-04d closure.
