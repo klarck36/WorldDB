@@ -369,6 +369,10 @@ fn fuzz_storage_fixture_root() -> Result<std::path::PathBuf, String> {
             if destination.exists() {
                 fs::remove_dir_all(&destination).map_err(|error| error.to_string())?;
             }
+            // The source fixture contains directories that are intentionally empty. Git does
+            // not preserve those directories in a clean checkout, so seed the canonical layout
+            // first and then overlay the versioned fixture files.
+            DatabaseLayout::create(&destination).map_err(|error| error.to_string())?;
             if let Err(error) = copy_tree(&source, &destination) {
                 let _ = fs::remove_dir_all(&destination);
                 return Err(error.to_string());

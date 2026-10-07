@@ -2258,6 +2258,9 @@ pub(crate) fn fuzz_policy_history(bytes: &[u8]) -> Result<bool, String> {
             if destination.exists() {
                 fs::remove_dir_all(&destination).map_err(|error| error.to_string())?;
             }
+            // Empty storage directories are not represented in Git. Create the canonical
+            // layout first so this harness also works from a clean macOS/Linux checkout.
+            DatabaseLayout::create(&destination).map_err(|error| error.to_string())?;
             if let Err(error) = copy_tree(&source, &destination) {
                 let _ = fs::remove_dir_all(&destination);
                 return Err(error.to_string());

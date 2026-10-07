@@ -13,6 +13,8 @@ from check_public_contracts import (
     load_rules,
     parse_logical_limit,
     parse_core_to_public_codes,
+    sha256_bytes,
+    sha256_source_bytes,
 )
 
 
@@ -98,6 +100,11 @@ class PublicContractClassificationTests(unittest.TestCase):
             lambda candidate: candidate["source_fingerprints"]["rust_api_v1"].__setitem__("source.rs", "0" * 64)
         )
         self.assertIn(("source_fingerprint_changed", "BREAKING"), {(row["change_kind"], row["classification"]) for row in changes})
+
+    def test_source_fingerprints_normalize_crlf_without_changing_lone_cr(self) -> None:
+        lf = b"first line\nsecond line\nthird\rline\n"
+        crlf = b"first line\r\nsecond line\r\nthird\rline\r\n"
+        self.assertEqual(sha256_bytes(lf), sha256_source_bytes(crlf))
 
     def test_logical_export_limits_accept_rust_digit_separators(self) -> None:
         self.assertEqual(1_000_000, parse_logical_limit("const LIMIT: usize = 1_000_000;", "LIMIT"))

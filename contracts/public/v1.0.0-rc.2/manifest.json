@@ -6,7 +6,7 @@
       "contracts/public/classification-rules.tsv": "d8d510e183ccc092daee7bdb7b166c1cb0d7da38d7f17af74bf8f360c02162bb",
       "docs/contracts/public-contracts-v1.0.0-rc.1.md": "513c615278696d904dcd33fc7361cd3cc4f9ea79ca3f48ec42fa95e1c81eb1bc",
       "docs/contracts/public-contracts-v1.0.0-rc.2.md": "d5b798a4563856462fa570fff4040dcbb040784936e2198ae95b3d5f9274ac1b",
-      "tools/check_public_contracts.py": "b2191bf47669f23d19b6299e7caadcaf3180c61fe08a647de27f970301ab2b13"
+      "tools/check_public_contracts.py": "b06afb4e1437f993707c8a424364ddb63b2bdad2a86052d5d4a38a6059d94bc6"
     },
     "logical_export": {
       "crates/worlddb-storage-file/src/logical_export.rs": "11c2b0fecca54e4a59b8d6b57dc93d32a2f65589a1b14d75dd7bc3b3dfb9f4c1",
@@ -33,8 +33,8 @@
       "crates/worlddb-core/src/wire_records.rs": "e442ffe760872a09ad981ac38e79b7a9a4db67d8477a85d8843b1d889f691389",
       "policy/audit-wire-kinds.tsv": "0b1e7baa286dfd0f9c194c77e33ab32e7a84b02828a98a5cafe8b7920bb73510",
       "policy/audit-wire-values.tsv": "63b8064ecf0234db299c18928736fd5cd55e77dda3dbd94fc28732379c3cc476",
-      "policy/record-ref-wire-tags.tsv": "b5b12d777c7db623ade68ae0a5bb3702c7a640c49de5df5230b71ec256349e2b",
-      "policy/record-wire-kinds.tsv": "fa0a7976196b18cc5597386089dd109127bcc272d8db2033adf29f45116de20b"
+      "policy/record-ref-wire-tags.tsv": "8bb8eaa156a682d8a21fd8642b6db044a83607536709a9d29bee15ee82a06f09",
+      "policy/record-wire-kinds.tsv": "07583ab4dfffdf923eca4c2a5c7688581ae946055e33635a6f0dec9a83f35173"
     }
   },
   "surfaces": {

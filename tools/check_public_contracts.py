@@ -66,10 +66,15 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def sha256_source_bytes(value: bytes) -> str:
+    """Fingerprint source text independently of the checkout's line endings."""
+    return sha256_bytes(value.replace(b"\r\n", b"\n"))
+
+
 def source_fingerprints() -> dict[str, dict[str, str]]:
     return {
         surface: {
-            path: sha256_bytes((ROOT / path).read_bytes())
+            path: sha256_source_bytes((ROOT / path).read_bytes())
             for path in paths
         }
         for surface, paths in SOURCE_GROUPS.items()
