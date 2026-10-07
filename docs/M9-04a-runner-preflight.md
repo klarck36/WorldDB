@@ -85,8 +85,13 @@ manifest is preserved as `FAIL` and the result is not campaign evidence:
 The runner default now writes its manifest, fuzzer report, resource samples,
 coverage, and crash-corpus manifest to `%LOCALAPPDATA%\WorldDB\fuzz-results`,
 outside the OneDrive-synchronized workspace. Coverage export also reads both
-Cargo build streams because Cargo writes the test-binary path to stderr. A
-valid campaign will start after this correction is committed and checked.
+Cargo build streams because Cargo writes the test-binary path to stderr. The
+valid retry is active:
+
+- Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T123608Z`
+- Source commit: `1b25d6e`
+- Started: 7 October 2026, 14:36:08 CEST
+- Scheduled check: 8 October 2026, 14:40 CEST
 
 ## Pending campaign work
 

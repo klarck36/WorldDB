@@ -51,8 +51,9 @@ additional targets. The M9-04a group passed a one-second route/seed preflight
 with no crashes and 632,274 calls; M9-04b/c passed 19 more routes with no
 crashes and 166,878 calls. The first `cli_arguments` run attempt was stopped
 after 239 seconds because its output path was under OneDrive; its manifest is
-retained as FAIL and it is not campaign evidence. No valid 24-hour campaign is
-active yet. M9-04a/b/c own those long runs; M9-04d owns crash triage and
+retained as FAIL and it is not campaign evidence. A valid 24-hour retry is now
+active under M9-04a on commit `1b25d6e`, with results under `%LOCALAPPDATA%`.
+M9-04a/b/c own those long runs; M9-04d owns crash triage and
 closure. Preflight results are recorded in
 [M9-04a runner preflight](M9-04a-runner-preflight.md) and
 [M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
