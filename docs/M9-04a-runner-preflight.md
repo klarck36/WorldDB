@@ -1,6 +1,6 @@
 # M9-04a – Rust parser runner preflight
 
-**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE
+**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE; ONE TIMEOUT NOT REPRODUCED
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -79,6 +79,8 @@ running outside OneDrive:
 - Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T123608Z`
 - Source commit: `1b25d6e`; clean working tree
 - Started: 7 October 2026, 14:36:08 CEST; 86,400 seconds requested
+- Outcome: `FAIL` after 1,515.322 seconds and 16,223,900 rounds. One 41-byte mutation of seed line 3 (`v1 verify --database!C:\worlddb\synthetic`) exceeded the 2-second input timeout. Manifest, crash input, resource samples, and coverage remain under `%LOCALAPPDATA%\WorldDB\fuzz-results\M9-04-cli_arguments-574f524c44444232-20261007T123608Z`.
+- Triage replay of that exact input used the same 2-second timeout for 10 seconds: 90,051 rounds, 0 crashes. The timeout was not reproduced; it is an unconfirmed scheduling/runner outlier, not a campaign pass or a confirmed parser defect. A fresh 86,400-second retry remains required and will start after current campaign/resource checks.
 
 A second M9-04a Rust campaign is running from the clean `7c5e1e3` source:
 

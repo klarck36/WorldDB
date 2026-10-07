@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "task_id": "M9-05",
+  "run_id": "m9-05-process-matrix-20261007T130956Z-325817f",
+  "completed_at_utc": "2026-10-07T13:09:58Z",
+  "source_commit": "325817ffff382888747663ccfd261a366b34d792",
+  "source_clean_before_archive": true,
+  "operating_system": "Microsoft Windows 11 Home",
+  "os_version": "10.0.26200",
+  "os_build": "26200",
+  "filesystem": "NTFS",
+  "build_target": "CARGO_TARGET_DIR=%LOCALAPPDATA%\\WorldDB\\m9-05-target",
+  "command": "scripts/run-process-matrix-builds.ps1 -KeepArtifacts",
+  "results": {
+    "in_process_panic": {
+      "status": "PASS",
+      "poison_detected": true,
+      "app_restart_required": true,
+      "restart_writer_owned": true,
+      "process_id_changed": true,
+      "engine_after_panic": "engine state is poisoned"
+    },
+    "sidecar_panic": {
+      "status": "PASS",
+      "app_survived": true,
+      "writer_lock_reacquired": true,
+      "process_id_changed": true,
+      "processes_reaped": true
+    },
+    "stream_stress": {
+      "status": "PASS",
+      "runs_per_mode": 5,
+      "full_bytes_each": 104857600,
+      "cancel_bytes_each": 8388608,
+      "digest_match_across_modes": true,
+      "in_process_full_median_microseconds": 866941,
+      "sidecar_full_median_microseconds": 830324,
+      "in_process_cancel_median_microseconds": 80198,
+      "sidecar_cancel_median_microseconds": 77806
+    }
+  },
+  "artifact_sha256": {
+    "in-process.json": "c08da588325e95e661732c6807fdc336b3d5d8d33b719a590f7e8e714e70b807",
+    "sidecar.json": "ab929bbacc38d87a8dbc5ecbd621a115829e8d952197253bd43ec1943d34b848",
+    "in-process-reopen.json": "8e85b586d92f3c24e4be13d2523cbe768fc0f5f5101729bb4055b2631fd898bc",
+    "in-process.stderr.log": "cc7fe2791a54fe0e84036134e11191e1846b1235e2b3bfcaab42086646dc4e36",
+    "in-process.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "sidecar.stderr.log": "301e24516c9adb113daf9feac7653e3b055680a38a3b57734dc3d1b056ff7838",
+    "sidecar.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "in-process-reopen.stderr.log": "299482c335abe6bd767f9b14f54ba2f9d38326059c256bbf6c287bb7a301d8ae",
+    "in-process-reopen.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
