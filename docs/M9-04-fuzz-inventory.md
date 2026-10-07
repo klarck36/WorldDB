@@ -54,8 +54,9 @@ after 239 seconds because its output path was under OneDrive; its manifest is
 retained as FAIL and it is not campaign evidence. The valid retry started on
 commit `1b25d6e` at 14:36:08 CEST. Three more clean-commit Rust campaigns started
 on `7c5e1e3`: `engine_ipc_request`, `cli_import_mapping`, and
-`storage_wal_recovery_prefix`. All four Rust campaigns are currently RUNNING
-under M9-04a/b/c and write outside the synchronized workspace. The initial
+`storage_wal_recovery_prefix`. Two more started on clean commit `681e1e2`:
+`cli_migration_plan_json` and `storage_wal_payloads`. All six Rust campaigns are
+currently RUNNING under M9-04a/b/c and write outside the synchronized workspace. The initial
 TypeScript long-run attempt failed on Node's worker URL type check and is not
 evidence. The worker now receives `new URL(import.meta.url)`; the TypeScript
 input cap was raised to 67,108,880 bytes for the registered 64-MiB envelope

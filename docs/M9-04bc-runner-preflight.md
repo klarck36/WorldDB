@@ -62,7 +62,7 @@ campaign will write its own hashed crash-corpus manifest under its run folder.
 
 ## Active long-run campaigns
 
-Two of the 19 import/recovery targets now have valid 86,400-second campaigns
+Four of the 19 import/recovery targets now have valid 86,400-second campaigns
 running from clean commit `7c5e1e3`, using seed `0x574f524c44444232` and output
 under `%LOCALAPPDATA%\WorldDB\fuzz-results`:
 
@@ -73,6 +73,16 @@ under `%LOCALAPPDATA%\WorldDB\fuzz-results`:
   `M9-04-storage_wal_recovery_prefix-574f524c44444232-20261007T123909Z`, started
   7 October 2026 at 14:39:09 CEST.
 
-Both were confirmed live after startup. The remaining nine import targets and
-eight recovery targets still need their long campaigns. The separate M9-04a
+Two additional targets started from clean commit `681e1e2`, also using the
+registered 86,400-second profiles:
+
+- M9-04b `cli_migration_plan_json`: run
+  `M9-04-cli_migration_plan_json-574f524c44444232-20261007T124735Z`, started
+  7 October 2026 at 14:47:35 CEST.
+- M9-04c `storage_wal_payloads`: run
+  `M9-04-storage_wal_payloads-574f524c44444232-20261007T124735Z`, started
+  7 October 2026 at 14:47:35 CEST.
+
+All four were confirmed live after startup. Eight import targets and seven
+recovery targets still need their long campaigns. The separate M9-04a
 `engine_ipc_request` campaign is recorded in the M9-04a preflight report.
