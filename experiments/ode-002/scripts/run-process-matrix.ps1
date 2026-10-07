@@ -213,4 +213,5 @@ finally {
         throw 'Refusing to remove a test directory outside the system temp directory.'
     }
     if (-not $KeepArtifacts -and (Test-Path -LiteralPath $resolvedRoot)) { Remove-Item -LiteralPath $resolvedRoot -Recurse -Force }
+    if ($KeepArtifacts) { Write-Output "Matrix test artifacts: $resolvedRoot" }
 }

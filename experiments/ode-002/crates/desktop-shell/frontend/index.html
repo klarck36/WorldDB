@@ -89,6 +89,7 @@
           <button id="close-project" type="button" disabled>Projekt schließen</button>
         </div>
         <p id="operation-status" class="muted" role="status" aria-live="polite"></p>
+        <p id="renderer-status" class="muted" role="status" aria-live="assertive" hidden></p>
         <button id="reconcile-operations" type="button" hidden>Schreibstatus erneut prüfen</button>
       </section>
       <section id="diagnostic-panel" class="card" aria-labelledby="diagnostic-heading" hidden>
@@ -914,6 +915,7 @@
         </fieldset>
       </section>
     </main>
+    <script src="renderer-health.js"></script>
     <script src="main.js"></script>
   </body>
 </html>
