@@ -130,3 +130,17 @@ through 19:02:32 CEST:
 | `storage_wal_payloads` | 7348 | 15,216.0 s | 16,819.2 s | 38.6 MiB | 926.4 MB |
 
 Next process and sample check: 19:17 CEST.
+
+## Monitoring update — 7 October 2026, 19:21 CEST
+
+All four active M9-04b/c processes were alive. No completion manifests were
+present; resource samples were current through 19:21 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 16,864.3 s | 19,455.8 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | 16,390.0 s | 6,042.0 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_recovery_prefix` | 28428 | 16,858.2 s | 5,889.4 s | 39.6 MiB | 926.4 MB |
+| `storage_wal_payloads` | 7348 | 16,352.6 s | 18,075.7 s | 38.6 MiB | 926.4 MB |
+
+Next process and sample check: 19:36 CEST.

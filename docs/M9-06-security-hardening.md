@@ -1,6 +1,6 @@
 # M9-06 – Security-Härtung (Zwischenstand)
 
-**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. Der erste native macOS-Lauf `37654031855` auf PR `#1` endete mit fünf fehlgeschlagenen Schritten; der korrigierte Lauf `37657249743` ist gestartet. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
+**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. Der erste native macOS-Lauf `37654031855` auf PR `#1` endete mit fünf fehlgeschlagenen Schritten; der korrigierte Lauf `37658222881` ist gestartet. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
 
 ## Geprüfte Non-Interference-Pfade
 
@@ -57,9 +57,11 @@ macOS-Lauf die zwei plattformabhängigen Fuzzfehler eindeutig benennt. Der
 Clippy-Befund wurde durch Windows-spezifische Imports und Bindings behoben;
 striktes lokales Clippy für Core, Storage und CLI besteht.
 
-Der korrigierte Workflow-Run `37657249743`, Job `112915376050`, läuft auf
-macOS. Beim letzten Abruf waren Checkout, Node.js, pnpm und Rust-Setup
-bestanden; `cargo-deny` wurde installiert.
+Der Zwischenlauf `37657249743` auf Commit `8113392` endete mit 41 PASS, einem
+erwarteten SKIP und 4 FAIL. Er lief vor dem letzten rc.2-Snapshot. Der aktuelle
+Workflow-Run `37658222881`, Job `112918746420`, prüft Commit `3f166cc` auf
+macOS; beim letzten Abruf waren Checkout, Node.js, pnpm und Rust-Setup
+bestanden, `cargo-deny` wurde noch installiert.
 
 `public-contracts` und der passende Test scheiterten, weil M9-06 ausschließlich
 Testmodule und test-only Crashprozess-Koordination in Dateien geändert hat,
