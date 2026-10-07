@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://worlddb.example/schemas/fuzz-run-manifest-v1.json",
+  "title": "WorldDB fuzz run manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "target_id",
+    "runner_id",
+    "source_revision",
+    "source_tree_sha256",
+    "working_tree_clean",
+    "seed",
+    "started_at_utc",
+    "finished_at_utc",
+    "duration_requested_seconds",
+    "wall_elapsed_seconds",
+    "cpu_seconds",
+    "resource_profile_id",
+    "peak_process_rss_bytes",
+    "peak_temp_disk_bytes",
+    "input_corpus",
+    "build_command",
+    "run_command",
+    "exit_code",
+    "crash_count",
+    "rounds",
+    "fuzzer_report_path",
+    "resource_samples_path",
+    "result"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" },
+    "runner_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "source_tree_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "working_tree_clean": { "type": "boolean" },
+    "seed": { "type": "string", "pattern": "^0x[0-9a-f]{16}$" },
+    "started_at_utc": { "type": "string", "format": "date-time" },
+    "finished_at_utc": { "type": ["string", "null"], "format": "date-time" },
+    "duration_requested_seconds": { "type": "integer", "minimum": 86400 },
+    "wall_elapsed_seconds": { "type": "number", "minimum": 0 },
+    "cpu_seconds": { "type": "number", "minimum": 0 },
+    "resource_profile_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "peak_process_rss_bytes": { "type": "integer", "minimum": 0 },
+    "peak_temp_disk_bytes": { "type": "integer", "minimum": 0 },
+    "input_corpus": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "build_command": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "run_command": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "exit_code": { "type": ["integer", "null"] },
+    "crash_count": { "type": "integer", "minimum": 0 },
+    "rounds": { "type": "integer", "minimum": 0 },
+    "fuzzer_report_path": { "type": ["string", "null"] },
+    "resource_samples_path": { "type": ["string", "null"] },
+    "crash_corpus_path": { "type": ["string", "null"] },
+    "coverage_artifacts_path": { "type": ["string", "null"] },
+    "result": {
+      "enum": [
+        "RUNNING",
+        "PASS_LOCAL",
+        "FAIL",
+        "BUILD_FAILED",
+        "RESOURCE_LIMIT",
+        "TIMEOUT",
+        "INTERRUPTED"
+      ]
+    }
+  }
+}

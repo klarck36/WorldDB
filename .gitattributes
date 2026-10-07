@@ -1,6 +1,8 @@
 *.zip binary
 docs/source/* -text
 docs/contract/* -text
+# This frozen RC policy page intentionally uses Markdown hard breaks; its exact bytes are fingerprinted.
+docs/contracts/public-contracts-v1.0.0-rc.1.md whitespace=-blank-at-eol
 crates/worlddb-testkit/testdata/m0-13/** -text
 # The M7-16h baseline hashes these fixture bytes directly; preserve them on Windows.
 crates/worlddb-storage-file/tests/fixtures/m7-16h/** -text

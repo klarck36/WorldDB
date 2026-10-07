@@ -1,0 +1,4 @@
+manifest-00000000000000000001.wdbm
+manifest-00000000000000000002.wdbm
+manifest-00000000000000000000.wdbm
+manifest-invalid.wdbm

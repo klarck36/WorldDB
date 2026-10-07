@@ -1,0 +1,26 @@
+component	change_kind	classification	version_rule	rationale
+rust_api_v1	protocol_major_changed	BREAKING	increment API major	Existing callers may no longer compile or preserve behavior.
+rust_api_v1	protocol_minor_increased	ADDITIVE	increment API minor	Compatible additions retain all existing v1 contracts.
+rust_api_v1	protocol_minor_decreased	BREAKING	increment API major	A published protocol level would be withdrawn.
+rust_api_v1	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Conservative RC rule for any changed numbered facade source.
+wire_tags	closed_entry_added	BREAKING	increment storage format major	Old closed decoders cannot consume a newly assigned closed tag.
+wire_tags	closed_entry_removed	BREAKING	increment storage format major	A reserved tag must never disappear or be reused.
+wire_tags	closed_entry_changed	BREAKING	increment storage format major	Changing a tag, name, or closed payload is incompatible.
+wire_tags	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Conservative RC rule for changed wire implementation sources.
+public_errors	code_added	ADDITIVE	increment API minor	Clients may encounter a new stable failure code.
+public_errors	code_removed	BREAKING	increment API major	Previously emitted error identifiers remain stable.
+public_errors	code_mapping_added	ADDITIVE	increment API minor	A new core failure may map to an existing transport code.
+public_errors	code_mapping_removed	BREAKING	increment API major	Existing core error projection must remain stable.
+public_errors	code_mapping_changed	BREAKING	increment API major	Changing an existing core-to-transport projection changes public behavior.
+public_errors	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Conservative RC rule for changed public error sources.
+persistent_format	major_changed	BREAKING	increment format major	Existing readers cannot promise to open a new major.
+persistent_format	minor_increased	ADDITIVE	retain old fields and capabilities	Only compatible optional extensions may use a minor increase.
+persistent_format	minor_decreased	BREAKING	increment format major	Previously supported format features would be withdrawn.
+persistent_format	magic_changed	BREAKING	increment format major	Magic values identify distinct on-disk grammars.
+persistent_format	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Conservative RC rule for changed storage-format sources.
+logical_export	version_changed	BREAKING	publish a parallel new profile to classify as additive	Changing the only supported version withdraws or alters v2.
+logical_export	semantics_changed	BREAKING	publish a parallel new profile to classify as additive	Existing v2 scope, ordering, omissions, or digest semantics are frozen.
+logical_export	metadata_changed	BREAKING	publish a parallel new profile to classify as additive	Existing v2 envelope and resource limits are frozen.
+logical_export	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Conservative RC rule for changed export implementation sources.
+contract_policy	source_fingerprint_changed	BREAKING	review and classify before changing baseline	Classification rules themselves are part of the RC governance baseline.
+contract_policy	contract_version_changed	BREAKING	create a new immutable versioned baseline	A frozen RC bundle is immutable after publication.

@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use worlddb_core::{
@@ -23,6 +24,10 @@ const VALUE_GOLDENS: &str = include_str!("data/wire-v1.0-golden.tsv");
 const RECORD_GOLDENS: &str = include_str!("data/record-v1.0-golden.tsv");
 const RECORD_REF_GOLDENS: &str = include_str!("data/record-ref-v1.0-golden.tsv");
 const AUDIT_GOLDENS: &str = include_str!("data/audit-v1.0-golden.tsv");
+const TEXT_GOLDENS: &str = include_str!("data/text-parser-v1.0-golden.tsv");
+const CORE_BYTE_GOLDENS: &str = include_str!("data/core-bytes-v1.0-golden.tsv");
+const MIGRATION_JOURNAL_SEED: &str =
+    include_str!("../../../policy/fuzz-seeds/core/migration-run-journal.hex");
 const RECORD_KIND_REGISTRY: &str = include_str!("../../../policy/record-wire-kinds.tsv");
 const RECORD_REF_REGISTRY: &str = include_str!("../../../policy/record-ref-wire-tags.tsv");
 const AUDIT_KIND_REGISTRY: &str = include_str!("../../../policy/audit-wire-kinds.tsv");
@@ -95,6 +100,69 @@ fn corpus_hex(corpus: &str, name: &str) -> Result<Vec<u8>, String> {
     Err(format!("golden seed {name} is missing"))
 }
 
+fn corpus_text(name: &str) -> Result<Vec<u8>, String> {
+    for line in TEXT_GOLDENS.lines().skip(1) {
+        let mut columns = line.split('\t');
+        if columns.next() != Some(name) {
+            continue;
+        }
+        return columns
+            .next()
+            .map(str::as_bytes)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| format!("text seed {name} has no input column"));
+    }
+    Err(format!("text seed {name} is missing"))
+}
+
+fn corpus_core_bytes(name: &str) -> Result<Vec<u8>, String> {
+    for line in CORE_BYTE_GOLDENS.lines().skip(1) {
+        let mut columns = line.split('\t');
+        if columns.next() != Some(name) {
+            continue;
+        }
+        let hex = columns
+            .next()
+            .ok_or_else(|| format!("byte seed {name} has no hex column"))?;
+        return decode_hex(hex);
+    }
+    Err(format!("byte seed {name} is missing"))
+}
+
+fn migration_journal_seed() -> Result<Vec<u8>, String> {
+    use worlddb_core::{
+        DomainId, MigrationId, MigrationPlanFingerprint, MigrationRunId,
+        MigrationRunJournalSnapshot, MigrationRunJournalSpec, MigrationRunJournalStepSpec,
+        MigrationStepId, MigrationTransformerVersion, OperationId, Revision, SchemaRevision,
+    };
+
+    fn id<T: DomainId>(last: u8) -> Result<T, String> {
+        let mut bytes = [0_u8; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        bytes[15] = last;
+        T::try_from_bytes(bytes).map_err(|error| error.to_string())
+    }
+
+    let spec = MigrationRunJournalSpec::new(
+        id::<MigrationId>(1)?,
+        id::<MigrationRunId>(2)?,
+        MigrationPlanFingerprint::from_bytes([3; 32]),
+        SchemaRevision::from_published_revision(Revision::GENESIS),
+        [4; 32],
+        MigrationTransformerVersion::new(1).map_err(|error| error.to_string())?,
+        vec![MigrationRunJournalStepSpec::new(
+            id::<MigrationStepId>(5)?,
+            id::<OperationId>(7)?,
+            [8; 32],
+            Revision::FIRST_COMMIT,
+        )],
+    )
+    .map_err(|error| error.to_string())?;
+    let snapshot = MigrationRunJournalSnapshot::start(spec).map_err(|error| error.to_string())?;
+    snapshot.encode().map_err(|error| error.to_string())
+}
+
 fn load_seed(target: Target<'_>) -> Result<Vec<u8>, String> {
     let (corpus, name) = target
         .seed_id
@@ -105,6 +173,9 @@ fn load_seed(target: Target<'_>) -> Result<Vec<u8>, String> {
         "record" => corpus_hex(RECORD_GOLDENS, name)?,
         "record_ref" => corpus_hex(RECORD_REF_GOLDENS, name)?,
         "audit" => corpus_hex(AUDIT_GOLDENS, name)?,
+        "text" => corpus_text(name)?,
+        "core_bytes" => corpus_core_bytes(name)?,
+        "generated" if name == "migration_run_journal" => migration_journal_seed()?,
         _ => return Err(format!("unknown seed corpus {corpus}")),
     };
     if target.family != "tlv" {
@@ -143,9 +214,9 @@ fn inventory() -> Result<Vec<Target<'static>>, String> {
             targets.push(target);
         }
     }
-    if targets.len() != 79 {
+    if targets.len() != 91 {
         return Err(format!(
-            "expected 79 decoder targets, found {}",
+            "expected 91 decoder targets, found {}",
             targets.len()
         ));
     }
@@ -160,6 +231,36 @@ fn inventory() -> Result<Vec<Target<'static>>, String> {
         );
     }
     Ok(targets)
+}
+
+fn select_targets(
+    targets: Vec<Target<'static>>,
+    selection: Option<&str>,
+) -> Result<Vec<Target<'static>>, String> {
+    let Some(selection) = selection else {
+        return Ok(targets);
+    };
+    let selected = targets
+        .into_iter()
+        .filter(|target| target.decoder_id == selection)
+        .collect::<Vec<_>>();
+    if selected.len() != 1 {
+        return Err(format!("unknown or duplicate decoder target {selection}"));
+    }
+    Ok(selected)
+}
+
+fn selected_target_id() -> Result<Option<String>, String> {
+    match std::env::var("WORLDDB_DECODER_FUZZ_TARGET") {
+        Ok(value) if value.is_empty() => {
+            Err("WORLDDB_DECODER_FUZZ_TARGET must not be empty".to_owned())
+        }
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("WORLDDB_DECODER_FUZZ_TARGET is not Unicode".to_owned())
+        }
+    }
 }
 
 fn mutator_ids() -> Result<Vec<&'static str>, String> {
@@ -346,6 +447,32 @@ fn run_decoder(target: Target<'_>, bytes: &[u8], limits: &DecoderLimits) -> bool
         "batch" => decode_record_batch_with_limits(&[bytes], limits).is_ok(),
         "audit_record" => decode_audit_record_with_limits(bytes, limits).is_ok(),
         "raw_read_attempt" => decode_raw_read_attempt_with_limits(bytes, limits).is_ok(),
+        "int_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::Int::from_str(value).is_ok()),
+        "uint_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::UInt::from_str(value).is_ok()),
+        "decimal_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::Decimal::from_str(value).is_ok()),
+        "symbol_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::Symbol::from_str(value).is_ok()),
+        "id_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::EntityId::from_str(value).is_ok()),
+        "revision_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::Revision::from_str(value).is_ok()),
+        "schema_revision_text" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| worlddb_core::SchemaRevision::from_str(value).is_ok()),
+        "int_bytes" => worlddb_core::Int::from_canonical_bytes(bytes).is_ok(),
+        "uint_bytes" => worlddb_core::UInt::from_canonical_bytes(bytes).is_ok(),
+        "decimal_bytes" => worlddb_core::Decimal::from_canonical_bytes(bytes).is_ok(),
+        "cursor_token" => worlddb_core::CursorToken::decode(bytes).is_ok(),
+        "migration_run_journal" => worlddb_core::MigrationRunJournalSnapshot::decode(bytes).is_ok(),
         _ => false,
     }
 }
@@ -377,6 +504,64 @@ fn parse_seed() -> Result<u64, String> {
         .or_else(|| value.strip_prefix("0X"))
         .map_or((value.as_str(), 10), |digits| (digits, 16));
     u64::from_str_radix(digits, radix).map_err(|error| format!("invalid fuzz seed: {error}"))
+}
+
+fn parse_input_timeout() -> Result<Duration, String> {
+    let value = match std::env::var("WORLDDB_DECODER_FUZZ_INPUT_TIMEOUT_SECONDS") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "5".to_owned(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("WORLDDB_DECODER_FUZZ_INPUT_TIMEOUT_SECONDS is not Unicode".to_owned());
+        }
+    };
+    let seconds = value
+        .parse::<u64>()
+        .map_err(|error| format!("invalid per-input timeout: {error}"))?;
+    if seconds == 0 {
+        return Err("per-input timeout must be positive".to_owned());
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
+fn parse_max_input_bytes() -> Result<usize, String> {
+    let value = match std::env::var("WORLDDB_DECODER_FUZZ_MAX_INPUT_BYTES") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "268435456".to_owned(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("WORLDDB_DECODER_FUZZ_MAX_INPUT_BYTES is not Unicode".to_owned());
+        }
+    };
+    let bytes = value.parse::<usize>().map_err(|_| {
+        "WORLDDB_DECODER_FUZZ_MAX_INPUT_BYTES must be a positive integer".to_owned()
+    })?;
+    if bytes == 0 {
+        return Err("WORLDDB_DECODER_FUZZ_MAX_INPUT_BYTES must be positive".to_owned());
+    }
+    Ok(bytes)
+}
+
+fn run_decoder_timed(
+    target: Target<'static>,
+    bytes: Vec<u8>,
+    limits: DecoderLimits,
+    timeout: Duration,
+) -> Result<bool, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = catch_unwind(AssertUnwindSafe(|| run_decoder(target, &bytes, &limits)));
+        let _ = sender.send(result);
+    });
+    match receiver.recv_timeout(timeout) {
+        Ok(Ok(accepted)) => Ok(accepted),
+        Ok(Err(_)) => Err("decoder panicked".to_owned()),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "decoder exceeded {}s per-input timeout",
+            timeout.as_secs()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("decoder worker exited without a result".to_owned())
+        }
+    }
 }
 
 fn parse_source_revision() -> Result<String, String> {
@@ -456,10 +641,12 @@ fn workspace_path(path: PathBuf) -> PathBuf {
 #[test]
 #[ignore = "one-hour CPU fuzz campaign; invoke explicitly with a recorded seed"]
 fn decoder_budget_fuzz_campaign() -> Result<(), String> {
-    let targets = inventory()?;
+    let targets = select_targets(inventory()?, selected_target_id()?.as_deref())?;
     let mutators = mutator_ids()?;
     let duration = parse_duration()?;
     let seed = parse_seed()?;
+    let input_timeout = parse_input_timeout()?;
+    let max_input_bytes = parse_max_input_bytes()?;
     let source_revision = parse_source_revision()?;
     let started_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -474,23 +661,45 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
     loop {
         for (index, target) in targets.iter().copied().enumerate() {
             let golden = load_seed(target)?;
+            if golden.len() > max_input_bytes {
+                return Err(format!(
+                    "golden seed for {} is {} bytes, exceeding max input {}",
+                    target.decoder_id,
+                    golden.len(),
+                    max_input_bytes
+                ));
+            }
             for mutator in &mutators {
                 let input = mutate(&golden, target, mutator, &mut rng);
+                if input.len() > max_input_bytes {
+                    crashes.push(format!(
+                        "{}:{mutator}:input_exceeds_max:{}:{}",
+                        target.decoder_id,
+                        input.len(),
+                        max_input_bytes
+                    ));
+                    break;
+                }
                 let limits = limits_for(mutator, input.len());
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| run_decoder(target, &input, &limits)));
+                let result = run_decoder_timed(target, input.clone(), limits, input_timeout);
                 let count = counts
                     .get_mut(index)
                     .ok_or_else(|| format!("decoder target index {index} is out of range"))?;
                 *count = (*count).saturating_add(1);
-                if result.is_err() {
+                if let Err(error) = result {
                     let mut input_hex = String::new();
                     for byte in input.iter().take(256) {
                         let _ = write!(input_hex, "{byte:02x}");
                     }
-                    crashes.push(format!("{}:{mutator}:{input_hex}", target.decoder_id));
+                    crashes.push(format!(
+                        "{}:{mutator}:{error}:{input_hex}",
+                        target.decoder_id
+                    ));
                     break;
                 }
+            }
+            if !crashes.is_empty() {
+                break;
             }
         }
         rounds = rounds.saturating_add(1);
@@ -555,11 +764,19 @@ fn decoder_inventory_and_seed_manifest_cover_every_registered_codec() -> Result<
     }
     let mut family_counts = BTreeMap::<&str, usize>::new();
     let mut rng = Rng(0x574f_524c_4444_4231);
+    let input_timeout = Duration::from_secs(5);
+    let generated_seed = migration_journal_seed()?;
+    let fixture_seed = decode_hex(MIGRATION_JOURNAL_SEED.trim())?;
+    if generated_seed != fixture_seed {
+        return Err(
+            "generated migration journal seed differs from its archived fixture".to_owned(),
+        );
+    }
     for target in &targets {
         *family_counts.entry(target.family).or_default() += 1;
         let seed = load_seed(*target)?;
         let limits = DecoderLimits::DEFAULT;
-        let canonical = catch_unwind(AssertUnwindSafe(|| run_decoder(*target, &seed, &limits)));
+        let canonical = run_decoder_timed(*target, seed.clone(), limits, input_timeout);
         if !matches!(canonical, Ok(true)) {
             return Err(format!(
                 "canonical golden was rejected or panicked in {}",
@@ -569,9 +786,12 @@ fn decoder_inventory_and_seed_manifest_cover_every_registered_codec() -> Result<
         for mutator in mutators.iter().copied().filter(|id| *id != "canonical") {
             let input = mutate(&seed, *target, mutator, &mut rng);
             let limits = limits_for(mutator, input.len());
-            let result = catch_unwind(AssertUnwindSafe(|| run_decoder(*target, &input, &limits)));
-            if result.is_err() {
-                return Err(format!("seed {mutator} panicked in {}", target.decoder_id));
+            let result = run_decoder_timed(*target, input, limits, input_timeout);
+            if let Err(error) = result {
+                return Err(format!(
+                    "seed {mutator} failed in {}: {error}",
+                    target.decoder_id
+                ));
             }
         }
     }
@@ -637,10 +857,39 @@ fn decoder_inventory_and_seed_manifest_cover_every_registered_codec() -> Result<
         "batch",
         "audit_record",
         "raw_read_attempt",
+        "int_text",
+        "uint_text",
+        "decimal_text",
+        "symbol_text",
+        "id_text",
+        "revision_text",
+        "schema_revision_text",
+        "int_bytes",
+        "uint_bytes",
+        "decimal_bytes",
+        "cursor_token",
+        "migration_run_journal",
     ] {
         if !family_counts.contains_key(family) {
             return Err(format!("decoder inventory is missing family {family}"));
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn decoder_campaign_target_selector_is_exact_and_fail_closed() -> Result<(), String> {
+    let targets = inventory()?;
+    let selected = select_targets(targets.clone(), Some("core.int_decimal"))?;
+    if selected.len() != 1
+        || selected
+            .first()
+            .is_none_or(|target| target.decoder_id != "core.int_decimal")
+    {
+        return Err("decoder selector did not isolate the requested target".to_owned());
+    }
+    if select_targets(targets, Some("core.missing_target")).is_ok() {
+        return Err("decoder selector accepted an unregistered target".to_owned());
     }
     Ok(())
 }

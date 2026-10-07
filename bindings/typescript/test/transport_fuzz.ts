@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { isMainThread, parentPort, Worker } from "node:worker_threads";
 
 import {
   MAX_BYTES_VALUE,
@@ -173,7 +174,12 @@ function runSmoke(): void {
   process.stdout.write(`TRANSPORT FUZZ SMOKE PASS: ${goldens.length} golden envelopes, ${seeds.length} seeds, 1 TypeScript decoder\n`);
 }
 
-function parseCampaignOptions(): { readonly seconds: number; readonly seed: bigint } {
+function parseCampaignOptions(): {
+  readonly seconds: number;
+  readonly seed: bigint;
+  readonly maxInputBytes: number;
+  readonly inputTimeoutSeconds: number;
+} {
   const durationText = process.env.WORLDDB_TRANSPORT_FUZZ_CPU_SECONDS ?? "3600";
   const seconds = Number(durationText);
   if (!Number.isSafeInteger(seconds) || seconds < 1) {
@@ -184,7 +190,15 @@ function parseCampaignOptions(): { readonly seconds: number; readonly seed: bigi
   if (seed < 0n || seed > ((1n << 64n) - 1n)) {
     throw new Error("WORLDDB_TRANSPORT_FUZZ_SEED must fit in u64");
   }
-  return { seconds, seed };
+  const maxInputBytes = Number(process.env.WORLDDB_TRANSPORT_FUZZ_MAX_INPUT_BYTES ?? "16777216");
+  if (!Number.isSafeInteger(maxInputBytes) || maxInputBytes < 1) {
+    throw new Error("WORLDDB_TRANSPORT_FUZZ_MAX_INPUT_BYTES must be a positive safe integer");
+  }
+  const inputTimeoutSeconds = Number(process.env.WORLDDB_TRANSPORT_FUZZ_INPUT_TIMEOUT_SECONDS ?? "5");
+  if (!Number.isSafeInteger(inputTimeoutSeconds) || inputTimeoutSeconds < 1) {
+    throw new Error("WORLDDB_TRANSPORT_FUZZ_INPUT_TIMEOUT_SECONDS must be a positive safe integer");
+  }
+  return { seconds, seed, maxInputBytes, inputTimeoutSeconds };
 }
 
 function parseSourceRevision(value: string | undefined): string {
@@ -194,7 +208,45 @@ function parseSourceRevision(value: string | undefined): string {
   return value;
 }
 
-function runCampaign(): void {
+function createParserWorker(): Worker {
+  return new Worker(import.meta.url, { argv: [] });
+}
+
+function exerciseWithTimeout(
+  worker: Worker,
+  id: number,
+  input: string,
+  timeoutMilliseconds: number,
+): Promise<string | undefined> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    const finish = (failure?: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+      resolvePromise(failure);
+    };
+    const onMessage = (message: { readonly id: number; readonly failure?: string }): void => {
+      if (message.id === id) finish(message.failure);
+    };
+    const onError = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      worker.off("message", onMessage);
+      worker.off("error", onError);
+      rejectPromise(error);
+    };
+    const timeout = setTimeout(() => finish(`input_timeout>${timeoutMilliseconds}ms`), timeoutMilliseconds);
+    worker.on("message", onMessage);
+    worker.once("error", onError);
+    worker.postMessage({ id, input });
+  });
+}
+
+async function runCampaign(): Promise<void> {
   loadInventory();
   const seeds = loadSeeds();
   const goldens = loadGoldens();
@@ -217,37 +269,62 @@ function runCampaign(): void {
 
   const callsBySeed = new Map(seeds.map((seed) => [seed.id, 0]));
   const crashes: string[] = [];
+  let worker = createParserWorker();
+  let nextInputId = 1;
   const cpuStart = process.cpuUsage();
   const wallStart = performance.now();
   const startedUnix = Math.floor(Date.now() / 1000);
   let totalCalls = 0;
   let rounds = 0;
 
-  const runSeed = (seedId: string, golden: string): void => {
+  const runSeed = async (seedId: string, golden: string): Promise<void> => {
     const input = expensiveInputs.get(seedId) ?? makeInput(seedId, golden, rng);
-    const failure = exercise(input);
+    if (Buffer.byteLength(input, "utf8") > options.maxInputBytes) {
+      crashes.push(`${seedId}:input_exceeds_max:${Buffer.byteLength(input, "utf8")}:${options.maxInputBytes}`);
+      return;
+    }
+    const id = nextInputId;
+    nextInputId += 1;
+    const failure = await exerciseWithTimeout(
+      worker,
+      id,
+      input,
+      options.inputTimeoutSeconds * 1_000,
+    );
     callsBySeed.set(seedId, (callsBySeed.get(seedId) ?? 0) + 1);
     totalCalls += 1;
-    if (failure) crashes.push(`${seedId}:${failure}`);
+    if (failure) {
+      crashes.push(`${seedId}:${failure}`);
+      if (failure.startsWith("input_timeout>")) {
+        await worker.terminate();
+      }
+    }
   };
 
-  for (const seed of seeds) runSeed(seed.id, firstGolden);
+  try {
+  for (const seed of seeds) {
+    await runSeed(seed.id, firstGolden);
+    if (crashes.length > 0) break;
+  }
   const frequentSeeds = seeds.filter((seed) => !expensiveSeedIds.has(seed.id));
   while (crashes.length === 0) {
     const golden = goldens[rng.next() % goldens.length]?.json ?? firstGolden;
     for (const seed of frequentSeeds) {
-      runSeed(seed.id, golden);
+      await runSeed(seed.id, golden);
       if (crashes.length > 0) break;
     }
     if (rounds % 1024 === 0) {
       for (const seedId of expensiveSeedIds) {
-        runSeed(seedId, firstGolden);
+        await runSeed(seedId, firstGolden);
         if (crashes.length > 0) break;
       }
     }
     rounds += 1;
     const cpu = process.cpuUsage(cpuStart);
     if ((cpu.user + cpu.system) / 1_000_000 >= options.seconds) break;
+  }
+  } finally {
+    await worker.terminate();
   }
 
   const cpu = process.cpuUsage(cpuStart);
@@ -265,19 +342,28 @@ function runCampaign(): void {
     crashes,
     result: crashes.length === 0 ? "PASS_LOCAL" : "FAIL",
   };
-  const outputDirectory = fileURLToPath(new URL("../../../target/fuzz-results/", import.meta.url));
+  const reportPath = process.env.WORLDDB_TRANSPORT_FUZZ_REPORT;
+  const outputDirectory = reportPath
+    ? dirname(resolve(reportPath))
+    : fileURLToPath(new URL("../../../target/fuzz-results/", import.meta.url));
   mkdirSync(outputDirectory, { recursive: true });
-  const reportPath = resolve(outputDirectory, `m1-18-typescript-${startedUnix}.json`);
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-  process.stdout.write(`TRANSPORT FUZZ ${report.result}: seed=${report.seed}, cpu=${report.cpu_seconds}s, rounds=${rounds}, calls=${totalCalls}, report=${reportPath}\n`);
+  const outputPath = reportPath
+    ? resolve(reportPath)
+    : resolve(outputDirectory, `m1-18-typescript-${startedUnix}.json`);
+  writeFileSync(outputPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  process.stdout.write(`TRANSPORT FUZZ ${report.result}: seed=${report.seed}, cpu=${report.cpu_seconds}s, rounds=${rounds}, calls=${totalCalls}, report=${outputPath}\n`);
   if (crashes.length > 0) process.exitCode = 1;
 }
 
 const invokedPath = process.argv[1];
-if (invokedPath && resolve(invokedPath) === fileURLToPath(import.meta.url)) {
+if (!isMainThread) {
+  parentPort?.on("message", (message: { readonly id: number; readonly input: string }) => {
+    parentPort?.postMessage({ id: message.id, failure: exercise(message.input) });
+  });
+} else if (invokedPath && resolve(invokedPath) === fileURLToPath(import.meta.url)) {
   try {
     if (process.argv[2] === "--smoke") runSmoke();
-    else if (process.argv[2] === "--campaign") runCampaign();
+    else if (process.argv[2] === "--campaign") await runCampaign();
     else throw new Error("choose --smoke or --campaign");
   } catch (error) {
     const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
