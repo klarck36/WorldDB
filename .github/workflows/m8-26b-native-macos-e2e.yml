@@ -50,6 +50,9 @@ jobs:
           cargo fetch --locked --manifest-path Cargo.toml
           cargo fetch --locked --manifest-path experiments/ode-002/Cargo.toml
 
+      - name: Test native process identity adapter
+        run: cargo test --locked --package worlddb-process-adapter --lib
+
       - name: Verify PowerShell runtime
         run: pwsh --version
 

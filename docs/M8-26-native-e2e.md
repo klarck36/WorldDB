@@ -6,7 +6,7 @@
 
 Jeder Fall benennt ein plattformneutrales `scenario` und getrennte `drivers` für Windows, macOS und Linux. Der Windows-Einstieg löst Fall-ID, Prozessmodus und Treiber aus diesem Katalog auf, statt die PowerShell-Treiber zusätzlich fest zu verdrahten. `tools/check_native_e2e_suite.py` prüft eindeutige IDs, vollständige Szenario-/Prozessmodusabdeckung, OS-/Dateisystembindungen, sichere Treiberpfade sowie Übereinstimmung zwischen verfügbaren Plattformen und vorhandenen Treibern. Neun Mutationsprüfungen in `tools/test_native_e2e_suite.py` schützen diese Regeln; beide Prüfungen laufen in `cargo xtask verify`. Der Gesamtverifier bestand auf Windows mit 41 Schritten, einem vorgesehenen Skip und null Fehlern.
 
-Für Windows/NTFS und macOS/APFS sind native Treiber im gemeinsamen Katalog verfügbar. Der Windows-Lauf ist bestanden; der macOS-Runner und WebDriver-Tastatur-/Crash-Treiber sind in Umsetzung und müssen noch auf einem nativen APFS-Runner bestehen. Linux/ext4 bleibt bis M9-07 `deferred` und hat weiterhin keinen Runner.
+Für Windows/NTFS, macOS/APFS und Linux/ext4 sind native Treiber im gemeinsamen Katalog verfügbar. Der Windows-Lauf ist bestanden; die macOS- und Linux-Runner sowie WebDriver-Tastatur-/Crash-Treiber müssen noch auf nativen APFS-/ext4-Runnern bestehen.
 
 Jeder Lauf erhält eine eindeutige Run-ID und ein `manifest.json` nach `docs/schemas/native-e2e-evidence.schema.json`. Das Manifest hält Commit und Dirty-Zustand, OS-Version, Dateisystem, Toolchain, SHA-256-Hashes der Builds, Fallresultate und gehashte Ausgabedateien fest. Die nativen Smoke-Skripte archivieren ihre temporären Projektdaten und Prozesslogs im Run-Ordner. Fehler behalten dadurch die Eingaben und Logs, die zur Reproduktion benötigt werden.
 
@@ -49,9 +49,25 @@ Der Windows/NTFS-Profillauf mit dem aktuellen Katalog ist auf sauberem Commit be
 
 Der erste Actions-Start `37668686166` wurde vor Jobbeginn wegen eines unzulässigen `${{ runner.temp }}`-Zugriffs auf Workflow-Ebene abgewiesen. Die Pfade für Cargo-Build und Evidenz liegen jetzt in der Umgebung des nativen Run-Schritts, wo der `runner`-Kontext verfügbar ist. Der korrigierte Lauf steht noch aus; dieser Syntaxfehler lieferte keinen APFS-Lauf und keine native Evidenz.
 
+Der korrigierte APFS-Lauf `37669075678` erreichte macOS 26.6.2/arm64 auf APFS; Recovery-CLI und Engine bauten erfolgreich. Der In-Process-Desktop-Build scheiterte im sauberen Checkout, weil Tauri `icons/icon.png` erwartet, die Datei aber nicht eingecheckt war; die acht IPC-, Writer-Lock-, Tastatur- und Crash-Recovery-Fälle liefen deshalb nicht. Das 32×32-PNG-Frame aus dem eingecheckten `icons/icon.ico` wurde unverändert extrahiert und als `icons/icon.png` ergänzt. Die erneute native Abnahme steht aus.
+
+## Aktueller macOS/APFS-Lauf
+
+Der neueste APFS-Run 37670656084 auf PR-Head 399791492bf1e63650dfb99126d67d159c304a4a wurde mit FAIL abgeschlossen. Er lief auf macOS 26.6.2/arm64/APFS; alle vier Cargo-Buildprofile bestanden. Sechs von 14 Fällen bestanden, acht Desktopfälle scheiterten beim Start mit «operating system account identity unavailable». Das ist die dokumentierte Windows-only-Hostauthentisierung aus ADR-042/043, kein APFS- oder Workflowfehler.
+
+Artifact 11504233580 (24,550 Byte, ZIP SHA-256 a38001a032edbbb69e2c02c6e8af199ad1ba176a6c41a84ceb30eb8ce36d4532) und Manifest-SHA-256 c2eca3f61f7bc82391c82b09659a2c7cacd22ace3a2bcbe68f12fdf0fd428a7c sind geprüft. Das Manifest besteht gegen docs/schemas/native-e2e-evidence.schema.json; alle 52 Artefakte stimmen bei SHA-256 und Bytezahl. Der Actions-Run checkte den PR-Mergecommit 69ad273cd29ef51e24bdf23d3b913b414355e9ef (dirty=false); der PR-Head war 399791492bf1e63650dfb99126d67d159c304a4a.
+
+Als gezielte Voraussetzung für den vollständigen APFS/ext4-Desktoplauf erhält der Prozessadapter jetzt eine eigene Unix-Desktopidentität: effektive UID plus systemseitige Host-ID (macOS IOKit-`IOPlatformUUID`, Linux `/etc/machine-id`), streng validiert und ohne Env-/Rendererquelle. `kern.uuid` wurde bei der Primärquellenprüfung verworfen, da XNU darunter die UUID des Kernel-Images bereitstellt. Der gemeinsame Principal-Hash bindet Plattform, Host und UID. Die Windows-SID- und CLI-Backup-/Restorepfade bleiben unverändert. Adaptertests bestehen unter Windows (2/2) und WSL2/Linux (4/4); macOS- und Linux-Cross-Checks mit `-D warnings` bestehen für den Prozessadapter, und der Linux-Enginecheck sowie beide Windows-Desktopmodi bestehen. M8-26b bleibt RUNNING bis der native APFS-Lauf PASS samt geprüften Artefakten meldet; M8-26c bleibt READY.
+
+M9-06-CI auf demselben PR-Head ist mit Run 37670656360 SUCCESS. Die GitHub-API-Artefakte bestätigen den aktuellen Head.
+
+## Linux/ext4-Runnerentwurf für M8-26c
+
+Der lokale Arbeitsentwurf `experiments/ode-002/scripts/run-native-e2e-linux.mjs` übernimmt den gemeinsamen W3C-WebDriver-Keyboard-/Recovery-Treiber und die IPC-/Writer-Lock-Smokes für Linux. Vor jedem Lauf prüft er Linux als Host und ext4 als Dateisystem des Evidenzpfads. `.github/workflows/m8-26c-native-linux-e2e.yml` nutzt einen festgelegten Ubuntu-24.04-Hosted-Runner, installiert Tauri/WebKitGTK sowie Xvfb- und DBus-Laufzeitabhängigkeiten, bindet Cargo-Ziele und Belege an den Runner-Temp-Pfad und archiviert das Manifest. Der Workflow erzwingt ext4 für Checkout und Runner-Temp. Katalog, neun Mutationsprüfungen, Node-Syntax und beide Workflow-YAML-Dateien bestehen lokal. M8-26c bleibt READY und wird erst nach M8-26b gestartet; ein echter Linux/ext4-Profillauf steht noch aus.
+
 ## Plattformstatus
 
-Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS wird mit dem neuen nativen Runner ausgeführt; bis zum echten Hosted-Runner-Nachweis ist das Profil noch offen. Linux/ext4 bleibt gemäß Projektvorgabe bis M9-07 zurückgestellt. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.
+Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS und Linux/ext4 werden mit nativen Hosted-Runnern ausgeführt; beide Profile bleiben bis zu erfolgreichen Läufen mit geprüften Manifesten offen. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.
 
 ## Ausführung
 

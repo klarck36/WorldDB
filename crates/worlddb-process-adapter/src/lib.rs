@@ -5,6 +5,8 @@
 use std::io;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod unix;
 #[cfg(windows)]
 mod windows;
 
@@ -13,7 +15,7 @@ mod windows;
 pub enum ProcessIdentityError {
     /// The platform has no verified identity reader in this build.
     UnsupportedPlatform,
-    /// The operating system did not return a valid process-token identity.
+    /// The operating system did not return a valid process identity.
     OperatingSystemFailure,
 }
 
@@ -28,6 +30,31 @@ pub fn current_process_identity_bytes() -> Result<Vec<u8>, ProcessIdentityError>
     }
 
     #[cfg(not(windows))]
+    {
+        Err(ProcessIdentityError::UnsupportedPlatform)
+    }
+}
+
+/// Reads the current host account identity used by the native desktop host.
+///
+/// Windows returns the process-token SID. macOS and Linux return a platform-
+/// tagged identity composed from the effective UID and stable host UUID. Other
+/// platforms fail closed. This API is separate from `current_process_identity_bytes`
+/// so non-Windows CLI backup/restore stays unavailable until its platform contract
+/// is explicitly reviewed.
+pub fn current_host_account_identity_bytes() -> Result<Vec<u8>, ProcessIdentityError> {
+    #[cfg(windows)]
+    {
+        current_process_identity_bytes()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        unix::current_host_account_identity_bytes()
+            .map_err(|_| ProcessIdentityError::OperatingSystemFailure)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Err(ProcessIdentityError::UnsupportedPlatform)
     }
@@ -134,5 +161,13 @@ mod process_identity_tests {
             assert!(!identity.is_empty());
             assert!(identity.len() <= 1024);
         }
+    }
+
+    #[test]
+    fn desktop_host_identity_uses_the_process_token_sid() {
+        assert_eq!(
+            super::current_host_account_identity_bytes(),
+            super::current_process_identity_bytes()
+        );
     }
 }

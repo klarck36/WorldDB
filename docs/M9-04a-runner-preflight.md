@@ -221,3 +221,42 @@ through 20:33:16 CEST; neither active run folder had a completion manifest:
 
 Next process and sample check: 20:50 CEST. The fresh `cli_arguments` retry
 remains queued until the active campaigns finish.
+
+## Monitoring update — 7 October 2026, 20:53 CEST
+
+Both active M9-04a processes were alive at 20:53:23 CEST. Their resource files
+were updated through 20:52:45 (`engine_ipc_request`) and 20:53:08
+(`typescript.json_envelope`); neither run folder had a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 22,357.1 s | 25,528.0 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 22,007.1 s | 21,660.5 s | 330.4 MiB | 24.4 KiB |
+
+Next process and sample check: 21:08 CEST. The fresh `cli_arguments` retry
+remains queued until the active campaigns finish.
+
+
+## Monitoring update — 7 October 2026, 21:23 CEST
+
+Both active M9-04a processes were alive at 21:22:53 CEST. Samples were current through 21:22:46 (engine_ipc_request) and 21:22:31 (typescript.json_envelope); neither had a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| engine_ipc_request | 30620 | 24,157.9 s | 27,605.2 s | 54.5 MiB | 1.21 GB |
+| typescript.json_envelope | 18840 | 23,769.4 s | 23,394.1 s | 329.9 MiB | 26.3 KiB |
+
+Next process and sample check: 21:38 CEST. The fresh cli_arguments retry remains queued until the active campaigns finish.
+
+## Monitoring update — 7 October 2026, 21:39 CEST
+
+Both active M9-04a processes were alive at 21:38:50 CEST. Resource samples
+were current through 21:38:38 (`engine_ipc_request`) and 21:38:50
+(`typescript.json_envelope`); neither run had a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| engine_ipc_request | 30620 | 25,110.5 s | 28,676.2 s | 54.5 MiB | 1.21 GB |
+| typescript.json_envelope | 18840 | 24,749.0 s | 24,344.9 s | 330.1 MiB | 28.1 KiB |
+
+Next process and sample check: 21:53 CEST. The fresh cli_arguments retry remains queued until the active campaigns finish.

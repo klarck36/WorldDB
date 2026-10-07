@@ -23,7 +23,7 @@ pub(super) struct HostIdentity(Vec<u8>);
 
 impl HostIdentity {
     pub(super) fn current() -> Result<Self, HostIdentityError> {
-        worlddb_process_adapter::current_process_identity_bytes()
+        worlddb_process_adapter::current_host_account_identity_bytes()
             .map(Self)
             .map_err(|error| match error {
                 worlddb_process_adapter::ProcessIdentityError::UnsupportedPlatform => {

@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use worlddb_core::PrincipalId;
 use worlddb_core::{CancellationRequestDisposition, JobId, OperationId};
 use worlddb_ode_engine::{
@@ -47,7 +47,7 @@ fn main() {
         if !host_authenticated || recovery_only {
             std::process::exit(64);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let principal_id = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
             if worlddb_ode_engine::create_project_with_operation_id(
@@ -61,24 +61,24 @@ fn main() {
             }
             return;
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         std::process::exit(73);
     }
     if recovery_only {
         if !host_authenticated {
             std::process::exit(64);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let _principal = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
             run_recovery_service(&database_root);
             return;
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         std::process::exit(73);
     }
     let mut engine = if host_authenticated {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         {
             let principal_id = current_host_principal().unwrap_or_else(|_| std::process::exit(73));
             match EngineHost::open_authorized(&database_root, principal_id) {
@@ -86,7 +86,7 @@ fn main() {
                 Err(_) => std::process::exit(73),
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
         {
             std::process::exit(73)
         }
@@ -549,9 +549,10 @@ fn with_request_operation_id<T>(
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn current_host_principal() -> Result<PrincipalId, ()> {
-    let identity = worlddb_process_adapter::current_process_identity_bytes().map_err(|_| ())?;
+    let identity =
+        worlddb_process_adapter::current_host_account_identity_bytes().map_err(|_| ())?;
     worlddb_core::derive_host_account_principal(&identity).map_err(|_| ())
 }
 

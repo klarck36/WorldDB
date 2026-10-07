@@ -212,3 +212,56 @@ finish. The fuzzer report, sample log, and input remain preserved in that run
 folder.
 
 Next process and sample check: 20:50 CEST.
+
+## Monitoring update — 7 October 2026, 20:53 CEST
+
+The active `cli_import_mapping`, `cli_migration_plan_json`, and
+`storage_wal_payloads` processes were alive at 20:53:23 CEST. Their resource
+files were updated through 20:53:02, 20:52:57, and 20:52:44 respectively;
+none had a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | RUNNING | 22,388.3 s | 25,827.5 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | RUNNING | 21,882.3 s | 8,317.7 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_payloads` | 7348 | RUNNING | 21,842.4 s | 24,152.3 s | 38.6 MiB | 926.4 MB |
+
+`storage_wal_recovery_prefix` remains invalid as campaign evidence after its
+20:28 CEST fixture-write failure; its full retry is still queued for D: after
+the current campaigns finish.
+
+Next process and sample check: 21:08 CEST.
+
+
+## Monitoring update — 7 October 2026, 21:23 CEST
+
+The active cli_import_mapping, cli_migration_plan_json, and storage_wal_payloads processes were alive at 21:22:53 CEST. Their latest resource samples were updated through 21:22:26, 21:22:52, and 21:22:39 respectively; none had a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| cli_import_mapping | 27628 | RUNNING | 24,151.9 s | 27,885.6 s | 39.6 MiB | 980.5 MB |
+| cli_migration_plan_json | 31928 | RUNNING | 23,677.8 s | 9,156.4 s | 39.1 MiB | 980.5 MB |
+| storage_wal_payloads | 7348 | RUNNING | 23,637.8 s | 26,153.1 s | 38.6 MiB | 926.4 MB |
+
+storage_wal_recovery_prefix remains invalid as campaign evidence after its 20:28 CEST fixture-write failure (os error 112); its full retry is queued on D: until the current campaigns finish.
+
+Next process and sample check: 21:38 CEST.
+
+## Monitoring update — 7 October 2026, 21:39 CEST
+
+The active `cli_import_mapping`, `cli_migration_plan_json`, and
+`storage_wal_payloads` processes were alive at 21:38:50 CEST. Their resource
+samples were current through 21:38:46, 21:38:42, and 21:38:28 respectively;
+none had a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | RUNNING | 25,132.5 s | 28,999.9 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | RUNNING | 24,627.5 s | 9,593.7 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_payloads` | 7348 | RUNNING | 24,586.9 s | 27,191.8 s | 38.6 MiB | 926.4 MB |
+
+`storage_wal_recovery_prefix` (PID 28428) remains invalid as campaign evidence
+after its 20:28 CEST fixture-write failure (`os error 112`); its full retry is
+queued on D: until the current campaigns finish.
+
+Next process and sample check: 21:53 CEST.
