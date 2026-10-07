@@ -140,3 +140,17 @@ contained a completion manifest. Resource samples were current through
 The separate `cli_arguments` retry remains queued until the active campaigns
 finish and their final resource evidence is collected. Next process and sample
 check: 18:53 CEST.
+
+## Monitoring update — 7 October 2026, 19:02 CEST
+
+Both active M9-04a processes were alive at the check, and neither run folder
+contained a completion manifest. Resource samples were current through
+19:02:26 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 15,738.0 s | 17,957.1 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 15,357.6 s | 15,115.5 s | 351.3 MiB | 17.4 KiB |
+
+Next process and sample check: 19:17 CEST. The fresh `cli_arguments` retry
+remains queued until the active campaigns finish.

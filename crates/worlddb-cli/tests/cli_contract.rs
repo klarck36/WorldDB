@@ -21,8 +21,8 @@ use worlddb_core::{
     SourceLocator, SourceMetadata, SourceSchemaPrecondition, Symbol, encode_record,
 };
 use worlddb_storage_file::{
-    DatabaseLayout, ExactBackupManager, HistorySegmentStore, ManifestSnapshot, ManifestStore,
-    RawReadAuditWal, WalPrepareLog, WriterLockError,
+    DatabaseLayout, ExactBackupManager, ManifestSnapshot, ManifestStore, RawReadAuditWal,
+    WalPrepareLog, WriterLockError,
 };
 
 #[cfg(windows)]
@@ -33,8 +33,9 @@ use worlddb_core::{
 };
 #[cfg(windows)]
 use worlddb_storage_file::{
-    FileStoreGuardedMigrationRun, LogicalExport, ManifestSegmentKind, ManifestSegmentReference,
-    RecoveryManager, SecurityPolicyHistoryStore, SharingExport, StorageVerifier,
+    FileStoreGuardedMigrationRun, HistorySegmentStore, LogicalExport, ManifestSegmentKind,
+    ManifestSegmentReference, RecoveryManager, SecurityPolicyHistoryStore, SharingExport,
+    StorageVerifier,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -1490,6 +1491,7 @@ fn backup_creation_requires_trusted_policy_and_scope_mismatch_is_rejected() -> R
 fn restore_clone_requires_trusted_policy_before_reading_backup_or_touching_target()
 -> Result<(), String> {
     let area = TempArea::create()?;
+    #[cfg(windows)]
     let authorization_project = area.path("authorization-project");
     #[cfg(windows)]
     create_host_policy_project(&authorization_project, &[])?;

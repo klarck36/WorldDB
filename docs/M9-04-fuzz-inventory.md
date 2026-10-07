@@ -104,3 +104,11 @@ rewritten as part of this fuzz work. Plancheck, fuzz-inventory checks, fmt,
 strict Clippy, the new target dispatch/preflight runs, and artifact-path probes
 pass. The first production campaign attempt was discarded; all valid 24-hour
 campaigns remain pending.
+
+## Follow-up — 7 October 2026, 19:02 CEST
+
+The M9-04 full-verify failure above is historical: it used the unchanged
+`1.0.0-rc.1` snapshot before M9-06 finalized its security-test changes. The
+conservative fingerprint rule is now satisfied by the separate immutable
+`1.0.0-rc.2` snapshot; the current public-contract check and its 12
+classification tests pass. The macOS M9-06 verify still needs a clean rerun.

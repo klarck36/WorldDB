@@ -1,6 +1,6 @@
 # M9-06 – Security-Härtung (Zwischenstand)
 
-**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. macOS fehlt noch. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
+**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. Der erste native macOS-Lauf `37654031855` auf PR `#1` ist mit fünf fehlgeschlagenen Schritten abgeschlossen; ein korrigierter Lauf steht aus. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
 
 ## Geprüfte Non-Interference-Pfade
 
@@ -40,15 +40,37 @@ Der Debug-Probe wurde ebenfalls ausgeführt, ist aber nicht als Performancewert 
 - Windows `cargo test --locked -p worlddb-core`: 527 Unit- und 87 Rustdoc-Tests bestanden.
 - Windows `cargo test --locked -p worlddb-storage-file --lib`: 117 Unit-Tests bestanden, 0 fehlgeschlagen, 2 ignoriert (29,43 s).
 - `cargo clippy --locked -p worlddb-core -p worlddb-storage-file --all-targets -- -D warnings`: bestanden.
+- Vollständiges Windows-`cargo xtask verify`: 45 PASS, ein vorgesehener `ci-matrix`-SKIP, 0 FAIL.
 - `cargo fmt --all`: ausgeführt.
 - Die gezielten Paarwelt-, Timing-, Export-, Cursor-, Conflict-, Required-Audit-, Aggregat- und Adaptertests bestanden.
 - WSL2/Ubuntu: die Core-Suite bestand mit 527 Unit- und 87 Rustdoc-Tests. Die vollständige Storage-Suite bestand nach dem Fix dreimal mit der Standardparallelität (je 105 bestanden, 0 fehlgeschlagen, 1 ignoriert; letzter Lauf 1,78 s). Striktes Linux-Clippy für Core und Storage bestand.
-- `.github/workflows/m9-06-security-hardening.yml` bindet den PR-Lauf an den vorhandenen wiederverwendbaren `macos-msrv`-Job; der native macOS-Lauf steht noch aus.
+- `.github/workflows/m9-06-security-hardening.yml` bindet den PR-Lauf an den vorhandenen wiederverwendbaren `macos-msrv`-Job. Run `37654031855` lief auf macOS 26.6.2/arm64 mit Rust 1.85 und endete mit 40 PASS, einem erwarteten `ci-matrix`-SKIP und 5 FAIL.
+
+## macOS-Fehler und Vertragsbaseline
+
+Die fünf CI-Fehler waren `cli-contract` (ein CLI-Fuzzziel gab einen Fehler
+zurück), `clippy-unsafe-policy` (plattformabhängig ungenutzter Import und
+Variable), `public-contracts`, `public-contract-tests` sowie
+`m5-22-windows-crash-contract` (ein Storage-Fuzzziel gab einen Fehler zurück).
+Die Dispatcher-Assertions geben jetzt Ziel und Fehler aus, damit ein erneuter
+macOS-Lauf die zwei plattformabhängigen Fuzzfehler eindeutig benennt. Der
+Clippy-Befund wurde durch Windows-spezifische Imports und Bindings behoben;
+striktes lokales Clippy für Core, Storage und CLI besteht.
+
+`public-contracts` und der passende Test scheiterten, weil M9-06 ausschließlich
+Testmodule und test-only Crashprozess-Koordination in Dateien geändert hat,
+deren ganze Quelldateien rc.1 per Fingerprint bindet. Die strukturiert
+extrahierten API-, Wire-, Fehler-, Format- und Exportwerte blieben unverändert.
+Der rc.1-Snapshot blieb unverändert (SHA-256
+`CC7DCFE1F0C645CF08B72123E00D99EC3A64986D156BED85F51E9715417E8282`). Gemäß
+der dokumentierten Regel `contract_version_changed` wurde ein eigener
+unveränderlicher rc.2-Snapshot erstellt; der aktuelle Vertragscheck und alle
+12 Klassifikationstests bestehen damit.
 
 Die vorherigen parallelen WSL-Läufe hatten wechselnde Fehler mit `database writer lock is already held`. Die Ursache war der Fork/Exec-Übergang in den Prozessabbruchtests: Der kurzlebige Kindprozess erbte offene `WriterLock`-Deskriptoren aus parallelen Tests. Fiel das Schließen des Elternhandles in dieses Zeitfenster, blieb der `flock` bis zum Exec vorübergehend aktiv. Die Test-Builds registrieren nun aktive `WriterLock`-Handles; ein Kindprozessstart wartet, bis diese Handles geschlossen sind. Die Synchronisierung betrifft ausschließlich Tests und ändert das Produktionsverhalten nicht. Drei vollständige parallele WSL-Läufe und der finale vollständige Windows-Lauf bestanden danach.
 
 ## Noch offen
 
-- Die Paarwelt-Cases auf macOS wiederholen und das Plattformartefakt ablegen.
+- Den korrigierten macOS-Job vollständig bestehen lassen. M8-26b APFS-Desktop-E2E bleibt gemäß Reihenfolge bis M9-07 zurückgestellt.
 - Die beobachtbare Laufzeitabhängigkeit von der Zahl verborgener Quellzeilen bleibt eine dokumentierte Grenze. Es gibt keine Constant-Time-Behauptung; ein realistischer Korpus und eine Produktentscheidung über die gemessene Restabweichung gehören zur M9-07-Abnahme.
 - M9-04a/b/c-Fuzzkampagnen und ihre noch ausstehende plattformübergreifende Triage bleiben unabhängige offene Tasks.

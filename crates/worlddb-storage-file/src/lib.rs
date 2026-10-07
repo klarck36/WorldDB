@@ -599,7 +599,8 @@ mod fuzz_campaign_tests {
     fn fuzz_campaign_dispatch_rejects_unregistered_storage_targets() {
         assert!(fuzz_campaign_probe("unknown", b"seed").is_err());
         for target in TARGETS {
-            assert!(fuzz_campaign_probe(target, b"seed").is_ok());
+            let result = fuzz_campaign_probe(target, b"seed");
+            assert!(result.is_ok(), "{target}: {result:?}");
         }
         assert!(super::cleanup_fuzz_storage_fixture().is_ok());
     }
