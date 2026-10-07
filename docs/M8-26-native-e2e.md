@@ -47,6 +47,8 @@ Der Windows/NTFS-Profillauf mit dem aktuellen Katalog ist auf sauberem Commit be
 
 `.github/workflows/m8-26b-native-macos-e2e.yml` führt die Suite auf einem macOS-Hosted-Runner aus, prüft APFS vor dem Lauf und archiviert Manifest sowie Rohbelege. Lokale Windows-Validierungen bestehen für den Katalog, dessen neun Mutationstests, Node-/PowerShell-Syntax und den Cargo-Build mit `native-e2e`; `cargo xtask verify` bestand mit 45 PASS, einem erwarteten Skip und null Fehlern. M8-26b bleibt RUNNING, bis ein echter macOS/APFS-Lauf mit `PASS` und geprüften Artefakthashes vorliegt.
 
+Der erste Actions-Start `37668686166` wurde vor Jobbeginn wegen eines unzulässigen `${{ runner.temp }}`-Zugriffs auf Workflow-Ebene abgewiesen. Die Pfade für Cargo-Build und Evidenz liegen jetzt in der Umgebung des nativen Run-Schritts, wo der `runner`-Kontext verfügbar ist. Der korrigierte Lauf steht noch aus; dieser Syntaxfehler lieferte keinen APFS-Lauf und keine native Evidenz.
+
 ## Plattformstatus
 
 Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS wird mit dem neuen nativen Runner ausgeführt; bis zum echten Hosted-Runner-Nachweis ist das Profil noch offen. Linux/ext4 bleibt gemäß Projektvorgabe bis M9-07 zurückgestellt. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.

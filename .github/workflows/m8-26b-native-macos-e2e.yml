@@ -23,9 +23,6 @@ jobs:
     name: Native macOS APFS end-to-end
     runs-on: macos-latest
     timeout-minutes: 120
-    env:
-      CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26b-target
-      WORLDDB_M8_26B_EVIDENCE_ROOT: ${{ runner.temp }}/worlddb/m8-26b-evidence
     steps:
       - name: Check out clean commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,6 +54,9 @@ jobs:
         run: pwsh --version
 
       - name: Run macOS APFS native suite
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26b-target
+          WORLDDB_M8_26B_EVIDENCE_ROOT: ${{ runner.temp }}/worlddb/m8-26b-evidence
         run: node experiments/ode-002/scripts/run-native-e2e-macos.mjs --evidence-root "$WORLDDB_M8_26B_EVIDENCE_ROOT"
 
       - name: Archive native E2E evidence
