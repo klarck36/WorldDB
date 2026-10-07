@@ -51,12 +51,19 @@ additional targets. The M9-04a group passed a one-second route/seed preflight
 with no crashes and 632,274 calls; M9-04b/c passed 19 more routes with no
 crashes and 166,878 calls. The first `cli_arguments` run attempt was stopped
 after 239 seconds because its output path was under OneDrive; its manifest is
-retained as FAIL and it is not campaign evidence. A valid 24-hour retry is now
-active under M9-04a on commit `1b25d6e`, with results under `%LOCALAPPDATA%`.
-M9-04a/b/c own those long runs; M9-04d owns crash triage and
-closure. Preflight results are recorded in
-[M9-04a runner preflight](M9-04a-runner-preflight.md) and
-[M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
+retained as FAIL and it is not campaign evidence. The valid retry started on
+commit `1b25d6e` at 14:36:08 CEST. Three more clean-commit Rust campaigns started
+on `7c5e1e3`: `engine_ipc_request`, `cli_import_mapping`, and
+`storage_wal_recovery_prefix`. All four Rust campaigns are currently RUNNING
+under M9-04a/b/c and write outside the synchronized workspace. The initial
+TypeScript long-run attempt failed on Node's worker URL type check and is not
+evidence. The worker now receives `new URL(import.meta.url)`; the TypeScript
+input cap was raised to 67,108,880 bytes for the registered 64-MiB envelope
+boundary. The fix passed `pnpm verify` and a one-second smoke (24 parser calls,
+no crashes, two V8 coverage files); its valid long-run retry is pending.
+M9-04a/b/c own the long runs; M9-04d owns crash triage and closure. Preflight
+results are recorded in [M9-04a runner preflight](M9-04a-runner-preflight.md)
+and [M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
 
 ## Verification
 

@@ -1,6 +1,6 @@
 # M9-04a – Rust parser runner preflight
 
-**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS PENDING
+**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -71,33 +71,35 @@ separate-process round-trip passes.
 
 ## Long-run campaign status
 
-The first attempt was terminated after 239 seconds because the original
-default output path was inside the OneDrive-synchronized workspace. Its
-manifest is preserved as `FAIL` and the result is not campaign evidence:
-
-- Target: `cli_arguments`
-- Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T122651Z`
-- Seed: `0x574f524c44444232`
-- Source commit: `e878ed6`
-- Started: 7 October 2026, 14:26:51 CEST; stopped: 14:31:22 CEST
-- Result: `FAIL`; not counted toward M9-04a acceptance
-
-The runner default now writes its manifest, fuzzer report, resource samples,
-coverage, and crash-corpus manifest to `%LOCALAPPDATA%\WorldDB\fuzz-results`,
-outside the OneDrive-synchronized workspace. Coverage export also reads both
-Cargo build streams because Cargo writes the test-binary path to stderr. The
-valid retry is active:
+The first `cli_arguments` attempt was terminated after 239 seconds because the
+original output path was inside the OneDrive-synchronized workspace. Its
+manifest remains `FAIL`; it is not campaign evidence. The valid retry is
+running outside OneDrive:
 
 - Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T123608Z`
-- Source commit: `1b25d6e`
-- Started: 7 October 2026, 14:36:08 CEST
-- Scheduled check: 8 October 2026, 14:40 CEST
+- Source commit: `1b25d6e`; clean working tree
+- Started: 7 October 2026, 14:36:08 CEST; 86,400 seconds requested
+
+A second M9-04a Rust campaign is running from the clean `7c5e1e3` source:
+
+- Target: `engine_ipc_request`
+- Run ID: `M9-04-engine_ipc_request-574f524c44444232-20261007T123909Z`
+- Started: 7 October 2026, 14:39:09 CEST; 86,400 seconds requested
+
+The first TypeScript long-run attempt (`M9-04-typescript.json_envelope-574f524c44444232-20261007T123909Z`)
+failed before fuzzing because Node requires a `URL` object for a `file:` worker
+module; the attempt is retained as `FAIL` and is not campaign evidence. The
+worker now uses `new URL(import.meta.url)`, and the `typescript_cpu` input limit
+is 67,108,880 bytes so the registered 64-MiB boundary seed fits. `pnpm verify`
+and a one-second post-fix smoke passed with 24 parser calls, no crashes, and two
+Node V8 coverage files. The corrected 86,400-second TypeScript campaign is
+pending a clean commit.
 
 ## Pending campaign work
 
-- Run all 92 core/TypeScript and 35 additional M9-04a campaigns for 86,400
-  seconds per target using their registered resource profiles; retry
-  `cli_arguments` first.
+- Continue the active `cli_arguments` and `engine_ipc_request` runs, start the
+  corrected TypeScript 86,400-second run, then cover the remaining 90 core /
+  TypeScript and 33 additional M9-04a targets using their registered profiles.
 - Preserve each run manifest, seed hashes, fuzzer report, resource samples,
   and any crash inputs under `%LOCALAPPDATA%\WorldDB\fuzz-results`.
 - Triage crashes and resource-limit outcomes before M9-04d closure.

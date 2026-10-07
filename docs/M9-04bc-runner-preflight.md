@@ -1,6 +1,6 @@
 # M9-04b/c – Import and recovery runner preflight
 
-**Status:** PREFLIGHT COMPLETE; 24-HOUR CAMPAIGNS PENDING
+**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -59,3 +59,20 @@ three Rust raw profiles and a 3.68 MB LCOV report; the TypeScript smoke wrote
 two V8 coverage files. Byte-preservation checks for the Rust crash archive
 helpers pass. These artifact probes do not count as 24-hour runs. Each actual
 campaign will write its own hashed crash-corpus manifest under its run folder.
+
+## Active long-run campaigns
+
+Two of the 19 import/recovery targets now have valid 86,400-second campaigns
+running from clean commit `7c5e1e3`, using seed `0x574f524c44444232` and output
+under `%LOCALAPPDATA%\WorldDB\fuzz-results`:
+
+- M9-04b `cli_import_mapping`: run
+  `M9-04-cli_import_mapping-574f524c44444232-20261007T123908Z`, started
+  7 October 2026 at 14:39:08 CEST.
+- M9-04c `storage_wal_recovery_prefix`: run
+  `M9-04-storage_wal_recovery_prefix-574f524c44444232-20261007T123909Z`, started
+  7 October 2026 at 14:39:09 CEST.
+
+Both were confirmed live after startup. The remaining nine import targets and
+eight recovery targets still need their long campaigns. The separate M9-04a
+`engine_ipc_request` campaign is recorded in the M9-04a preflight report.

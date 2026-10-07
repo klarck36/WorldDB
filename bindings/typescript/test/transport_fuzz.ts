@@ -209,7 +209,7 @@ function parseSourceRevision(value: string | undefined): string {
 }
 
 function createParserWorker(): Worker {
-  return new Worker(import.meta.url, { argv: [] });
+  return new Worker(new URL(import.meta.url), { argv: [] });
 }
 
 function exerciseWithTimeout(
