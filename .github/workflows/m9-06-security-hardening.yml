@@ -9,6 +9,8 @@ on:
       - "Cargo.lock"
       - "crates/**"
       - "experiments/ode-002/**"
+      - "contracts/**"
+      - "docs/contracts/**"
       - "tools/**"
       - "policy/**"
       - ".github/workflows/**"

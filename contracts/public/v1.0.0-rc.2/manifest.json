@@ -5,7 +5,7 @@
     "contract_policy": {
       "contracts/public/classification-rules.tsv": "d8d510e183ccc092daee7bdb7b166c1cb0d7da38d7f17af74bf8f360c02162bb",
       "docs/contracts/public-contracts-v1.0.0-rc.1.md": "513c615278696d904dcd33fc7361cd3cc4f9ea79ca3f48ec42fa95e1c81eb1bc",
-      "docs/contracts/public-contracts-v1.0.0-rc.2.md": "01867768bf16a8346e1059e7ebe048c224c1196486f5f425e26c3ff58dcff484",
+      "docs/contracts/public-contracts-v1.0.0-rc.2.md": "d5b798a4563856462fa570fff4040dcbb040784936e2198ae95b3d5f9274ac1b",
       "tools/check_public_contracts.py": "b2191bf47669f23d19b6299e7caadcaf3180c61fe08a647de27f970301ab2b13"
     },
     "logical_export": {
