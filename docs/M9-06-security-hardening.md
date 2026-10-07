@@ -1,0 +1,54 @@
+# M9-06 – Security-Härtung (Zwischenstand)
+
+**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. macOS fehlt noch. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
+
+## Geprüfte Non-Interference-Pfade
+
+| Bereich | Nachweis |
+|---|---|
+| Result und Explain, Index und Full Scan | `paired_hidden_assertion_is_inert_for_resolved_and_explain_index_and_scan` |
+| Budgetfehler | `query_budget_errors_share_coarse_work_and_memory_buckets` ordnet semantische Queryarbeit einer groben `QueryWork`-Klasse und Speicherfehler separat `ProcessMemory` zu. |
+| Token Search | `token_search_is_exact_typed_and_excludes_hidden_candidates_before_budgets`; `hidden_search_fields_are_removed_before_candidate_budgets` |
+| Storage-Adapter für Token Search | `token_search_denies_field_before_inspecting_assertion_value` verwendet einen absichtlich inkompatibel typisierten Wert. Bei verweigertem `FieldRead` wird der Inhalt verworfen, bevor Slotfelder gelesen, Werte in den Suchverlauf kopiert oder ein Suchdokument erzeugt werden. `storage_token_search_omits_assertion_when_field_read_is_denied` prüft zusätzlich den echten Storage-Endpunkt. |
+| Graph | `hidden_nodes_and_edges_are_filtered_before_budgets_and_traversal` |
+| COUNT, EXISTS und GroupedCount | `count_exists_and_grouped_count_consume_only_visible_resolved_rows` |
+| ConflictReport | `conflict_report_filter_keeps_only_authorized_facts` |
+| Cursor | `paired_unknown_expired_and_restarted_cursor_errors_share_public_observation` |
+| Public Errors | `paired_internal_error_id_is_hidden_by_the_public_error_projection`; `paired_world_compares_values_shapes_public_errors_and_cursor_behavior` |
+| Logical Export | `paired_export_omits_unselected_history_spaces_from_records_and_manifest` |
+| Required Audit | `paired_required_audit_fault_hides_the_attempted_policy_fingerprint`; `required_audit_failure_blocks_policy_change_without_partial_effect` |
+
+Im Storage-Adapter werden Assertions jetzt bereits vor dem Klonen in den TokenSearch-Verlauf gegen `AssertionRead` und das ausgewählte `FieldRead` geprüft. Der Adapter prüft dieselben Rechte vor dem Zugriff auf Subject, Predicate, Kontextpartition, Gültigkeit und Wert erneut. Die Core-Suche filtert weiterhin vor Tokenisierung, sichtbaren Kandidatenbudgets und Ergebnisaufbau. Der Regressionstest bestätigt insbesondere, dass ein verborgener ungültiger Wert keinen inhaltsabhängigen Fehler erzeugt.
+
+## Lokale Messung
+
+Der Release-Probe unter Windows mischt 101 Messpaare für sichtbare Suche und dieselbe Suche mit 4.096 synthetisch wiederholten, verweigerten SearchDocuments:
+
+| Plattform und Eingabe | p50 | p95 | p99 |
+|---|---:|---:|---:|
+| Windows, nur sichtbares Dokument | 700 ns | 1.400 ns | 2.300 ns |
+| Windows, zusätzlich 4.096 verborgene Kandidaten | 57.300 ns | 97.500 ns | 123.800 ns |
+| WSL2/Ubuntu 26.04, nur sichtbares Dokument | 216 ns | 409 ns | 490 ns |
+| WSL2/Ubuntu 26.04, zusätzlich 4.096 verborgene Kandidaten | 53.555 ns | 58.819 ns | 74.338 ns |
+
+Das Ergebnis und die sichtbare Budgetklasse bleiben gleich. Die Messung zeigt aber eine messbare lineare Scan-Kostenkomponente. Die 4.096 Zeilen verwenden absichtlich wiederholt dieselbe verweigerte Record-ID; dies ist ein adversariales synthetisches Lastprofil und kein repräsentativer Indexkorpus. Die absolute p95 liegt in diesem Profil unter 100 µs. Daraus folgt keine Constant-Time-Garantie. Ein repräsentativer, versionierter Korpus mit p50/p95/p99 und Peak RSS bleibt für M9-07 erforderlich.
+
+Der Debug-Probe wurde ebenfalls ausgeführt, ist aber nicht als Performancewert zu verwenden: p50 5,5 µs ohne und 1,0925 ms mit 4.096 verborgenen Zeilen. Maßgeblich für die obige Einordnung ist die optimierte Release-Messung.
+
+## Lokale Verifikation
+
+- Windows `cargo test --locked -p worlddb-core`: 527 Unit- und 87 Rustdoc-Tests bestanden.
+- Windows `cargo test --locked -p worlddb-storage-file --lib`: 117 Unit-Tests bestanden, 0 fehlgeschlagen, 2 ignoriert (29,43 s).
+- `cargo clippy --locked -p worlddb-core -p worlddb-storage-file --all-targets -- -D warnings`: bestanden.
+- `cargo fmt --all`: ausgeführt.
+- Die gezielten Paarwelt-, Timing-, Export-, Cursor-, Conflict-, Required-Audit-, Aggregat- und Adaptertests bestanden.
+- WSL2/Ubuntu: die Core-Suite bestand mit 527 Unit- und 87 Rustdoc-Tests. Die vollständige Storage-Suite bestand nach dem Fix dreimal mit der Standardparallelität (je 105 bestanden, 0 fehlgeschlagen, 1 ignoriert; letzter Lauf 1,78 s). Striktes Linux-Clippy für Core und Storage bestand.
+- `.github/workflows/m9-06-security-hardening.yml` bindet den PR-Lauf an den vorhandenen wiederverwendbaren `macos-msrv`-Job; der native macOS-Lauf steht noch aus.
+
+Die vorherigen parallelen WSL-Läufe hatten wechselnde Fehler mit `database writer lock is already held`. Die Ursache war der Fork/Exec-Übergang in den Prozessabbruchtests: Der kurzlebige Kindprozess erbte offene `WriterLock`-Deskriptoren aus parallelen Tests. Fiel das Schließen des Elternhandles in dieses Zeitfenster, blieb der `flock` bis zum Exec vorübergehend aktiv. Die Test-Builds registrieren nun aktive `WriterLock`-Handles; ein Kindprozessstart wartet, bis diese Handles geschlossen sind. Die Synchronisierung betrifft ausschließlich Tests und ändert das Produktionsverhalten nicht. Drei vollständige parallele WSL-Läufe und der finale vollständige Windows-Lauf bestanden danach.
+
+## Noch offen
+
+- Die Paarwelt-Cases auf macOS wiederholen und das Plattformartefakt ablegen.
+- Die beobachtbare Laufzeitabhängigkeit von der Zahl verborgener Quellzeilen bleibt eine dokumentierte Grenze. Es gibt keine Constant-Time-Behauptung; ein realistischer Korpus und eine Produktentscheidung über die gemessene Restabweichung gehören zur M9-07-Abnahme.
+- M9-04a/b/c-Fuzzkampagnen und ihre noch ausstehende plattformübergreifende Triage bleiben unabhängige offene Tasks.

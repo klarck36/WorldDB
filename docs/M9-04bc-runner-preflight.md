@@ -86,3 +86,32 @@ registered 86,400-second profiles:
 All four were confirmed live after startup. Eight import targets and seven
 recovery targets still need their long campaigns. The separate M9-04a
 `engine_ipc_request` campaign is recorded in the M9-04a preflight report.
+
+## Monitoring update — 7 October 2026, 18:23 CEST
+
+All four M9-04b/c processes were alive at the check, with no completion
+manifest. Their latest resource samples were written through 18:23 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run-folder size |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 13,422.6 s | 15,460.9 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | 12,916.7 s | 4,667.1 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_recovery_prefix` | 28428 | 13,418.9 s | 4,628.9 s | 39.6 MiB | 926.4 MB |
+| `storage_wal_payloads` | 7348 | 12,913.2 s | 14,248.9 s | 38.6 MiB | 926.4 MB |
+
+Next process and sample check: 18:38 CEST.
+
+## Monitoring update — 7 October 2026, 18:38 CEST
+
+All four active M9-04b/c processes were alive at the check, and none of the
+run folders contained a completion manifest. Resource samples were current
+through 18:38:22 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 14,308.5 s | 16,487.6 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | 13,802.3 s | 5,008.9 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_recovery_prefix` | 28428 | 14,272.2 s | 4,938.2 s | 39.6 MiB | 926.4 MB |
+| `storage_wal_payloads` | 7348 | 13,766.5 s | 15,200.2 s | 38.6 MiB | 926.4 MB |
+
+Next process and sample check: 18:53 CEST.

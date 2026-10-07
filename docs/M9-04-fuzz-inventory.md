@@ -52,11 +52,16 @@ with no crashes and 632,274 calls; M9-04b/c passed 19 more routes with no
 crashes and 166,878 calls. The first `cli_arguments` run attempt was stopped
 after 239 seconds because its output path was under OneDrive; its manifest is
 retained as FAIL and it is not campaign evidence. The valid retry started on
-commit `1b25d6e` at 14:36:08 CEST. Three more clean-commit Rust campaigns started
-on `7c5e1e3`: `engine_ipc_request`, `cli_import_mapping`, and
+commit `1b25d6e` at 14:36:08 CEST but failed after 1,517.037 seconds and
+16,223,900 rounds when one 41-byte mutation exceeded the 2-second input
+timeout. An exact 10-second replay completed 90,051 rounds without reproducing
+the timeout; this is not a campaign pass, and another full retry is required.
+Three more clean-commit Rust campaigns started on `7c5e1e3`:
+`engine_ipc_request`, `cli_import_mapping`, and
 `storage_wal_recovery_prefix`. Two more started on clean commit `681e1e2`:
-`cli_migration_plan_json` and `storage_wal_payloads`. All six Rust campaigns are
-currently RUNNING under M9-04a/b/c and write outside the synchronized workspace. The initial
+`cli_migration_plan_json` and `storage_wal_payloads`. Of the six valid Rust
+campaigns launched so far, the `cli_arguments` retry failed and five remain
+active under M9-04a/b/c, writing outside the synchronized workspace. The initial
 TypeScript long-run attempt failed on Node's worker URL type check and is not
 evidence. The worker now receives `new URL(import.meta.url)`; the TypeScript
 input cap was raised to 67,108,880 bytes for the registered 64-MiB envelope

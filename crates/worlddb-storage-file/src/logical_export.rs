@@ -1826,7 +1826,7 @@ mod tests {
         Lifecycle, OperationId, PerspectiveDefinitionRevision, PerspectiveId, PolicyRuleId,
         PolicyScope, PolicySubject, Principal, PrincipalId, Record, RecordKind, RecordRef,
         Revision, SchemaRevision, SecurityEpoch, SecurityPolicyHistory, SecurityPolicySnapshot,
-        SecurityPolicyVersion, Symbol,
+        SecurityPolicyVersion, Symbol, decode_record, encode_record,
     };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -2108,6 +2108,55 @@ mod tests {
         assert_eq!(decoded.manifest(), export.manifest());
         assert_eq!(decoded.records().len(), export.records().len());
         assert_eq!(decoded.encode().map_err(|error| error.to_string())?, bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn paired_export_omits_unselected_history_spaces_from_records_and_manifest()
+    -> Result<(), String> {
+        let selected_space = id::<HistorySpaceId>(31)?;
+        let hidden_space = id::<HistorySpaceId>(32)?;
+        let database_id = id::<DatabaseId>(33)?;
+        let scope = LogicalExportScope::new(
+            Revision::GENESIS,
+            Revision::GENESIS,
+            vec![selected_space],
+            vec![RecordKind::HistorySpaceDefinition],
+        )
+        .map_err(|error| error.to_string())?;
+        let definition = |history_space| {
+            HistorySpaceDefinition::new(history_space, None, Revision::GENESIS)
+                .map(Record::HistorySpaceDefinition)
+                .map_err(|error| error.to_string())
+        };
+        let decode = |record: Record| {
+            let bytes = encode_record(&record).map_err(|error| error.to_string())?;
+            decode_record(&bytes).map_err(|error| error.to_string())
+        };
+        let baseline = super::build_export(
+            database_id,
+            Revision::GENESIS,
+            &scope,
+            vec![decode(definition(selected_space)?)?],
+        )
+        .map_err(|error| error.to_string())?;
+        let alternate = super::build_export(
+            database_id,
+            Revision::GENESIS,
+            &scope,
+            vec![
+                decode(definition(selected_space)?)?,
+                decode(definition(hidden_space)?)?,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+        assert_eq!(
+            baseline.encode().map_err(|error| error.to_string())?,
+            alternate.encode().map_err(|error| error.to_string())?
+        );
+        assert_eq!(alternate.manifest().visible_history_spaces().len(), 1);
+        assert_eq!(alternate.records().len(), 1);
         Ok(())
     }
 
@@ -2457,13 +2506,14 @@ mod tests {
             let layout = area.layout()?;
             install_two_segment_history(&layout)?;
             let artifact_path = area.0.join(format!("{checkpoint}.wdblex"));
-            let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, layout.root())
-                .env(ARTIFACT_ENV, &artifact_path)
-                .env("WORLDDB_M7_16F_LOGICAL_CRASH_AT", checkpoint)
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, layout.root())
+                    .env(ARTIFACT_ENV, &artifact_path)
+                    .env("WORLDDB_M7_16F_LOGICAL_CRASH_AT", checkpoint),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "logical-export child at {checkpoint} exited with {:?}, expected 86",

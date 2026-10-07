@@ -73,14 +73,14 @@ separate-process round-trip passes.
 
 The first `cli_arguments` attempt was terminated after 239 seconds because the
 original output path was inside the OneDrive-synchronized workspace. Its
-manifest remains `FAIL`; it is not campaign evidence. The valid retry is
-running outside OneDrive:
+manifest remains `FAIL`; it is not campaign evidence. A valid retry then ran
+outside OneDrive but failed on a parser timeout:
 
 - Run ID: `M9-04-cli_arguments-574f524c44444232-20261007T123608Z`
 - Source commit: `1b25d6e`; clean working tree
 - Started: 7 October 2026, 14:36:08 CEST; 86,400 seconds requested
-- Outcome: `FAIL` after 1,515.322 seconds and 16,223,900 rounds. One 41-byte mutation of seed line 3 (`v1 verify --database!C:\worlddb\synthetic`) exceeded the 2-second input timeout. Manifest, crash input, resource samples, and coverage remain under `%LOCALAPPDATA%\WorldDB\fuzz-results\M9-04-cli_arguments-574f524c44444232-20261007T123608Z`.
-- Triage replay of that exact input used the same 2-second timeout for 10 seconds: 90,051 rounds, 0 crashes. The timeout was not reproduced; it is an unconfirmed scheduling/runner outlier, not a campaign pass or a confirmed parser defect. A fresh 86,400-second retry remains required and will start after current campaign/resource checks.
+- Outcome: `FAIL` after 1,517.037 seconds and 16,223,900 rounds. One 41-byte mutation of seed line 3 (`v1 verify --database!C:\worlddb\synthetic`) exceeded the 2-second input timeout. Manifest, crash input, resource samples, and coverage remain under `%LOCALAPPDATA%\WorldDB\fuzz-results\M9-04-cli_arguments-574f524c44444232-20261007T123608Z`.
+- Triage replay of that exact input used the same 2-second timeout for 10 seconds: 90,051 rounds, 0 crashes. The timeout was not reproduced; it is an unconfirmed scheduling/runner outlier, not a campaign pass or a confirmed parser defect. A further fresh 86,400-second retry remains required after the active campaigns finish and their resource evidence is collected.
 
 A second M9-04a Rust campaign is running from the clean `7c5e1e3` source:
 
@@ -103,9 +103,40 @@ running:
 
 ## Pending campaign work
 
-- Monitor the active `cli_arguments`, `engine_ipc_request`, and
-  `typescript.json_envelope` runs, then cover the remaining 91 core/TypeScript
-  and 33 additional M9-04a targets using their registered profiles.
+- Monitor the active `engine_ipc_request` and `typescript.json_envelope` runs.
+  After the active campaigns finish and resource checks are collected, restart
+  a full 86,400-second `cli_arguments` campaign, then cover the remaining 91
+  core/TypeScript and 33 additional M9-04a targets using their registered
+  profiles.
 - Preserve each run manifest, seed hashes, fuzzer report, resource samples,
   and any crash inputs under `%LOCALAPPDATA%\WorldDB\fuzz-results`.
 - Triage crashes and resource-limit outcomes before M9-04d closure.
+
+## Monitoring update — 7 October 2026, 18:23 CEST
+
+Both active M9-04a processes were alive at the check, with no completion
+manifest. Their latest resource samples were written through 18:23 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run-folder size |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 13,425.9 s | 15,295.8 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 13,055.9 s | 12,844.7 s | 329.8 MiB | 14.8 KiB |
+
+The separate `cli_arguments` retry remains queued until these active campaigns
+finish and their final resource evidence is collected. Next process and sample
+check: 18:38 CEST.
+
+## Monitoring update — 7 October 2026, 18:38 CEST
+
+Both active M9-04a processes were alive at the check, and neither run folder
+contained a completion manifest. Resource samples were current through
+18:38:22 CEST:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 14,282.6 s | 16,281.2 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 13,909.8 s | 13,687.3 s | 309.0 MiB | 15.8 KiB |
+
+The separate `cli_arguments` retry remains queued until the active campaigns
+finish and their final resource evidence is collected. Next process and sample
+check: 18:53 CEST.

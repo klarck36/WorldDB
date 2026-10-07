@@ -3330,14 +3330,15 @@ mod tests {
         ] {
             let database = TempDatabase::create()?;
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point} exited with {:?}, expected crash code 86",

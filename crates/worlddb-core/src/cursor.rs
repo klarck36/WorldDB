@@ -603,6 +603,9 @@ mod tests {
         CursorStoreLimits, CursorToken, QueryHash,
     };
     use crate::ids::{DomainId, PolicyRuleId, PrincipalId, SecurityEpoch};
+    use crate::non_interference::{
+        CursorObservation, PairedWorld, PublicFailure, PublicObservation,
+    };
     use crate::record_refs::SnapshotRef;
 
     fn limits(
@@ -680,6 +683,56 @@ mod tests {
             first_session.resolve_inner(&wire, 101, snapshot, query_hash, false),
             Err(CursorStateError::CursorInvalidated)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn paired_unknown_expired_and_restarted_cursor_errors_share_public_observation()
+    -> Result<(), CursorStateError> {
+        let mut first_session = CursorStateStore::new(limits(2, 64, 5_000)?)?;
+        let snapshot = test_snapshot()?;
+        let query_hash = QueryHash::new([13; 32]);
+        let token = first_session.insert(snapshot, query_hash, vec![7, 8, 9], 10, 100)?;
+        let wire = token.encode();
+        let mut restarted_session = CursorStateStore::new(limits(2, 64, 5_000)?)?;
+        let restarted =
+            match restarted_session.resolve_inner(&wire, 11, snapshot, query_hash, false) {
+                Err(CursorStateError::CursorInvalidated) => CursorStateError::CursorInvalidated,
+                Err(error) => return Err(error),
+                Ok(_) => return Err(CursorStateError::InvalidExpiry),
+            };
+        let expired = match first_session.resolve_inner(&wire, 101, snapshot, query_hash, false) {
+            Err(CursorStateError::CursorInvalidated) => CursorStateError::CursorInvalidated,
+            Err(error) => return Err(error),
+            Ok(_) => return Err(CursorStateError::InvalidExpiry),
+        };
+        let unknown = match first_session.resolve_inner(&wire, 11, snapshot, query_hash, false) {
+            Err(CursorStateError::CursorInvalidated) => CursorStateError::CursorInvalidated,
+            Err(error) => return Err(error),
+            Ok(_) => return Err(CursorStateError::InvalidExpiry),
+        };
+
+        let worlds = PairedWorld::new((), restarted, expired);
+        worlds
+            .compare(|(), error| {
+                PublicObservation::<()>::failure(
+                    PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                    vec!["error".to_owned()],
+                    CursorObservation::Invalidated,
+                )
+            })
+            .map_err(|_| CursorStateError::InvalidExpiry)?;
+
+        let worlds = PairedWorld::new((), expired, unknown);
+        worlds
+            .compare(|(), error| {
+                PublicObservation::<()>::failure(
+                    PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                    vec!["error".to_owned()],
+                    CursorObservation::Invalidated,
+                )
+            })
+            .map_err(|_| CursorStateError::InvalidExpiry)?;
         Ok(())
     }
 

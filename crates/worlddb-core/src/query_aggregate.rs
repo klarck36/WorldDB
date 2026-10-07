@@ -567,15 +567,45 @@ mod tests {
             })
             .map_err(|_| AggregateError::QueryBindingMismatch)?;
         assert_eq!(count.value(), &AggregateResult::Count(2));
+        let exists_spec = AggregateSpec::Exists;
+        let grouped_spec = AggregateSpec::grouped_count(vec![fixture.selector])?;
+        for spec in [&exists_spec, &grouped_spec] {
+            PairedWorld::new((&resolved, &visible_only), false, true)
+                .compare(|(all_rows, visible_rows), include_hidden| {
+                    let input = if *include_hidden {
+                        *all_rows
+                    } else {
+                        *visible_rows
+                    };
+                    match aggregate_visible_resolved(
+                        input,
+                        spec,
+                        &fixture.context,
+                        &fixture.policies,
+                    ) {
+                        Ok(result) => PublicObservation::success(
+                            result.value().clone(),
+                            vec!["aggregate".to_owned()],
+                            CursorObservation::Absent,
+                        ),
+                        Err(error) => PublicObservation::failure(
+                            PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                            vec!["error".to_owned()],
+                            CursorObservation::Absent,
+                        ),
+                    }
+                })
+                .map_err(|_| AggregateError::QueryBindingMismatch)?;
+        }
         let exists = aggregate_visible_resolved(
             &resolved,
-            &AggregateSpec::Exists,
+            &exists_spec,
             &fixture.context,
             &fixture.policies,
         )?;
         let visible_exists = aggregate_visible_resolved(
             &visible_only,
-            &AggregateSpec::Exists,
+            &exists_spec,
             &fixture.context,
             &fixture.policies,
         )?;
@@ -584,13 +614,13 @@ mod tests {
 
         let grouped = aggregate_visible_resolved(
             &resolved,
-            &AggregateSpec::grouped_count(vec![fixture.selector])?,
+            &grouped_spec,
             &fixture.context,
             &fixture.policies,
         )?;
         let visible_grouped = aggregate_visible_resolved(
             &visible_only,
-            &AggregateSpec::grouped_count(vec![fixture.selector])?,
+            &grouped_spec,
             &fixture.context,
             &fixture.policies,
         )?;

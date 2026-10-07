@@ -485,6 +485,8 @@ impl From<SecurityPolicyHistoryError> for QuerySearchError {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::time::Instant;
+
     use super::{
         QuerySearchError, SearchDocument, SearchMatch, SearchSpec, SearchTextField, SearchToken,
         full_scan_token_search,
@@ -1031,6 +1033,95 @@ pub(crate) mod tests {
         assert_eq!(hit.result_key(), RecordRef::Assertion(id::<AssertionId>(6)));
         assert_eq!(hit.matched_fields(), &[fixture.selector]);
         assert_eq!(result.binding(), fixture.context.schema_binding());
+        Ok(())
+    }
+
+    #[test]
+    fn m9_06_search_hidden_candidate_timing_probe() -> Result<(), QuerySearchError> {
+        const HIDDEN_ROWS: usize = 4_096;
+        const SAMPLES: usize = 101;
+
+        let hidden = RecordRef::Assertion(id::<AssertionId>(7));
+        let fixture = fixture(Some(hidden), 10);
+        let visible = vec![document(&fixture, 6, "needle visible result")?];
+        let hidden_document = document(&fixture, 7, "secret text that must not be tokenized")?;
+        let mut with_hidden = Vec::with_capacity(HIDDEN_ROWS.saturating_add(1));
+        with_hidden.push(
+            visible
+                .first()
+                .cloned()
+                .ok_or(QuerySearchError::DuplicateResultKey)?,
+        );
+        for _ in 0..HIDDEN_ROWS {
+            with_hidden.push(hidden_document.clone());
+        }
+        let request = SearchSpec::new(
+            vec![fixture.selector],
+            vec![SearchToken::new("needle")?],
+            SearchMatch::AnyTerm,
+        )?;
+        let mut visible_samples = Vec::with_capacity(SAMPLES);
+        let mut hidden_samples = Vec::with_capacity(SAMPLES);
+
+        for _ in 0..8 {
+            let _ = full_scan_token_search(
+                &visible,
+                &request,
+                &[fixture.selector],
+                &fixture.context,
+                &fixture.policies,
+            )?;
+            let _ = full_scan_token_search(
+                &with_hidden,
+                &request,
+                &[fixture.selector],
+                &fixture.context,
+                &fixture.policies,
+            )?;
+        }
+        for sample in 0..SAMPLES {
+            let (first, second) = if sample % 2 == 0 {
+                (
+                    (&visible, &mut visible_samples),
+                    (&with_hidden, &mut hidden_samples),
+                )
+            } else {
+                (
+                    (&with_hidden, &mut hidden_samples),
+                    (&visible, &mut visible_samples),
+                )
+            };
+            for (documents, timings) in [first, second] {
+                let started = Instant::now();
+                let result = full_scan_token_search(
+                    documents,
+                    &request,
+                    &[fixture.selector],
+                    &fixture.context,
+                    &fixture.policies,
+                )?;
+                if result.value().len() != 1 {
+                    return Err(QuerySearchError::DuplicateResultKey);
+                }
+                timings.push(started.elapsed().as_nanos());
+            }
+        }
+
+        let percentile = |samples: &[u128], percentile: usize| {
+            let mut ordered = samples.to_vec();
+            ordered.sort_unstable();
+            let rank = ordered.len().saturating_sub(1).saturating_mul(percentile) / 100;
+            ordered.get(rank).copied().unwrap_or_default()
+        };
+        println!(
+            "M9-06 timing Search: hidden_rows=0 p50={}ns p95={}ns p99={}ns; hidden_rows={HIDDEN_ROWS} p50={}ns p95={}ns p99={}ns; samples={SAMPLES}",
+            percentile(&visible_samples, 50),
+            percentile(&visible_samples, 95),
+            percentile(&visible_samples, 99),
+            percentile(&hidden_samples, 50),
+            percentile(&hidden_samples, 95),
+            percentile(&hidden_samples, 99),
+        );
         Ok(())
     }
 

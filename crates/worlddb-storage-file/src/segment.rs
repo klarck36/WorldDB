@@ -1176,6 +1176,7 @@ mod tests {
     use super::{ContentDigest, segment_path};
     #[cfg(windows)]
     use super::{HistorySegmentStore, ReclamationCheckpoint, SegmentIoCheckpoint};
+    #[cfg(windows)]
     use crate::DatabaseLayout;
     #[cfg(windows)]
     use crate::SegmentId;
@@ -1190,6 +1191,7 @@ mod tests {
     };
 
     static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+    #[cfg(windows)]
     static NEXT_TEMP_DATABASE: AtomicU64 = AtomicU64::new(0);
 
     struct TempFile(PathBuf);
@@ -1212,8 +1214,10 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     struct TempDatabase(PathBuf);
 
+    #[cfg(windows)]
     impl TempDatabase {
         fn create() -> Result<Self, String> {
             let sequence = NEXT_TEMP_DATABASE.fetch_add(1, Ordering::Relaxed);
@@ -1230,6 +1234,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     impl Drop for TempDatabase {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
@@ -1334,14 +1339,15 @@ mod tests {
         ] {
             let database = TempDatabase::create()?;
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point_name)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point_name)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point:?} exited with {:?}, expected crash code 86",
@@ -1462,16 +1468,17 @@ mod tests {
             assert!(retired_path.is_file());
             drop(lock);
 
-            let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point_name)
-                .env(ID_ENV, hex(reference.id().to_bytes()))
-                .env(DIGEST_ENV, hex(*reference.content_digest().as_bytes()))
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point_name)
+                    .env(ID_ENV, hex(reference.id().to_bytes()))
+                    .env(DIGEST_ENV, hex(*reference.content_digest().as_bytes()))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point:?} exited with {:?}, expected crash code 86",

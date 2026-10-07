@@ -902,13 +902,14 @@ mod tests {
         target: &std::path::Path,
         checkpoint: &str,
     ) -> Result<Output, String> {
-        Command::new(executable)
-            .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
-            .env(BACKUP_ENV, backup)
-            .env(TARGET_ENV, target)
-            .env(CHECKPOINT_ENV, checkpoint)
-            .output()
-            .map_err(|error| format!("spawn restore child for {checkpoint}: {error}"))
+        crate::writer_lock::test_command_output(
+            Command::new(executable)
+                .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
+                .env(BACKUP_ENV, backup)
+                .env(TARGET_ENV, target)
+                .env(CHECKPOINT_ENV, checkpoint),
+        )
+        .map_err(|error| format!("spawn restore child for {checkpoint}: {error}"))
     }
 
     fn output_text(output: &Output) -> String {

@@ -1,0 +1,26 @@
+name: M9-06 Security Hardening
+
+on:
+  pull_request:
+    branches:
+      - codex/worlddb-project-integration
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/**"
+      - "experiments/ode-002/**"
+      - "tools/**"
+      - "policy/**"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-security:
+    name: macOS security and storage verification
+    uses: ./.github/workflows/m0-14-ci-job.yml
+    with:
+      job_id: macos-msrv
+      runs_on: macos-latest

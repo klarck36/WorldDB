@@ -209,6 +209,18 @@ pub enum BudgetDimension {
     Results,
 }
 
+/// Coarse budget class safe for public status and timing buckets.
+///
+/// Semantic candidate, work-unit, and result limits intentionally share one class so
+/// callers do not learn which hidden-data-dependent counter reached its limit first.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum QueryBudgetClass {
+    /// A complete semantic query result exceeded a configured work limit.
+    QueryWork,
+    /// A process-memory reservation could not be admitted.
+    ProcessMemory,
+}
+
 /// Invalid requested or configured query work limit.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum QueryBudgetError {
