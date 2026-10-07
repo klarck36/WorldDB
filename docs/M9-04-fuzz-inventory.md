@@ -60,7 +60,7 @@ TypeScript long-run attempt failed on Node's worker URL type check and is not
 evidence. The worker now receives `new URL(import.meta.url)`; the TypeScript
 input cap was raised to 67,108,880 bytes for the registered 64-MiB envelope
 boundary. The fix passed `pnpm verify` and a one-second smoke (24 parser calls,
-no crashes, two V8 coverage files); its valid long-run retry is pending.
+no crashes, two V8 coverage files); its valid long-run retry is now RUNNING: `M9-04-typescript.json_envelope-574f524c44444232-20261007T124618Z`, clean commit `e53c8c7`, started 14:46:18 CEST.
 M9-04a/b/c own the long runs; M9-04d owns crash triage and closure. Preflight
 results are recorded in [M9-04a runner preflight](M9-04a-runner-preflight.md)
 and [M9-04b/c runner preflight](M9-04bc-runner-preflight.md).

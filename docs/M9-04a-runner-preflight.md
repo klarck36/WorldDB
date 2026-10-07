@@ -93,13 +93,17 @@ worker now uses `new URL(import.meta.url)`, and the `typescript_cpu` input limit
 is 67,108,880 bytes so the registered 64-MiB boundary seed fits. `pnpm verify`
 and a one-second post-fix smoke passed with 24 parser calls, no crashes, and two
 Node V8 coverage files. The corrected 86,400-second TypeScript campaign is
-pending a clean commit.
+running:
+
+- Run ID: `M9-04-typescript.json_envelope-574f524c44444232-20261007T124618Z`
+- Source commit: `e53c8c7`; clean working tree
+- Started: 7 October 2026, 14:46:18 CEST
 
 ## Pending campaign work
 
-- Continue the active `cli_arguments` and `engine_ipc_request` runs, start the
-  corrected TypeScript 86,400-second run, then cover the remaining 90 core /
-  TypeScript and 33 additional M9-04a targets using their registered profiles.
+- Monitor the active `cli_arguments`, `engine_ipc_request`, and
+  `typescript.json_envelope` runs, then cover the remaining 91 core/TypeScript
+  and 33 additional M9-04a targets using their registered profiles.
 - Preserve each run manifest, seed hashes, fuzzer report, resource samples,
   and any crash inputs under `%LOCALAPPDATA%\WorldDB\fuzz-results`.
 - Triage crashes and resource-limit outcomes before M9-04d closure.
