@@ -6,7 +6,7 @@
 
 Jeder Fall benennt ein plattformneutrales `scenario` und getrennte `drivers` für Windows, macOS und Linux. Der Windows-Einstieg löst Fall-ID, Prozessmodus und Treiber aus diesem Katalog auf, statt die PowerShell-Treiber zusätzlich fest zu verdrahten. `tools/check_native_e2e_suite.py` prüft eindeutige IDs, vollständige Szenario-/Prozessmodusabdeckung, OS-/Dateisystembindungen, sichere Treiberpfade sowie Übereinstimmung zwischen verfügbaren Plattformen und vorhandenen Treibern. Neun Mutationsprüfungen in `tools/test_native_e2e_suite.py` schützen diese Regeln; beide Prüfungen laufen in `cargo xtask verify`. Der Gesamtverifier bestand auf Windows mit 41 Schritten, einem vorgesehenen Skip und null Fehlern.
 
-Für Windows/NTFS sind die nativen Treiber verfügbar. macOS/APFS und Linux/ext4 haben im gemeinsamen Katalog weiterhin `state: deferred`, keinen Suite-Einstieg und keine Falltreiber. Das ist die vereinbarte Verschiebung der nativen Ausführung und Belege bis M9-07; die portablen Szenariodefinitionen bleiben bereits jetzt gemeinsam.
+Für Windows/NTFS und macOS/APFS sind native Treiber im gemeinsamen Katalog verfügbar. Der Windows-Lauf ist bestanden; der macOS-Runner und WebDriver-Tastatur-/Crash-Treiber sind in Umsetzung und müssen noch auf einem nativen APFS-Runner bestehen. Linux/ext4 bleibt bis M9-07 `deferred` und hat weiterhin keinen Runner.
 
 Jeder Lauf erhält eine eindeutige Run-ID und ein `manifest.json` nach `docs/schemas/native-e2e-evidence.schema.json`. Das Manifest hält Commit und Dirty-Zustand, OS-Version, Dateisystem, Toolchain, SHA-256-Hashes der Builds, Fallresultate und gehashte Ausgabedateien fest. Die nativen Smoke-Skripte archivieren ihre temporären Projektdaten und Prozesslogs im Run-Ordner. Fehler behalten dadurch die Eingaben und Logs, die zur Reproduktion benötigt werden.
 
@@ -41,9 +41,15 @@ Die vollständige saubere Wiederholung mit dieser Korrektur besteht in `experime
 
 Der Windows/NTFS-Profillauf mit dem aktuellen Katalog ist auf sauberem Commit bestanden. M8-26, M8-26a und die Windows-Abnahme M8-26d sind damit abgeschlossen. Die APFS- und ext4-Treiber/Runs bleiben als M8-26b/c bis M9-07 zurückgestellt; M9-07 hängt ausdrücklich von diesen Profilen und den 18 invariantenspezifischen Folgebelegen ab. M8-27 kann das Windows-Profil jetzt abnehmen, ohne die späteren Plattformprüfungen zu überspringen.
 
+## macOS/APFS-Runner in Umsetzung
+
+`experiments/ode-002/scripts/run-native-e2e-macos.mjs` führt die gemeinsamen IPC- und Writer-Lock-Smokes sowie Tastatur-/Commit-Recovery-Fälle auf macOS aus. Dafür nutzt der Desktop ein optionales `native-e2e`-Feature mit `tauri-plugin-wdio-webdriver`; die Pluginregistrierung ist auf Debug-Builds begrenzt. Die normalen Release-Builds aktivieren das Feature nicht. Der Treiber verbindet WebdriverIO direkt mit dem eingebetteten W3C-WebDriver, prüft Tastatureingabe, Tab/Enter, den WAL-Abbruchpunkt und die anschließende read-only Recovery. Die PowerShell-Smokes verwenden unter macOS `lsof` für die Prüfung auf TCP-Listener.
+
+`.github/workflows/m8-26b-native-macos-e2e.yml` führt die Suite auf einem macOS-Hosted-Runner aus, prüft APFS vor dem Lauf und archiviert Manifest sowie Rohbelege. Lokale Windows-Validierungen bestehen für den Katalog, dessen neun Mutationstests, Node-/PowerShell-Syntax und den Cargo-Build mit `native-e2e`; `cargo xtask verify` bestand mit 45 PASS, einem erwarteten Skip und null Fehlern. M8-26b bleibt RUNNING, bis ein echter macOS/APFS-Lauf mit `PASS` und geprüften Artefakthashes vorliegt.
+
 ## Plattformstatus
 
-Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS und Linux/ext4 bleiben gemäß Projektvorgabe bis M9-07 zurückgestellt; dieser Rechner kann deren native Läufe nicht belegen. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.
+Windows/NTFS ist lokal ausgeführt und bestanden, einschließlich des aktuellen Runnerlaufs aus dem gemeinsamen Katalog. macOS/APFS wird mit dem neuen nativen Runner ausgeführt; bis zum echten Hosted-Runner-Nachweis ist das Profil noch offen. Linux/ext4 bleibt gemäß Projektvorgabe bis M9-07 zurückgestellt. Die offenen Plattformläufe sind M9-07-Voraussetzungen; die M8-Abnahme bezieht sich auf den Windows-Arbeitsumfang.
 
 ## Ausführung
 

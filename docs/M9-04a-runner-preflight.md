@@ -181,3 +181,43 @@ completion manifest:
 
 Next process and sample check: 20:00 CEST. The fresh `cli_arguments` retry
 remains queued until the active campaigns finish.
+
+## Monitoring update — 7 October 2026, 20:00 CEST
+
+Both active M9-04a processes were alive at 20:00:25 CEST. Their samples were
+current through 20:00:06 CEST; neither run folder had a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 19,191.4 s | 21,915.9 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 18,824.5 s | 18,529.8 s | 330.1 MiB | 21.4 KiB |
+
+Next process and sample check: 20:15 CEST. The fresh `cli_arguments` retry
+remains queued until the active campaigns finish.
+
+## Monitoring update — 7 October 2026, 20:20 CEST
+
+Both active M9-04a processes were alive at 20:19:58 CEST. Resource samples
+were current through 20:20:04 CEST; neither run folder contained a completion
+manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 20,393.7 s | 23,298.4 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 20,022.7 s | 19,712.1 s | 351.1 MiB | 22.7 KiB |
+
+Next process and sample check: 20:35 CEST. The fresh `cli_arguments` retry
+remains queued until the active campaigns finish.
+
+## Monitoring update — 7 October 2026, 20:33 CEST
+
+Both active M9-04a processes were alive at 20:33:42 CEST. Samples were current
+through 20:33:16 CEST; neither active run folder had a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 21,188.3 s | 24,179.7 s | 54.5 MiB | 1.21 GB |
+| `typescript.json_envelope` | 18840 | 20,811.9 s | 20,480.1 s | 351.6 MiB | 23.6 KiB |
+
+Next process and sample check: 20:50 CEST. The fresh `cli_arguments` retry
+remains queued until the active campaigns finish.

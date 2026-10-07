@@ -159,3 +159,56 @@ a completion manifest:
 | `storage_wal_payloads` | 7348 | 17,773.2 s | 19,651.1 s | 38.6 MiB | 926.4 MB |
 
 Next process and sample check: 20:00 CEST.
+
+## Monitoring update — 7 October 2026, 20:00 CEST
+
+All four active M9-04b/c processes were alive at 20:00:25 CEST. Their samples
+were current through 20:00:22 CEST; none of the run folders had a completion
+manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 19,201.8 s | 22,158.3 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | 18,727.5 s | 6,986.6 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_recovery_prefix` | 28428 | 19,191.9 s | 6,748.3 s | 39.6 MiB | 926.4 MB |
+| `storage_wal_payloads` | 7348 | 18,687.8 s | 20,665.9 s | 38.6 MiB | 926.4 MB |
+
+Next process and sample check: 20:15 CEST.
+
+## Monitoring update — 7 October 2026, 20:20 CEST
+
+All four active M9-04b/c processes were alive at 20:19:58 CEST. Their samples
+were current through 20:20:07 CEST; none of the run folders had a completion
+manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 20,401.0 s | 23,547.1 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | 19,895.0 s | 7,464.0 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_recovery_prefix` | 28428 | 20,390.4 s | 7,200.4 s | 39.6 MiB | 926.4 MB |
+| `storage_wal_payloads` | 7348 | 19,885.9 s | 21,998.4 s | 38.6 MiB | 926.4 MB |
+
+Next process and sample check: 20:35 CEST.
+
+## Monitoring update — 7 October 2026, 20:33 CEST
+
+The active `cli_import_mapping`, `cli_migration_plan_json`, and
+`storage_wal_payloads` processes were alive at 20:33:42 CEST. Their samples
+were current through 20:33:37 CEST; none had a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | RUNNING | 21,223.2 s | 24,468.4 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | RUNNING | 20,717.2 s | 7,792.7 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_payloads` | 7348 | RUNNING | 20,677.0 s | 22,850.9 s | 38.6 MiB | 926.4 MB |
+
+`storage_wal_recovery_prefix` (PID 28428) exited during the local C: disk-full
+incident at 20:28 CEST. Its `fuzzer-report.json` records 817,647 rounds and an
+`os error 112` while writing the registered WAL seed fixture; the archived
+input is `crash-00817647.bin`. This is an environment write failure, not a
+completed 24-hour campaign or a confirmed parser crash. The run is invalid as
+campaign evidence and needs a full retry on D: after the current external runs
+finish. The fuzzer report, sample log, and input remain preserved in that run
+folder.
+
+Next process and sample check: 20:50 CEST.

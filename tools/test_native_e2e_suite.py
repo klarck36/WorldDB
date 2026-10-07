@@ -30,7 +30,12 @@ class NativeE2eSuiteTests(unittest.TestCase):
 
     def test_deferred_platform_cannot_claim_a_driver(self):
         suite = copy.deepcopy(self.suite)
-        suite["cases"][0]["drivers"]["macos"] = "scripts/run-macos-smoke.sh"
+        platform = next(
+            name
+            for name, profile in suite["platform_profiles"].items()
+            if profile["state"] == "deferred"
+        )
+        suite["cases"][0]["drivers"][platform] = f"scripts/run-{platform}-smoke.sh"
         self.assertTrue(any("must be null while that platform is deferred" in error for error in self.validate(suite)))
 
     def test_case_driver_cannot_escape_the_suite_root(self):

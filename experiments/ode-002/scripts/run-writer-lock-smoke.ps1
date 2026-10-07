@@ -4,11 +4,13 @@ param(
     [string]$Mode,
     [string]$WorkspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path,
     [string]$ExecutablePath = (Join-Path $WorkspaceRoot 'target\ode-002\debug\worlddb-ode-desktop-shell.exe'),
+    [string]$EngineExecutablePath,
     [switch]$KeepArtifacts,
     [string]$ArtifactsRoot
 )
 
 $ErrorActionPreference = 'Stop'
+$isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
 if ($ArtifactsRoot -and -not $KeepArtifacts) {
     throw 'ArtifactsRoot requires KeepArtifacts.'
 }
@@ -34,10 +36,21 @@ function Start-HiddenWorldDbApp([string]$Name, [string]$ResultPath, [int]$HoldMs
     $env:WORLDDB_ODE_DATABASE = $databaseRoot
     $env:WORLDDB_ODE_RESULT = $ResultPath
     $env:WORLDDB_ODE_AUTOCLOSE_MS = [string]$HoldMs
+    if ($Mode -eq 'sidecar' -and $EngineExecutablePath) {
+        $env:WORLDDB_ODE_ENGINE_EXECUTABLE = [System.IO.Path]::GetFullPath($EngineExecutablePath)
+    } else {
+        Remove-Item Env:\WORLDDB_ODE_ENGINE_EXECUTABLE -ErrorAction SilentlyContinue
+    }
     $stdout = Join-Path $testRoot ($Name + '.stdout.log')
     $stderr = Join-Path $testRoot ($Name + '.stderr.log')
-    return Start-Process -FilePath $executable -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $startParameters = @{
+        FilePath = $executable
+        PassThru = $true
+        RedirectStandardOutput = $stdout
+        RedirectStandardError = $stderr
+    }
+    if ($isWindowsPlatform) { $startParameters.WindowStyle = 'Hidden' }
+    return Start-Process @startParameters
 }
 
 function Wait-ForResult([System.Diagnostics.Process]$Process, [string]$Path) {
@@ -158,4 +171,5 @@ finally {
     Remove-Item Env:\WORLDDB_ODE_DATABASE -ErrorAction SilentlyContinue
     Remove-Item Env:\WORLDDB_ODE_RESULT -ErrorAction SilentlyContinue
     Remove-Item Env:\WORLDDB_ODE_AUTOCLOSE_MS -ErrorAction SilentlyContinue
+    Remove-Item Env:\WORLDDB_ODE_ENGINE_EXECUTABLE -ErrorAction SilentlyContinue
 }

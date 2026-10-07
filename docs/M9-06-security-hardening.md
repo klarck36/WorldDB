@@ -1,6 +1,6 @@
-# M9-06 – Security-Härtung (Zwischenstand)
+# M9-06 – Security-Härtung (Abnahme)
 
-**Status:** RUNNING. Windows und WSL2/Ubuntu 26.04 sind lokal geprüft. Der neueste native macOS-Lauf `37658878947` auf PR `#1` endete mit 41 PASS, einem erwarteten `ci-matrix`-SKIP und 4 FAIL. Die lokale Ursachenbehebung besteht nun unter Windows; eine neue native macOS-Wiederholung steht aus. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
+**Status:** DONE. Windows, WSL2/Ubuntu 26.04 und der native macOS-PR-Lauf sind geprüft. Der letzte Lauf `37662001113` auf PR `#1` bestand mit 45 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
 
 ## Geprüfte Non-Interference-Pfade
 
@@ -46,6 +46,7 @@ Der Debug-Probe wurde ebenfalls ausgeführt, ist aber nicht als Performancewert 
 - WSL2/Ubuntu: die Core-Suite bestand mit 527 Unit- und 87 Rustdoc-Tests. Die vollständige Storage-Suite bestand nach dem Fix dreimal mit der Standardparallelität (je 105 bestanden, 0 fehlgeschlagen, 1 ignoriert; letzter Lauf 1,78 s). Striktes Linux-Clippy für Core und Storage bestand.
 - `.github/workflows/m9-06-security-hardening.yml` bindet den PR-Lauf an den vorhandenen wiederverwendbaren `macos-msrv`-Job. Run `37654031855` lief auf macOS 26.6.2/arm64 mit Rust 1.85 und endete mit 40 PASS, einem erwarteten `ci-matrix`-SKIP und 5 FAIL.
 - Die lokale Wiederholung nach den macOS-Korrekturen bestand unter Windows mit `cargo xtask verify`: 45 PASS, ein vorgesehener `ci-matrix`-SKIP, 0 FAIL. Die CLI- und Storage-Fuzz-Dispatcher bestehen jeweils gezielt; der öffentliche Vertragsprüfer und 13 Klassifikationstests bestehen.
+- Der saubere macOS-PR-Lauf `37662001113`, Job `112931601801`, prüfte Merge-Commit `b3df2de` auf macOS/arm64 mit Rust 1.85 und bestand: 45 PASS, ein erwarteter `ci-matrix`-SKIP, 0 FAIL. Der Beleg ist Artifact `11500908348`, SHA-256 `19f9eb0feec8a4ebe9aeaa8e13ac871d05495a4e74d485d14ec93b2fecb4f443`.
 
 ## macOS-Fehler und Vertragsbaseline
 
@@ -64,6 +65,11 @@ mit 41 PASS, einem erwarteten SKIP und 4 FAIL. Der neueste Lauf
 `37658878947`, Job `112920970410`, prüfte den PR-Merge-Commit
 `353050e580dd76474b2e924a8242193d488f7d7d` (Branch-Commit `6eef67f`) und
 endete erneut mit 41 PASS, einem erwarteten SKIP und 4 FAIL.
+
+Die gezielte Korrektur wurde mit Run `37662001113`, Job `112931601801`, auf
+dem sauberen PR-Merge-Commit `b3df2de` nativ auf macOS bestätigt: 45 PASS,
+ein erwarteter SKIP und 0 FAIL. Damit bestehen die zuvor plattformabhängigen
+Fuzz-Fixture- und Vertragsfingerprint-Prüfungen im macOS-Gate.
 
 `public-contracts` und der passende Test scheiterten, weil M9-06 ausschließlich
 Testmodule und test-only Crashprozess-Koordination in Dateien geändert hat,
@@ -92,6 +98,5 @@ Die vorherigen parallelen WSL-Läufe hatten wechselnde Fehler mit `database writ
 
 ## Noch offen
 
-- Den korrigierten macOS-Job vollständig bestehen lassen. M8-26b APFS-Desktop-E2E bleibt gemäß Reihenfolge bis M9-07 zurückgestellt.
 - Die beobachtbare Laufzeitabhängigkeit von der Zahl verborgener Quellzeilen bleibt eine dokumentierte Grenze. Es gibt keine Constant-Time-Behauptung; ein realistischer Korpus und eine Produktentscheidung über die gemessene Restabweichung gehören zur M9-07-Abnahme.
 - M9-04a/b/c-Fuzzkampagnen und ihre noch ausstehende plattformübergreifende Triage bleiben unabhängige offene Tasks.

@@ -76,8 +76,11 @@ fn run() -> Result<(), String> {
 
     let backend = Backend::new(database_root.as_deref())?;
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(all(feature = "native-e2e", debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .manage(backend)
         .manage(host_sessions)
         .manage(TransferManager::new())

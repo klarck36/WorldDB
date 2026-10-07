@@ -12,10 +12,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
 if ($ArtifactsRoot -and -not $KeepArtifacts) {
     throw 'ArtifactsRoot requires KeepArtifacts.'
 }
-if (-not ('WorldDbIpcSmokeNative' -as [type])) {
+if ($isWindowsPlatform -and -not ('WorldDbIpcSmokeNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -58,6 +59,20 @@ $primaryFactsPath = Join-Path $testRoot 'ipc-facts-primary.jsonl'
 $process = $null
 $processHandle = [IntPtr]::Zero
 $smokePassed = $false
+
+function Get-ListeningTcpConnections([int]$ProcessId) {
+    if ($isWindowsPlatform) {
+        return @(Get-NetTCPConnection -State Listen -OwningProcess $ProcessId -ErrorAction SilentlyContinue)
+    }
+    $lsofCommand = Get-Command lsof -ErrorAction SilentlyContinue
+    if ($null -eq $lsofCommand) {
+        throw 'lsof is required to verify that native smoke processes do not listen on TCP ports.'
+    }
+    $rows = @(& $lsofCommand.Source -n -P -a -p $ProcessId -iTCP -sTCP:LISTEN 2>$null)
+    if ($LASTEXITCODE -eq 1) { return @() }
+    if ($LASTEXITCODE -ne 0) { throw "Could not inspect TCP listeners for process $ProcessId (lsof exit $LASTEXITCODE)." }
+    return @($rows | Select-Object -Skip 1 | Where-Object { $_.Trim() })
+}
 
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -350,9 +365,15 @@ try {
 
     $stdoutPath = Join-Path $testRoot 'ipc.stdout.log'
     $stderrPath = Join-Path $testRoot 'ipc.stderr.log'
-    $process = Start-Process -FilePath $executable -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-    $processHandle = $process.Handle
+    $startParameters = @{
+        FilePath = $executable
+        PassThru = $true
+        RedirectStandardOutput = $stdoutPath
+        RedirectStandardError = $stderrPath
+    }
+    if ($isWindowsPlatform) { $startParameters.WindowStyle = 'Hidden' }
+    $process = Start-Process @startParameters
+    if ($isWindowsPlatform) { $processHandle = $process.Handle }
 
     Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
     Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
@@ -532,7 +553,7 @@ try {
     $processIds = @([int]$process.Id)
     $processIds += [int]$primaryProject.engine.engine_process_id
     foreach ($processId in $processIds) {
-        $listeners = @(Get-NetTCPConnection -State Listen -OwningProcess $processId -ErrorAction SilentlyContinue)
+        $listeners = @(Get-ListeningTcpConnections $processId)
         if ($listeners.Count -gt 0) {
             throw "WorldDB process $processId unexpectedly listens on a network port."
         }
@@ -545,11 +566,15 @@ try {
     }
     $process.Refresh()
     [uint32]$processExitCode = 0
-    if (-not [WorldDbIpcSmokeNative]::GetExitCodeProcess($processHandle, [ref]$processExitCode)) {
-        $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-        throw "Could not read the exited IPC smoke process code (Windows error $nativeError)."
+    if ($isWindowsPlatform) {
+        if (-not [WorldDbIpcSmokeNative]::GetExitCodeProcess($processHandle, [ref]$processExitCode)) {
+            $nativeError = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            throw "Could not read the exited IPC smoke process code (Windows error $nativeError)."
+        }
+        if ($processExitCode -eq 259) { throw 'The IPC smoke process still reports itself as active after WaitForExit.' }
+    } else {
+        $processExitCode = [uint32]$process.ExitCode
     }
-    if ($processExitCode -eq 259) { throw 'The IPC smoke process still reports itself as active after WaitForExit.' }
     if ($processExitCode -ne 0) { throw "The IPC smoke process exited with code $processExitCode." }
     $smokePassed = $true
 

@@ -269,6 +269,7 @@ try {
         Mode = 'sidecar'
         WorkspaceRoot = $workspaceRoot
         ExecutablePath = $appPath
+        EngineExecutablePath = $enginePath
     }
     Invoke-ConfiguredSmoke 'competing_process_sidecar' 'sidecar' $profileArgs 5
     $profileArgs = @{
