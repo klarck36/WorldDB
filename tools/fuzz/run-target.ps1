@@ -120,6 +120,10 @@ function Resolve-Program([string] $Name) {
         $fallback = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
         if (Test-Path -LiteralPath $fallback -PathType Leaf) { return $fallback }
     }
+    if ($null -eq $command -and $Name -eq 'rustc') {
+        $fallback = Join-Path $env:USERPROFILE '.cargo\bin\rustc.exe'
+        if (Test-Path -LiteralPath $fallback -PathType Leaf) { return $fallback }
+    }
     if ($null -eq $command -and $Name -eq 'pnpm') {
         $command = Get-Command 'pnpm.cmd' -ErrorAction SilentlyContinue | Select-Object -First 1
     }
@@ -176,6 +180,76 @@ function Get-ProcessTreeStats([int] $RootProcessId) {
 function Get-DirectoryBytes([string] $Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return [long]0 }
     return [long]((Get-ChildItem -LiteralPath $Path -File -Recurse | Measure-Object -Property Length -Sum).Sum)
+}
+
+function Get-RustCoverageTools {
+    $rustc = Resolve-Program 'rustc'
+    $versionOutput = @(& $rustc -vV 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "rustc -vV failed: $($versionOutput -join ' ')" }
+    $hostLine = $versionOutput | Where-Object { $_ -match '^host: ' } | Select-Object -First 1
+    if (-not $hostLine) { throw 'rustc -vV did not report a host target' }
+    $hostTriple = ($hostLine -replace '^host: ', '').Trim()
+    $sysrootOutput = @(& $rustc --print sysroot 2>&1)
+    if ($LASTEXITCODE -ne 0 -or $sysrootOutput.Count -eq 0) {
+        throw "rustc --print sysroot failed: $($sysrootOutput -join ' ')"
+    }
+    $toolDirectory = Join-Path $sysrootOutput[-1].Trim() "lib\rustlib\$hostTriple\bin"
+    $profdata = Join-Path $toolDirectory 'llvm-profdata.exe'
+    $cov = Join-Path $toolDirectory 'llvm-cov.exe'
+    if (-not (Test-Path -LiteralPath $profdata -PathType Leaf) -or -not (Test-Path -LiteralPath $cov -PathType Leaf)) {
+        throw "Rust LLVM coverage tools are missing for $hostTriple; install them with rustup component add llvm-tools-preview"
+    }
+    return @{ profdata = $profdata; cov = $cov }
+}
+
+function Write-RustCoverage([string] $BuildOutput, [string] $CoverageDirectory, [string] $ProfdataTool, [string] $CovTool) {
+    $rawProfiles = @(Get-ChildItem -LiteralPath $CoverageDirectory -Filter 'profile-*.profraw' -File -ErrorAction SilentlyContinue)
+    if ($rawProfiles.Count -eq 0) { throw 'Rust campaign produced no LLVM profile data' }
+    $buildText = [System.IO.File]::ReadAllText($BuildOutput)
+    $matches = [regex]::Matches($buildText, '(?m)Executable .*?\((?<path>[^()\r\n]+\.exe)\)')
+    if ($matches.Count -eq 0) { throw 'Could not locate the instrumented Rust test executable in the build log' }
+    $binaryPath = $matches[$matches.Count - 1].Groups['path'].Value.Trim()
+    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+        throw "Instrumented Rust test executable is missing: $binaryPath"
+    }
+    $profileData = Join-Path $CoverageDirectory 'coverage.profdata'
+    $mergeArguments = @('merge', '-sparse') + @($rawProfiles | ForEach-Object { $_.FullName }) + @('-o', $profileData)
+    $mergeOutput = @(& $ProfdataTool @mergeArguments 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "llvm-profdata merge failed ($LASTEXITCODE): $($mergeOutput -join ' ')" }
+    $lcovPath = Join-Path $CoverageDirectory 'coverage.lcov'
+    $coverageOutput = @(& $CovTool export -format=lcov "-instr-profile=$profileData" $binaryPath 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "llvm-cov export failed ($LASTEXITCODE): $($coverageOutput -join ' ')" }
+    $lcov = $coverageOutput -join "`n"
+    if ([string]::IsNullOrWhiteSpace($lcov)) { throw 'llvm-cov produced an empty LCOV report' }
+    [System.IO.File]::WriteAllText($lcovPath, "$lcov`n", [System.Text.UTF8Encoding]::new($false))
+    if ((Get-Item -LiteralPath $lcovPath).Length -eq 0) { throw 'LLVM coverage report is empty' }
+    return $lcovPath
+}
+
+function Write-CrashCorpusManifest([string] $CrashDirectory, [string] $RelativeRunDirectory, [object] $RunManifest) {
+    $files = @(Get-ChildItem -LiteralPath $CrashDirectory -File -Recurse | Where-Object { $_.Name -ne 'manifest.json' } | Sort-Object FullName)
+    $entries = @($files | ForEach-Object {
+        [ordered]@{
+            path = [System.IO.Path]::GetRelativePath($CrashDirectory, $_.FullName).Replace('\', '/')
+            sha256 = Get-FileSha256 $_.FullName
+            bytes = $_.Length
+        }
+    })
+    if ($files.Count -ne [int]$RunManifest.crash_count) {
+        $RunManifest.result = 'FAIL'
+        throw "Crash corpus mismatch: manifest records $($RunManifest.crash_count) crashes, corpus contains $($files.Count) input files"
+    }
+    $corpusManifest = [ordered]@{
+        schema_version = 1
+        target_id = $RunManifest.target_id
+        source_revision = $RunManifest.source_revision
+        seed = $RunManifest.seed
+        crash_count = [int]$RunManifest.crash_count
+        files = $entries
+    }
+    $corpusManifestPath = Join-Path $CrashDirectory 'manifest.json'
+    Write-Manifest $corpusManifest $corpusManifestPath
+    $RunManifest.crash_corpus_path = "$RelativeRunDirectory/crash-corpus"
 }
 
 $revision = (& git -C $workspaceRoot rev-parse HEAD).Trim()
@@ -263,16 +337,23 @@ $buildError = Join-Path $runDirectory 'build.stderr.log'
 $runOutput = Join-Path $runDirectory 'run.stdout.log'
 $runError = Join-Path $runDirectory 'run.stderr.log'
 $samplesPath = Join-Path $runDirectory 'resource-samples.tsv'
+$coverageDirectory = Join-Path $runDirectory 'coverage'
+$crashCorpusDirectory = Join-Path $runDirectory 'crash-corpus'
+New-Item -ItemType Directory -Force -Path $coverageDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $crashCorpusDirectory | Out-Null
 [System.IO.File]::WriteAllText($samplesPath, "elapsed_seconds`tcpu_seconds`ttree_rss_bytes`trun_directory_bytes`n", [System.Text.UTF8Encoding]::new($false))
 
 $result = 'BUILD_FAILED'
 $exitCode = $null
+$campaignStarted = $false
 $oldEnvironment = @{}
 $oldEnvironment['CARGO_TARGET_DIR'] = [Environment]::GetEnvironmentVariable('CARGO_TARGET_DIR', 'Process')
-foreach ($name in @($targetEnv, $durationEnv, $seedEnv, $corpusEnv, $reportEnv, $maxInputEnv, $inputTimeoutEnv, 'WORLDDB_SOURCE_REVISION')) {
+foreach ($name in @($targetEnv, $durationEnv, $seedEnv, $corpusEnv, $reportEnv, $maxInputEnv, $inputTimeoutEnv, 'WORLDDB_SOURCE_REVISION', 'RUSTFLAGS', 'LLVM_PROFILE_FILE', 'NODE_V8_COVERAGE', 'WORLDDB_FUZZ_CRASH_CORPUS', 'WORLDDB_DECODER_FUZZ_CRASH_CORPUS', 'WORLDDB_TRANSPORT_FUZZ_CRASH_CORPUS')) {
     if ($name -and $name -ne '-') { $oldEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 }
 try {
+    $rustCoverageTools = $null
+    if ($runner.family -ne 'typescript_transport') { $rustCoverageTools = Get-RustCoverageTools }
     if ($targetEnv -and $targetEnv -ne '-') { [Environment]::SetEnvironmentVariable($targetEnv, $TargetId, 'Process') }
     [Environment]::SetEnvironmentVariable($durationEnv, [string]$profile.campaign_duration_seconds, 'Process')
     [Environment]::SetEnvironmentVariable($seedEnv, $Seed, 'Process')
@@ -281,6 +362,22 @@ try {
     }
     [Environment]::SetEnvironmentVariable($reportEnv, (Join-Path $runDirectory 'fuzzer-report.json'), 'Process')
     [Environment]::SetEnvironmentVariable('WORLDDB_SOURCE_REVISION', $revision, 'Process')
+    $crashCorpusEnvironment = switch ($runner.family) {
+        'core_decoder' { 'WORLDDB_DECODER_FUZZ_CRASH_CORPUS'; break }
+        'typescript_transport' { 'WORLDDB_TRANSPORT_FUZZ_CRASH_CORPUS'; break }
+        default { 'WORLDDB_FUZZ_CRASH_CORPUS' }
+    }
+    [Environment]::SetEnvironmentVariable($crashCorpusEnvironment, $crashCorpusDirectory, 'Process')
+    if ($runner.family -eq 'typescript_transport') {
+        $nodeCoverageDirectory = Join-Path $coverageDirectory 'v8'
+        New-Item -ItemType Directory -Force -Path $nodeCoverageDirectory | Out-Null
+    } else {
+        $oldRustFlags = [Environment]::GetEnvironmentVariable('RUSTFLAGS', 'Process')
+        $rustCoverageFlags = '-Cinstrument-coverage -Ccodegen-units=1'
+        if (-not [string]::IsNullOrWhiteSpace($oldRustFlags)) { $rustCoverageFlags = "$oldRustFlags $rustCoverageFlags" }
+        [Environment]::SetEnvironmentVariable('RUSTFLAGS', $rustCoverageFlags, 'Process')
+        [Environment]::SetEnvironmentVariable('LLVM_PROFILE_FILE', (Join-Path $coverageDirectory 'profile-%p-%m.profraw'), 'Process')
+    }
     if ($runner.build_profile -eq 'windows_msvc_locked') {
         [Environment]::SetEnvironmentVariable('CARGO_TARGET_DIR', (Join-Path $runDirectory 'cargo-target'), 'Process')
     }
@@ -298,12 +395,16 @@ try {
         $result = 'RESOURCE_LIMIT'
     } else {
         $result = 'INTERRUPTED'
+        if ($runner.family -eq 'typescript_transport') {
+            [Environment]::SetEnvironmentVariable('NODE_V8_COVERAGE', (Join-Path $coverageDirectory 'v8'), 'Process')
+        }
         if ($maxInputEnv -and $maxInputEnv -ne '-') {
             [Environment]::SetEnvironmentVariable($maxInputEnv, [string]$profile.max_input_bytes, 'Process')
         }
         if ($inputTimeoutEnv -and $inputTimeoutEnv -ne '-') {
             [Environment]::SetEnvironmentVariable($inputTimeoutEnv, [string]$profile.per_input_timeout_seconds, 'Process')
         }
+        $campaignStarted = $true
         $run = Start-CapturedProcess $runner.run_command $workspaceRoot $runOutput $runError
         $runStart = [DateTimeOffset]::UtcNow
         $lastSample = [DateTimeOffset]::MinValue
@@ -337,24 +438,27 @@ try {
         $run.process.WaitForExit()
         $exitCode = $run.process.ExitCode
         Complete-CapturedProcess $run
-        if (-not $limitExceeded) {
-            $reportFile = Join-Path $runDirectory 'fuzzer-report.json'
-            if ($exitCode -eq 0 -and (Test-Path -LiteralPath $reportFile -PathType Leaf)) {
-                $fuzzerReport = Get-Content -LiteralPath $reportFile -Raw | ConvertFrom-Json
-                $manifest.crash_count = @($fuzzerReport.crashes).Count
-                $manifest.rounds = [long]$fuzzerReport.rounds
+        $reportFile = Join-Path $runDirectory 'fuzzer-report.json'
+        if (Test-Path -LiteralPath $reportFile -PathType Leaf) {
+            $fuzzerReport = Get-Content -LiteralPath $reportFile -Raw | ConvertFrom-Json
+            $manifest.crash_count = @($fuzzerReport.crashes).Count
+            $manifest.rounds = [long]$fuzzerReport.rounds
+            $manifest.fuzzer_report_path = "$relativeRunDirectory/fuzzer-report.json"
+            if ($manifest.crash_count -gt 0) {
+                $result = 'FAIL'
+            } elseif (-not $limitExceeded -and $exitCode -eq 0) {
                 $measuredDuration = if ($null -ne $fuzzerReport.cpu_seconds) { [double]$fuzzerReport.cpu_seconds } else { [double]$fuzzerReport.elapsed_seconds }
-                $manifest.fuzzer_report_path = "$relativeRunDirectory/fuzzer-report.json"
-                if ($manifest.crash_count -gt 0) { $result = 'FAIL' }
-                elseif ($measuredDuration -ge [double]$profile.campaign_duration_seconds) { $result = 'PASS_LOCAL' }
+                if ($measuredDuration -ge [double]$profile.campaign_duration_seconds) { $result = 'PASS_LOCAL' }
                 else { $result = 'INTERRUPTED' }
-            } else {
+            } elseif (-not $limitExceeded) {
                 $result = 'FAIL'
             }
+        } elseif (-not $limitExceeded) {
+            $result = 'FAIL'
         }
     }
 } catch {
-    if ($result -eq 'RUNNING') { $result = 'FAIL' }
+    $result = 'FAIL'
     throw
 } finally {
     foreach ($name in $oldEnvironment.Keys) {
@@ -364,6 +468,30 @@ try {
     if (Test-Path -LiteralPath $samplesPath -PathType Leaf) {
         $manifest.resource_samples_path = "$relativeRunDirectory/resource-samples.tsv"
         $manifest.peak_temp_disk_bytes = [Math]::Max([long]$manifest.peak_temp_disk_bytes, (Get-DirectoryBytes $runDirectory))
+    }
+    try {
+        if ($campaignStarted -and $runner.family -ne 'typescript_transport' -and $null -ne $rustCoverageTools -and (Test-Path -LiteralPath $buildOutput -PathType Leaf)) {
+            $coveragePath = Write-RustCoverage $buildOutput $coverageDirectory $rustCoverageTools.profdata $rustCoverageTools.cov
+            $manifest.coverage_artifacts_path = [System.IO.Path]::GetRelativePath($workspaceRoot, $coveragePath).Replace('\', '/')
+        } elseif ($campaignStarted -and $runner.family -eq 'typescript_transport') {
+            $v8Files = @(Get-ChildItem -LiteralPath (Join-Path $coverageDirectory 'v8') -Filter '*.json' -File -ErrorAction SilentlyContinue)
+            if ($v8Files.Count -eq 0) { throw 'TypeScript campaign produced no V8 coverage files' }
+            $manifest.coverage_artifacts_path = "$relativeRunDirectory/coverage/v8"
+        }
+    } catch {
+        $result = 'FAIL'
+        $manifest.result = 'FAIL'
+        $coverageErrorPath = Join-Path $coverageDirectory 'coverage-generation-error.txt'
+        [System.IO.File]::WriteAllText($coverageErrorPath, "$($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
+        $manifest.coverage_artifacts_path = [System.IO.Path]::GetRelativePath($workspaceRoot, $coverageErrorPath).Replace('\', '/')
+    }
+    try {
+        Write-CrashCorpusManifest $crashCorpusDirectory $relativeRunDirectory $manifest
+    } catch {
+        $result = 'FAIL'
+        $manifest.result = 'FAIL'
+        $crashCorpusErrorPath = Join-Path $runDirectory 'crash-corpus-error.txt'
+        [System.IO.File]::WriteAllText($crashCorpusErrorPath, "$($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
     }
     if ($null -ne $exitCode) { $manifest.exit_code = $exitCode }
     $manifest.result = $result

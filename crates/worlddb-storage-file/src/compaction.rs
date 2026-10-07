@@ -1078,6 +1078,11 @@ fn flush_chunk(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_compaction_pin_manifest(bytes: &[u8]) -> bool {
+    decode_backup_pin_manifest(bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use std::env;
     use std::fs;

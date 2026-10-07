@@ -846,6 +846,35 @@ fn decode_migration_plan(bytes: &[u8]) -> Result<MigrationPlan, String> {
     }
 }
 
+#[cfg(test)]
+static NEXT_MIGRATION_FUZZ_FILE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+struct MigrationFuzzFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for MigrationFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_migration_plan(bytes: &[u8]) -> Result<bool, String> {
+    let decoded = decode_migration_plan(bytes).is_ok();
+    let json = serde_json::from_slice::<serde_json::Value>(bytes).is_ok();
+    let sequence = NEXT_MIGRATION_FUZZ_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "worlddb-desktop-migration-fuzz-{}-{sequence}.record",
+        std::process::id()
+    ));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    let file = MigrationFuzzFile(path);
+    let bounded = read_bounded_regular_file(&file.0, MAX_PLAN_BYTES).is_ok();
+    Ok((decoded || json) && bounded)
+}
+
 fn read_bounded_regular_file(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     let metadata =
         fs::symlink_metadata(path).map_err(|_| "selected input is unavailable".to_owned())?;

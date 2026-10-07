@@ -932,6 +932,11 @@ fn calculate_transform_fingerprint(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_guarded_migration_journal(bytes: &[u8]) -> bool {
+    MigrationRunJournalSnapshot::decode(bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::process::Command;

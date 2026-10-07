@@ -340,6 +340,33 @@ fn decode_record(bytes: &[u8]) -> Result<JournalRecord, JournalError> {
     })
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_recovery_journal(
+    layout: &DatabaseLayout,
+    lock: &WriterLock,
+    bytes: &[u8],
+) -> bool {
+    let path = layout.root().join(JOURNAL_NAME);
+    if fs::write(&path, bytes).is_err() {
+        return false;
+    }
+    let cleanup = RecoveryFuzzJournalFile(path);
+    let read = RecoveryJournal::new(layout).read_records(lock).is_ok();
+    let decoded = decode_record(bytes).is_ok();
+    drop(cleanup);
+    read || decoded
+}
+
+#[cfg(test)]
+struct RecoveryFuzzJournalFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for RecoveryFuzzJournalFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn validate_transitions(records: &[JournalRecord]) -> Result<(), JournalError> {
     let mut latest_id = 0_u64;
     let mut active: Option<JournalRecord> = None;

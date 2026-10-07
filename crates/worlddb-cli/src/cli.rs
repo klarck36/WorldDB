@@ -2123,6 +2123,171 @@ fn load_policy_history(
         .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_arguments(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let arguments = text
+        .split_whitespace()
+        .map(OsString::from)
+        .collect::<VecDeque<_>>();
+    let (_, arguments, global_result) = parse_global_options(arguments);
+    global_result.is_ok() && parse_command(arguments).is_ok()
+}
+
+#[cfg(test)]
+static NEXT_IMPORT_FUZZ_FILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+struct ImportFuzzFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for ImportFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+fn write_import_fuzz_file(bytes: &[u8]) -> Result<ImportFuzzFile, String> {
+    let sequence = NEXT_IMPORT_FUZZ_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "worlddb-cli-import-fuzz-{}-{sequence}.record",
+        std::process::id()
+    ));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(ImportFuzzFile(path))
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_import_mapping(bytes: &[u8]) -> bool {
+    let Ok(value) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mapping_accepted = parse_import_mapping(value).is_ok();
+    let identity_accepted = parse_import_identity(value).is_ok();
+    mapping_accepted || identity_accepted
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_migration_plan_json(bytes: &[u8]) -> Result<bool, String> {
+    let file = write_import_fuzz_file(bytes)?;
+    Ok(load_migration_plan(&file.0).is_ok())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_migration_step_records(bytes: &[u8]) -> Result<bool, String> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../worlddb-storage-file/tests/fixtures/m7-16h/migration/plan.record");
+    let plan = load_migration_plan(&fixture)
+        .map_err(|_| "migration plan fuzz fixture could not be decoded".to_owned())?;
+    let file = write_import_fuzz_file(bytes)?;
+    let step_files = plan
+        .steps()
+        .iter()
+        .map(|step_id| MigrationStepFiles {
+            step_id: *step_id,
+            operation_id: None,
+            record_files: vec![file.0.clone()],
+        })
+        .collect::<Vec<_>>();
+    Ok(load_migration_step_records(&plan, &step_files, false).is_ok())
+}
+
+#[cfg(test)]
+static POLICY_HISTORY_FUZZ_FIXTURE_ROOT: std::sync::OnceLock<Result<PathBuf, String>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+struct RestorePolicyHistoryFuzzFile(PathBuf, Vec<u8>);
+
+#[cfg(test)]
+impl Drop for RestorePolicyHistoryFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, &self.1);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn cleanup_policy_history_fuzz_fixture() -> Result<(), String> {
+    let Some(Ok(root)) = POLICY_HISTORY_FUZZ_FIXTURE_ROOT.get() else {
+        return Ok(());
+    };
+    fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_policy_history(bytes: &[u8]) -> Result<bool, String> {
+    fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "fuzz fixture unexpectedly contains a symlink",
+                ));
+            }
+            if metadata.is_dir() {
+                copy_tree(&source_path, &destination_path)?;
+            } else if metadata.is_file() {
+                fs::copy(source_path, destination_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    let root = POLICY_HISTORY_FUZZ_FIXTURE_ROOT
+        .get_or_init(|| {
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../worlddb-storage-file/tests/fixtures/m7-16h/storage");
+            let report_path = std::env::var_os("WORLDDB_FUZZ_REPORT_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join("worlddb-fuzzer-report.json"));
+            let report_directory = report_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(std::env::temp_dir);
+            fs::create_dir_all(&report_directory).map_err(|error| error.to_string())?;
+            let destination =
+                report_directory.join(format!("cli-policy-history-fixture-{}", std::process::id()));
+            if destination.exists() {
+                fs::remove_dir_all(&destination).map_err(|error| error.to_string())?;
+            }
+            if let Err(error) = copy_tree(&source, &destination) {
+                let _ = fs::remove_dir_all(&destination);
+                return Err(error.to_string());
+            }
+            Ok(destination)
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+    let Some(manifest) = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("policy history fuzz fixture has no current manifest".to_owned());
+    };
+    let Some(reference) = manifest
+        .segments()
+        .iter()
+        .find(|segment| segment.kind() == ManifestSegmentKind::SecurityPolicy)
+    else {
+        return Err("policy history fuzz fixture has no security segment".to_owned());
+    };
+    let file_name = format!("segment-{}.wdbseg", reference.id().to_canonical_string());
+    let path = root.join("security").join("segments").join(file_name);
+    let original = fs::read(&path).map_err(|error| error.to_string())?;
+    let _restore = RestorePolicyHistoryFuzzFile(path.clone(), original);
+    fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(load_policy_history(&layout, &manifest).is_ok())
+}
+
 fn schema_fingerprint_from_manifest(
     layout: &DatabaseLayout,
     manifest: &Manifest,

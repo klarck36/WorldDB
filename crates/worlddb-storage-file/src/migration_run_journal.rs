@@ -448,6 +448,11 @@ impl Drop for StagePathGuard {
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_migration_run_journal(bytes: &[u8]) -> bool {
+    MigrationRunJournalSnapshot::decode(bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use super::{MigrationRunJournalFileStore, MigrationRunJournalFileStoreError};
     use std::env;

@@ -2624,6 +2624,20 @@ fn append_commit_marker_and_sync(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_wal_segment(bytes: &[u8]) -> bool {
+    let sequence = 1;
+    parse_segment_sequence("segment-00000000000000000001.wal").is_ok()
+        && (decode_segment(sequence, bytes).is_ok() || decode_raw_segment(sequence, bytes).is_ok())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_wal_payloads(bytes: &[u8]) -> bool {
+    decode_raw_segment_prefix(1, bytes).is_ok()
+        || decode_prepare_payload(1, 0, bytes).is_ok()
+        || decode_commit_payload(1, 0, bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use std::env;
     use std::fs;

@@ -1373,6 +1373,18 @@ impl Drop for StagePathGuard {
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_index_pointer(bytes: &[u8]) -> bool {
+    decode_pointer(bytes, IndexFamily::RecordId).is_ok()
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_index_generation_name(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|name| parse_generation_file_name(name.trim(), "index-0001-").is_ok())
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         IndexDirectory, IndexFileKind, IndexGenerationStore, IndexPublication, IndexRebuildError,

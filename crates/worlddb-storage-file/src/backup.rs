@@ -2341,3 +2341,8 @@ fn read_bounded_file(path: &Path, limit: usize, root: &Path) -> Result<Vec<u8>, 
     }
     Ok(bytes)
 }
+
+#[cfg(test)]
+pub(crate) fn fuzz_backup_manifest(bytes: &[u8]) -> bool {
+    BackupManifest::decode(bytes).is_ok() || AuditBackupManifest::decode(bytes).is_ok()
+}

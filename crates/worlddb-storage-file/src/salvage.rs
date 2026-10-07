@@ -419,6 +419,68 @@ fn read_candidate_segment(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_salvage_scanner(layout: &DatabaseLayout, bytes: &[u8]) -> Result<bool, String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TARGET: AtomicU64 = AtomicU64::new(0);
+
+    let manifest = crate::ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "salvage fuzz fixture has no current manifest".to_owned())?;
+    let reference = manifest
+        .segments()
+        .iter()
+        .copied()
+        .find(|item| item.kind() == ManifestSegmentKind::History)
+        .ok_or_else(|| "salvage fuzz fixture has no history segment".to_owned())?;
+    let segment_path = layout.segments_directory().join(format!(
+        "segment-{}.wdbseg",
+        reference.id().to_canonical_string()
+    ));
+    let original = fs::read(&segment_path).map_err(|error| error.to_string())?;
+    let _restore = SalvageFuzzSegment(segment_path.clone(), original);
+    fs::write(&segment_path, bytes).map_err(|error| error.to_string())?;
+
+    let history = HistorySegmentStore::new(layout.clone());
+    let security = SecurityPolicyHistoryStore::new(layout.clone());
+    let decoded = read_candidate_segment(&history, &security, reference, false).is_ok();
+    let lock = layout
+        .try_writer_lock()
+        .map_err(|error| error.to_string())?;
+    let sequence = NEXT_TARGET.fetch_add(1, Ordering::Relaxed);
+    let target = std::env::temp_dir().join(format!(
+        "worlddb-salvage-fuzz-{}-{sequence}",
+        std::process::id()
+    ));
+    let _cleanup = SalvageFuzzTarget(target.clone());
+    let salvaged = SalvageManager::new(layout.clone())
+        .salvage(&lock, &target)
+        .is_ok();
+    Ok(decoded || salvaged)
+}
+
+#[cfg(test)]
+struct SalvageFuzzSegment(PathBuf, Vec<u8>);
+
+#[cfg(test)]
+impl Drop for SalvageFuzzSegment {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, &self.1);
+    }
+}
+
+#[cfg(test)]
+struct SalvageFuzzTarget(PathBuf);
+
+#[cfg(test)]
+impl Drop for SalvageFuzzTarget {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 struct CandidateInventory {
     source: SalvageInventorySource,
     references: Vec<ManifestSegmentReference>,

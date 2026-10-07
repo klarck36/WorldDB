@@ -1756,6 +1756,11 @@ fn finish_journal(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_storage_upgrade_journal(bytes: &[u8]) -> bool {
+    decode_journal_record(bytes).is_ok()
+}
+
+#[cfg(test)]
 #[path = "storage_upgrade_tests.rs"]
 mod tests;
 

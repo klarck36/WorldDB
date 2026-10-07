@@ -248,6 +248,18 @@ pub(crate) fn decode_required_audit_payload(
     }))
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_required_audit_payload(bytes: &[u8]) -> bool {
+    use worlddb_core::{DomainId, OperationId, Revision};
+
+    let operation_id = OperationId::try_from_bytes([
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x7c, 0xde, 0x8f, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+        0xcd,
+    ]);
+    operation_id
+        .is_ok_and(|id| decode_required_audit_payload(bytes, Revision::FIRST_COMMIT, id).is_ok())
+}
+
 fn decode_required_audit_payload_with_replay(
     payload: &[u8],
     revision: Revision,

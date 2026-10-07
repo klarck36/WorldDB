@@ -39,13 +39,20 @@ incorrect task routing.
   disk, per-input timeout, and wall limits.
 - `tools/fuzz/run-target.ps1` writes versioned run manifests conforming to
   `docs/fuzz/run-manifest.schema.json`, including source revision, seed hashes,
-  requested duration, resource samples, and result.
+  requested duration, resource samples, and result. Rust runs merge LLVM
+  instrumentation into LCOV using the active Rust toolchain; TypeScript runs
+  retain Node V8 coverage JSON. Parser failures archive the complete input
+  bytes, and each run writes a hashed crash-corpus manifest.
 
 The core decoder and TypeScript transport runners already have executable
-campaign tests. The four additional Rust runner test entry points are registered
-for M9-04a implementation. Their campaigns have **not** been started; M9-04
-completes the inventory and preparation only. M9-04a/b/c own the 24-hour runs;
-M9-04d owns crash triage and closure.
+campaign tests. The four additional Rust runner entry points now cover all 54
+additional targets. The M9-04a group passed a one-second route/seed preflight
+with no crashes and 632,274 calls; M9-04b/c passed 19 more routes with no
+crashes and 166,878 calls. The 92 core/TypeScript campaigns and all actual
+24-hour runs have **not** been started. M9-04a/b/c own those long runs;
+M9-04d owns crash triage and closure. Preflight results are recorded in
+[M9-04a runner preflight](M9-04a-runner-preflight.md) and
+[M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
 
 ## Verification
 
@@ -60,8 +67,22 @@ M9-04d owns crash triage and closure.
 - `pwsh -File tools/fuzz/run-target.ps1 -TargetId <id> -Seed
   0x574f524c44444232 -PlanOnly` passed for all **146 registered targets** across
   all six runner configurations.
-- `cargo xtask verify`: **45 PASS, 1 expected `ci-matrix` SKIP, 0 FAIL**.
+- One-second Rust preflights: **54/54 additional targets**, 799,152 rounds,
+  0 crashes. These are route/seed smokes only; they do not satisfy the
+  24-hour campaigns.
+- Artifact-path probes passed: a one-second Rust target produced three LLVM
+  raw profiles and a 3.68 MB LCOV report; the TypeScript runner produced two
+  V8 coverage JSON files. Rust crash-corpus helper tests preserve the full
+  binary input byte-for-byte. These probes validate collection only and are
+  not campaign evidence.
 - `git diff --check`: passed.
 
-The first full verify attempt exposed formatting and an unchecked test index in
-the decoder harness. Both were fixed; the repeated full verify passed.
+The latest `cargo xtask verify` run after the import and recovery runners were
+added ended with **43 PASS, 1 expected `ci-matrix` SKIP, and 2 FAIL**. Both
+failures are the `public-contracts` check and its matching test: the frozen
+`1.0.0-rc.1` fingerprint for `crates/worlddb-storage-file/src/manifest.rs`
+does not match the current tracked source. The structured public surfaces and
+the other three persistent-format fingerprints match. The RC baseline was not
+rewritten as part of this fuzz work. Plancheck, fuzz-inventory checks, fmt,
+strict Clippy, the new target dispatch/preflight runs, and artifact-path probes
+pass. Production 24-hour campaigns remain pending.

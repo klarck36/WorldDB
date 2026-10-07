@@ -269,6 +269,17 @@ async function runCampaign(): Promise<void> {
 
   const callsBySeed = new Map(seeds.map((seed) => [seed.id, 0]));
   const crashes: string[] = [];
+  const crashCorpusFiles: string[] = [];
+  const crashCorpusDirectory = process.env.WORLDDB_TRANSPORT_FUZZ_CRASH_CORPUS
+    ? resolve(process.env.WORLDDB_TRANSPORT_FUZZ_CRASH_CORPUS)
+    : undefined;
+  const archiveCrashInput = (input: string): void => {
+    if (!crashCorpusDirectory) return;
+    mkdirSync(crashCorpusDirectory, { recursive: true });
+    const filename = `crash-${String(crashCorpusFiles.length + 1).padStart(8, "0")}.bin`;
+    writeFileSync(resolve(crashCorpusDirectory, filename), Buffer.from(input, "utf8"));
+    crashCorpusFiles.push(filename);
+  };
   let worker = createParserWorker();
   let nextInputId = 1;
   const cpuStart = process.cpuUsage();
@@ -280,6 +291,7 @@ async function runCampaign(): Promise<void> {
   const runSeed = async (seedId: string, golden: string): Promise<void> => {
     const input = expensiveInputs.get(seedId) ?? makeInput(seedId, golden, rng);
     if (Buffer.byteLength(input, "utf8") > options.maxInputBytes) {
+      archiveCrashInput(input);
       crashes.push(`${seedId}:input_exceeds_max:${Buffer.byteLength(input, "utf8")}:${options.maxInputBytes}`);
       return;
     }
@@ -294,6 +306,7 @@ async function runCampaign(): Promise<void> {
     callsBySeed.set(seedId, (callsBySeed.get(seedId) ?? 0) + 1);
     totalCalls += 1;
     if (failure) {
+      archiveCrashInput(input);
       crashes.push(`${seedId}:${failure}`);
       if (failure.startsWith("input_timeout>")) {
         await worker.terminate();
@@ -340,6 +353,7 @@ async function runCampaign(): Promise<void> {
     calls_by_decoder: { "typescript.json_envelope": totalCalls },
     calls_by_seed: Object.fromEntries(callsBySeed),
     crashes,
+    crash_corpus_files: crashCorpusFiles,
     result: crashes.length === 0 ? "PASS_LOCAL" : "FAIL",
   };
   const reportPath = process.env.WORLDDB_TRANSPORT_FUZZ_REPORT;

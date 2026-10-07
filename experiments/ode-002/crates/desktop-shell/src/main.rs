@@ -5532,3 +5532,70 @@ const _: () = {
     assert!(STREAM_TEST_BYTES <= MAX_STREAM_BYTES);
     assert!(STREAM_TEST_CHUNK_BYTES <= MAX_STREAM_CHUNK_BYTES);
 };
+
+#[cfg(test)]
+fn desktop_fuzz_probe(target: &str, bytes: &[u8]) -> Result<bool, String> {
+    let accepted = match target {
+        "desktop_sidecar_request_response" => {
+            serde_json::from_slice::<Response>(bytes).is_ok()
+                || serde_json::from_slice::<worlddb_ode_engine::Request>(bytes).is_ok()
+                || std::str::from_utf8(bytes)
+                    .ok()
+                    .is_some_and(|value| parse_client_operation_id(Some(value.trim())).is_ok())
+        }
+        "desktop_backup_dto" => backup::fuzz_backup_dto(bytes),
+        "desktop_transfer_ids" => {
+            transfer::fuzz_transfer_id(bytes) || host_session::fuzz_session_id(bytes)
+        }
+        "desktop_export_import_dto" => export_import::fuzz_import_dto(bytes),
+        "desktop_migration_plan" => migration::fuzz_migration_plan(bytes)?,
+        "desktop_purge_report" => purge::fuzz_purge_report(bytes)?,
+        _ => return Err(format!("unknown desktop fuzz target: {target}")),
+    };
+    Ok(accepted)
+}
+
+#[cfg(test)]
+#[path = "../../../../../tools/fuzz/rust_campaign.rs"]
+mod fuzz_campaign_support;
+
+#[cfg(test)]
+#[test]
+#[ignore = "24-hour fuzz campaign; run through tools/fuzz/run-target.ps1"]
+fn desktop_fuzz_campaign() {
+    if let Err(error) = fuzz_campaign_support::run_campaign(
+        &[
+            "desktop_sidecar_request_response",
+            "desktop_backup_dto",
+            "desktop_transfer_ids",
+            "desktop_export_import_dto",
+            "desktop_migration_plan",
+            "desktop_purge_report",
+        ],
+        desktop_fuzz_probe,
+    ) {
+        panic!("desktop fuzz campaign failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod fuzz_campaign_tests {
+    use super::desktop_fuzz_probe;
+
+    const TARGETS: &[&str] = &[
+        "desktop_sidecar_request_response",
+        "desktop_backup_dto",
+        "desktop_transfer_ids",
+        "desktop_export_import_dto",
+        "desktop_migration_plan",
+        "desktop_purge_report",
+    ];
+
+    #[test]
+    fn fuzz_campaign_dispatch_rejects_unregistered_desktop_targets() {
+        assert!(desktop_fuzz_probe("unknown", b"seed").is_err());
+        for target in TARGETS {
+            assert!(desktop_fuzz_probe(target, b"seed").is_ok());
+        }
+    }
+}

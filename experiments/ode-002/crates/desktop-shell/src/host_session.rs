@@ -200,6 +200,13 @@ fn decode_session_id(encoded: &str) -> Option<[u8; 16]> {
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_session_id(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|value| decode_session_id(value.trim()).is_some())
+}
+
+#[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
 

@@ -869,6 +869,56 @@ fn scan_wal_bytes(bytes: Vec<u8>) -> Result<AuditScan, RawReadAuditError> {
     })
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_audit_wal(layout: &DatabaseLayout, bytes: &[u8]) -> bool {
+    let path = layout.audit_wal_directory().join(AUDIT_WAL_FILE);
+    if fs::write(&path, bytes).is_err() {
+        return false;
+    }
+    let path_cleanup = AuditFuzzWalFile(path);
+    let scan_path = scan_wal(layout).is_ok() || scan_wal_allow_incomplete_tail(layout).is_ok();
+    let scan_bytes = scan_wal_bytes(bytes.to_vec()).is_ok();
+    let repair = decode_repair_intent(bytes).is_ok();
+    let prepare = decode_prepare(bytes).is_ok();
+    let commit = decode_commit(bytes).is_ok();
+    let field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_u64_field(&mut decoder, 1).is_ok()
+    };
+    let id_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_id_field::<AuditOperationId>(&mut decoder, 1).is_ok()
+    };
+    let fixed_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_fixed_field::<32>(&mut decoder, 1).is_ok()
+    };
+    let bytes_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_bytes_field(&mut decoder, 1).is_ok()
+    };
+    drop(path_cleanup);
+    scan_path
+        || scan_bytes
+        || repair
+        || prepare
+        || commit
+        || field()
+        || id_field()
+        || fixed_field()
+        || bytes_field()
+}
+
+#[cfg(test)]
+struct AuditFuzzWalFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for AuditFuzzWalFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn snapshot_from_scan(layout: &DatabaseLayout, scan: AuditScan) -> RawReadAuditSnapshot {
     RawReadAuditSnapshot {
         database_id: layout.database_id(),

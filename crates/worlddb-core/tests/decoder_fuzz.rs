@@ -579,6 +579,11 @@ fn parse_source_revision() -> Result<String, String> {
     Ok(revision)
 }
 
+struct CrashArtifacts<'a> {
+    crashes: &'a [String],
+    corpus_files: &'a [String],
+}
+
 fn json_report(
     seed: u64,
     source_revision: &str,
@@ -586,7 +591,7 @@ fn json_report(
     elapsed: Duration,
     rounds: u64,
     counts: &[(String, u64)],
-    crashes: &[String],
+    artifacts: CrashArtifacts<'_>,
 ) -> String {
     let mut report = String::new();
     let _ = writeln!(report, "{{");
@@ -611,15 +616,29 @@ fn json_report(
     }
     let _ = writeln!(report, "  }},");
     let _ = writeln!(report, "  \"crashes\": [");
-    for (index, crash) in crashes.iter().enumerate() {
-        let comma = if index + 1 == crashes.len() { "" } else { "," };
-        let _ = writeln!(report, "    \"{crash}\"{comma}");
+    for (index, crash) in artifacts.crashes.iter().enumerate() {
+        let comma = if index + 1 == artifacts.crashes.len() {
+            ""
+        } else {
+            ","
+        };
+        let _ = writeln!(report, "    \"{}\"{comma}", json_escape(crash));
+    }
+    let _ = writeln!(report, "  ],");
+    let _ = writeln!(report, "  \"crash_corpus_files\": [");
+    for (index, path) in artifacts.corpus_files.iter().enumerate() {
+        let comma = if index + 1 == artifacts.corpus_files.len() {
+            ""
+        } else {
+            ","
+        };
+        let _ = writeln!(report, "    \"{}\"{comma}", json_escape(path));
     }
     let _ = writeln!(report, "  ],");
     let _ = writeln!(
         report,
         "  \"result\": \"{}\"",
-        if crashes.is_empty() {
+        if artifacts.crashes.is_empty() {
             "PASS_LOCAL"
         } else {
             "FAIL"
@@ -627,6 +646,48 @@ fn json_report(
     );
     let _ = writeln!(report, "}}");
     report
+}
+
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                let _ = write!(escaped, "\\u{:04x}", character as u32);
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
+fn write_crash_input(
+    directory: &std::path::Path,
+    input: &[u8],
+    index: usize,
+) -> Result<String, String> {
+    fs::create_dir_all(directory).map_err(|error| format!("{}: {error}", directory.display()))?;
+    let filename = format!("crash-{index:08}.bin");
+    let path = directory.join(&filename);
+    fs::write(&path, input).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(filename)
+}
+
+fn archive_crash_input(input: &[u8], index: usize) -> Result<Option<String>, String> {
+    let directory = match std::env::var("WORLDDB_DECODER_FUZZ_CRASH_CORPUS") {
+        Ok(directory) if !directory.is_empty() => PathBuf::from(directory),
+        Ok(_) => return Err("WORLDDB_DECODER_FUZZ_CRASH_CORPUS must not be empty".to_owned()),
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("WORLDDB_DECODER_FUZZ_CRASH_CORPUS is not Unicode".to_owned());
+        }
+    };
+    write_crash_input(&directory, input, index).map(Some)
 }
 
 fn workspace_path(path: PathBuf) -> PathBuf {
@@ -656,6 +717,7 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
     let mut rng = Rng(seed);
     let mut counts = vec![0_u64; targets.len()];
     let mut crashes = Vec::new();
+    let mut crash_corpus_files = Vec::new();
     let mut rounds = 0_u64;
 
     loop {
@@ -672,6 +734,14 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
             for mutator in &mutators {
                 let input = mutate(&golden, target, mutator, &mut rng);
                 if input.len() > max_input_bytes {
+                    match archive_crash_input(&input, rounds as usize) {
+                        Ok(Some(path)) => crash_corpus_files.push(path),
+                        Ok(None) => {}
+                        Err(error) => crashes.push(format!(
+                            "{}:{mutator}:failed_to_archive:{error}",
+                            target.decoder_id
+                        )),
+                    }
                     crashes.push(format!(
                         "{}:{mutator}:input_exceeds_max:{}:{}",
                         target.decoder_id,
@@ -691,6 +761,14 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
                     for byte in input.iter().take(256) {
                         let _ = write!(input_hex, "{byte:02x}");
                     }
+                    match archive_crash_input(&input, rounds as usize) {
+                        Ok(Some(path)) => crash_corpus_files.push(path),
+                        Ok(None) => {}
+                        Err(archive_error) => crashes.push(format!(
+                            "{}:{mutator}:failed_to_archive:{archive_error}",
+                            target.decoder_id
+                        )),
+                    }
                     crashes.push(format!(
                         "{}:{mutator}:{error}:{input_hex}",
                         target.decoder_id
@@ -708,7 +786,7 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
         }
     }
 
-    if counts.iter().any(|count| *count == 0) {
+    if crashes.is_empty() && counts.iter().any(|count| *count == 0) {
         return Err(
             "fuzz campaign ended before every inventoried decoder was exercised".to_owned(),
         );
@@ -725,7 +803,10 @@ fn decoder_budget_fuzz_campaign() -> Result<(), String> {
         started.elapsed(),
         rounds,
         &per_decoder,
-        &crashes,
+        CrashArtifacts {
+            crashes: &crashes,
+            corpus_files: &crash_corpus_files,
+        },
     );
     let report_path = match std::env::var("WORLDDB_DECODER_FUZZ_REPORT") {
         Ok(path) => workspace_path(PathBuf::from(path)),
@@ -874,6 +955,26 @@ fn decoder_inventory_and_seed_manifest_cover_every_registered_codec() -> Result<
             return Err(format!("decoder inventory is missing family {family}"));
         }
     }
+    Ok(())
+}
+
+#[test]
+fn decoder_crash_corpus_preserves_the_complete_input_bytes() -> Result<(), String> {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "worlddb-decoder-crash-{}-{nonce}",
+        std::process::id()
+    ));
+    let input = [0_u8, 0xff, b'W', b'D', 0x80, 0x7f];
+    let filename = write_crash_input(&directory, &input, 7)?;
+    let archived = fs::read(directory.join(filename)).map_err(|error| error.to_string())?;
+    if archived != input {
+        return Err("archived decoder crash input differs from the original bytes".to_owned());
+    }
+    fs::remove_dir_all(directory).map_err(|error| error.to_string())?;
     Ok(())
 }
 
