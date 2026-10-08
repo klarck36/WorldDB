@@ -244,7 +244,7 @@ fn parse_macos_machine_uuid(input: &[u8]) -> io::Result<[u8; 16]> {
     if input.len() != 36
         || ![8, 13, 18, 23]
             .into_iter()
-            .all(|index| input[index] == b'-')
+            .all(|index| input.get(index) == Some(&b'-'))
     {
         return Err(invalid_machine_id());
     }
@@ -259,24 +259,35 @@ fn parse_hex_id(input: &[u8]) -> io::Result<[u8; 16]> {
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn decode_hex_id(input: &[u8], is_canonical_uuid: bool) -> io::Result<[u8; 16]> {
     let mut digits = [0_u8; 32];
-    let mut count = 0;
+    let mut digit_slots = digits.iter_mut();
+    let mut digit_count = 0;
     for (index, byte) in input.iter().enumerate() {
         if is_canonical_uuid && [8, 13, 18, 23].contains(&index) {
             continue;
         }
-        if count == digits.len() || !byte.is_ascii_hexdigit() {
+        if !byte.is_ascii_hexdigit() {
             return Err(invalid_machine_id());
         }
-        digits[count] = byte.to_ascii_lowercase();
-        count += 1;
+        let Some(slot) = digit_slots.next() else {
+            return Err(invalid_machine_id());
+        };
+        *slot = byte.to_ascii_lowercase();
+        digit_count += 1;
     }
-    if count != digits.len() {
+    if digit_count != digits.len() {
         return Err(invalid_machine_id());
     }
 
     let mut result = [0_u8; 16];
-    for (index, pair) in digits.chunks_exact(2).enumerate() {
-        result[index] = (hex_nibble(pair[0])? << 4) | hex_nibble(pair[1])?;
+    let mut result_slots = result.iter_mut();
+    for pair in digits.chunks_exact(2) {
+        let [high, low] = pair else {
+            return Err(invalid_machine_id());
+        };
+        let Some(slot) = result_slots.next() else {
+            return Err(invalid_machine_id());
+        };
+        *slot = (hex_nibble(*high)? << 4) | hex_nibble(*low)?;
     }
     if result.iter().all(|byte| *byte == 0) {
         return Err(invalid_machine_id());
@@ -286,11 +297,17 @@ fn decode_hex_id(input: &[u8], is_canonical_uuid: bool) -> io::Result<[u8; 16]> 
 
 #[cfg(any(target_os = "linux", target_os = "macos", test))]
 fn trim_ascii_whitespace(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
+    while let Some((first, rest)) = bytes.split_first() {
+        if !first.is_ascii_whitespace() {
+            break;
+        }
+        bytes = rest;
     }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
+    while let Some((last, rest)) = bytes.split_last() {
+        if !last.is_ascii_whitespace() {
+            break;
+        }
+        bytes = rest;
     }
     bytes
 }

@@ -13,6 +13,8 @@ const { remote } = require('webdriverio');
 
 const TAURI_WEBDRIVER_PORT = 'TAURI_WEBDRIVER_PORT';
 const META = '\uE03D';
+const CONTROL = '\uE009';
+const F7 = '\uE037';
 const BACKSPACE = '\uE003';
 const TAB = '\uE004';
 const ENTER = '\uE007';
@@ -112,6 +114,30 @@ async function appReport(reportPath) {
   return JSON.parse(await readFile(reportPath, 'utf8'));
 }
 
+function fullKeyboardAccessEnabled() {
+  const result = spawnSync('swift', ['-e', 'import AppKit; print(NSApplication.shared.isFullKeyboardAccessEnabled ? "enabled" : "disabled")'], {
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error('Could not read the macOS Full Keyboard Access setting.');
+  }
+  return result.stdout.trim() === 'enabled';
+}
+
+async function ensureFullKeyboardAccess(browser) {
+  if (process.platform !== 'darwin' || fullKeyboardAccessEnabled()) return;
+  // macOS defaults to tabbing through text fields and lists only. Control-F7
+  // switches Tab navigation to all controls, which this keyboard smoke checks.
+  await browser.keys([CONTROL, F7]);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (fullKeyboardAccessEnabled()) return;
+    await delay(100);
+  }
+  throw new Error('Could not enable macOS Full Keyboard Access for native Tab navigation.');
+}
+
 async function parseCrashSignal(signalPath) {
   const text = await readFile(signalPath, 'utf8');
   const field = name => new RegExp(`(?:^|\\n)${name}=(.+)$`, 'm').exec(text)?.[1]?.trim();
@@ -154,6 +180,8 @@ export async function runKeyboardDriver({
 }) {
   await mkdir(caseRoot, { recursive: false });
   await mkdir(tmpRoot, { recursive: true });
+  const isolatedHome = join(tmpRoot, 'home');
+  await mkdir(isolatedHome, { recursive: true });
   const port = await unusedLoopbackPort();
   const reportPath = join(caseRoot, 'app-startup.json');
   const crashSignalPath = join(caseRoot, 'crash-signal.txt');
@@ -165,8 +193,8 @@ export async function runKeyboardDriver({
   const stderr = createWriteStream(stderrPath);
   const childEnv = unsetTestEnvironment({ ...process.env });
   Object.assign(childEnv, {
+    HOME: isolatedHome,
     TMPDIR: tmpRoot,
-    WORLDDB_ODE_DATABASE: databaseRoot,
     WORLDDB_ODE_PROJECT_SMOKE_ROOT: databaseRoot,
     WORLDDB_ODE_PROJECT_SMOKE_SKIP_AUTORUN: '1',
     WORLDDB_ODE_SHOW_WINDOWS: '1',
@@ -205,11 +233,23 @@ export async function runKeyboardDriver({
       capabilities: { browserName: 'tauri' },
     });
 
+    await ensureFullKeyboardAccess(browser);
+
     const nameInput = await browser.$('#project-name');
     const createButton = await browser.$('#create-project');
+    const projectStatus = await browser.$('#project-status');
     await nameInput.waitForDisplayed({ timeout: 30000 });
     await createButton.waitForDisplayed({ timeout: 30000 });
-    if (!(await createButton.isEnabled())) throw new Error('The native Neues Projekt control was disabled.');
+    await browser.waitUntil(async () => (await projectStatus.getText()) !== 'Projektstatus wird geprüft.', {
+      timeout: 30000,
+      timeoutMsg: 'The app did not finish loading its initial project status.',
+    });
+    if (!(await createButton.isEnabled())) {
+      const startupState = await browser.execute(() => Object.fromEntries([
+        'project-status', 'project-details', 'operation-status', 'migration-status',
+      ].map(id => [id, document.getElementById(id)?.textContent ?? ''])));
+      throw new Error(`The native Neues Projekt control was disabled after startup: ${JSON.stringify(startupState)}.`);
+    }
 
     const accessibility = await browser.execute(() => {
       const input = document.querySelector('#project-name');

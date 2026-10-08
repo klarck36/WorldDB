@@ -19,4 +19,4 @@ windows-sys = { version = "=0.61.2", default-features = false, features = [
 ] }
 
 [target.'cfg(unix)'.dependencies]
-libc = "=0.2.190"
+libc = { version = "=0.2.190", default-features = false }

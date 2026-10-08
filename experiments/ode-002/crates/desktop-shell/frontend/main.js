@@ -4793,6 +4793,7 @@ async function createSmokeEntityType(activeSessionId, symbol) {
 }
 
 async function runEntitySmoke(activeSessionId) {
+  await recordFactsSmokeStage("entity-smoke:started");
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
@@ -4804,7 +4805,9 @@ async function runEntitySmoke(activeSessionId) {
   entityTypeSelect.value = activeType.entity_type_id;
   entityAcceptDeprecated.checked = false;
   updateEntityTypeSelectionState();
+  await recordFactsSmokeStage("entity-smoke:before-active-create");
   const created = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("entity-smoke:after-active-create");
   if (created.kind !== "published" || !created.entity_id) throw new Error("active Entity creation did not publish");
   const activeCreationRevision = created.revision;
   entityViewMode.value = "historical";
@@ -4833,7 +4836,9 @@ async function runEntitySmoke(activeSessionId) {
   if (entityDeprecatedOptIn.hidden || entityDeprecatedWarning.hidden || entityCreateButton.disabled) {
     throw new Error("Deprecated EntityType opt-in was not presented by the entity form");
   }
+  await recordFactsSmokeStage("entity-smoke:before-deprecated-create");
   const deprecatedCreated = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("entity-smoke:after-deprecated-create");
   if (deprecatedCreated.kind !== "published" || deprecatedCreated.warning?.code !== "deprecated_entity_type") {
     throw new Error("Deprecated EntityType opt-in did not return the typed warning");
   }
@@ -5295,7 +5300,9 @@ async function runFactsSmoke(activeSessionId) {
   schemaCardinality.value = "multi";
   schemaResolution.value = "multi_value_replace";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await recordFactsSmokeStage("before-predicate-definition");
+  await publishDefinition({ propagateErrors: true });
+  await recordFactsSmokeStage("predicate-definition-published");
   const predicate = selectedSchema?.definitions.find((item) => item.family === "predicate" && item.symbol === "ipc_smoke_facts");
   if (predicate?.lifecycle !== "active" || predicate.details.resolution_policy !== "multi_value_replace") {
     throw new Error("the smoke predicate was not published with MultiValueReplace resolution");
@@ -5305,7 +5312,9 @@ async function runFactsSmoke(activeSessionId) {
   schemaSymbol.value = "ipc_smoke_facts_timeline";
   timelineCalendarProfile.value = "none";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await recordFactsSmokeStage("before-timeline-definition");
+  await publishDefinition({ propagateErrors: true });
+  await recordFactsSmokeStage("timeline-definition-published");
   const timeline = selectedSchema?.definitions.find((item) => item.family === "timeline" && item.symbol === "ipc_smoke_facts_timeline");
   if (timeline?.lifecycle !== "active") throw new Error("the smoke Timeline was not active after publication");
 
@@ -5317,7 +5326,9 @@ async function runFactsSmoke(activeSessionId) {
   entityTypeSelect.value = subjectType.entity_type_id;
   entityAcceptDeprecated.checked = false;
   updateEntityTypeSelectionState();
+  await recordFactsSmokeStage("facts-smoke:before-subject-entity");
   const createdEntity = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("facts-smoke:subject-entity-published");
   if (createdEntity?.kind !== "published" || !createdEntity.entity_id) throw new Error("the smoke subject Entity was not persisted");
 
   schemaFamily.value = "event_kind";
@@ -5947,7 +5958,13 @@ async function runFactsSmoke(activeSessionId) {
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
-  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) return;
+  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) {
+    if (propagateErrors) {
+      const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${entityCurrentMode}, busy=${entityBusy}`;
+      throw new Error(`Entity creation was unavailable in the current renderer state (${state}).`);
+    }
+    return;
+  }
   entityBusy = true;
   updateEntityControls();
   entityStatus.textContent = "Entität wird geprüft und angelegt …";
@@ -6408,8 +6425,14 @@ function clearDefinitionForm() {
   updateSchemaFormVisibility();
 }
 
-async function publishDefinition() {
-  if (!sessionId || !projectOpen || !schemaCurrentMode) return;
+async function publishDefinition({ propagateErrors = false } = {}) {
+  if (!sessionId || !projectOpen || !schemaCurrentMode) {
+    if (propagateErrors) {
+      const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${schemaCurrentMode}`;
+      throw new Error(`Schema publication was unavailable in the current renderer state (${state}).`);
+    }
+    return;
+  }
   schemaBusy = true;
   updateSchemaControls();
   schemaStatus.textContent = "Definition wird geprüft und veröffentlicht …";
@@ -6425,6 +6448,7 @@ async function publishDefinition() {
     schemaStatus.textContent = `Definition veröffentlicht. Aktuelle Schema-Revision ${selectedSchema.revision}.`;
   } catch (error) {
     schemaStatus.textContent = showError(error);
+    if (propagateErrors) throw error;
   } finally {
     schemaBusy = false;
     updateSchemaControls();
@@ -6629,7 +6653,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         if (role === "primary") {
           operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Rechte-, Branch- und Layerprüfung läuft …";
           await runSchemaSmoke(sessionId);
-          await runEntitySmoke(sessionId);
+          try {
+            await runEntitySmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `entity-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
           await runBranchLayerSmoke(sessionId);
           await runPerspectiveSmoke(sessionId);
           await runSecurityPolicySmoke(sessionId);
@@ -6637,7 +6668,9 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
           try {
             await runFactsSmoke(sessionId);
           } catch (error) {
-            await invoke("facts_smoke_diagnostic", { details: String(error?.message ?? error) }).catch(() => {});
+            await invoke("facts_smoke_diagnostic", {
+              details: `facts-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
             throw error;
           } finally {
             factsSmokeActive = false;

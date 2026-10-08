@@ -265,3 +265,51 @@ after its 20:28 CEST fixture-write failure (`os error 112`); its full retry is
 queued on D: until the current campaigns finish.
 
 Next process and sample check: 21:53 CEST.
+
+## Monitoring update — 7 October 2026, 21:54 CEST
+
+The active `cli_import_mapping`, `cli_migration_plan_json`, and
+`storage_wal_payloads` processes were alive at 21:53:04 CEST. Their samples
+were current through 21:53:04, 21:52:58, and 21:52:48 respectively; none had
+a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | RUNNING | 25,990.2 s | 29,970.8 s | 39.6 MiB | 980.5 MB |
+| `cli_migration_plan_json` | 31928 | RUNNING | 25,484.2 s | 9,940.6 s | 39.1 MiB | 980.5 MB |
+| `storage_wal_payloads` | 7348 | RUNNING | 25,446.2 s | 28,124.1 s | 38.6 MiB | 926.4 MB |
+
+`storage_wal_recovery_prefix` (PID 28428) remains invalid as campaign evidence
+after the 20:28 CEST fixture-write failure (`os error 112`); its full retry is
+queued on D: until the current campaigns finish.
+
+Next process and sample check: 22:08 CEST.
+
+## Monitoring update — 7 October 2026, 22:09:07 CEST
+
+The active M9-04b/c processes were alive at 22:09:07 CEST. Resource
+samples were written at 22:08:27 (import), 22:08:19 (migration), and 22:08:09
+(WAL payloads); none of the run folders contains a completion manifest:
+
+| Run | PID | Status | Elapsed | CPU | RSS | Run output |
+|---|---:|---|---:|---:|---:|---:|
+| cli_import_mapping | 27628 | RUNNING | 26,911.0 s | 31,032.5 s | 34.7 MiB | 980,474,748 B |
+| cli_migration_plan_json | 31928 | RUNNING | 26,405.1 s | 10,339.9 s | 34.4 MiB | 980,474,855 B |
+| storage_wal_payloads | 7348 | RUNNING | 26,367.0 s | 29,147.3 s | 33.9 MiB | 926,412,612 B |
+
+storage_wal_recovery_prefix remains invalid as campaign evidence after its
+20:28 CEST fixture-write failure. Its full retry is queued on D: until the
+current campaigns finish. C: has 65.86 GiB free. Next process and sample
+check: 22:24 CEST.
+
+## Monitoring update — 8 October 2026, 12:56 CEST
+
+The active M9-04b/c processes were alive at 12:53 CEST. Samples were refreshed through 12:56:04; none of the run folders contains a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 80,169.2 s | 92,971.5 s | 45.2 MiB | 980,540,026 B |
+| `cli_migration_plan_json` | 31928 | 79,670.0 s | 35,045.4 s | 45.1 MiB | 980,540,140 B |
+| `storage_wal_payloads` | 7348 | 79,640.6 s | 88,381.3 s | 64.7 MiB | 926,477,853 B |
+
+`storage_wal_recovery_prefix` remains invalid as campaign evidence after its 20:28 CEST fixture-write failure. Its full retry remains queued on D: until these campaigns finish. C: had 367.43 GiB free and D: 215.81 GiB free. Next process and sample check: 13:10 CEST.

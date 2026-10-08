@@ -119,12 +119,18 @@ function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]
     throw "Timed out waiting for complete schema IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
 }
 
-function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
         if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -like 'entity-smoke:error:*'
+            } | Select-Object -Last 1)
+            if ($smokeError.Count -gt 0) {
+                throw "Entity IPC smoke failed in the renderer: $($smokeError[0].details)"
+            }
             $creates = @($primary | Where-Object { $_.operation -eq 'create' }).Count
             $historicalReads = @($primary | Where-Object { $_.operation -eq 'snapshot_historical' }).Count
             $explicitReads = @($primary | Where-Object { $_.operation -eq 'snapshot_explicit' }).Count
@@ -226,6 +232,12 @@ function Wait-ForFactsOperations([System.Diagnostics.Process]$Process, [string]$
     while ([DateTime]::UtcNow -lt $deadline) {
         if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
             $operations = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
+            $smokeError = @($operations | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -like 'facts-smoke:error:*'
+            } | Select-Object -Last 1)
+            if ($smokeError.Count -gt 0) {
+                throw "Facts IPC smoke failed in the renderer: $($smokeError[0].details)"
+            }
             $rejected = @($operations | Where-Object { -not $_.succeeded })
             $failedAssertions = @($rejected | Where-Object { $_.operation -eq 'create_assertion' })
             $nonAssertionRejections = @($rejected | Where-Object { $_.operation -ne 'create_assertion' })
@@ -377,7 +389,7 @@ try {
 
     Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
     Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
-    Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath
+    Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath $primaryFactsPath
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
     Wait-ForTransferOperations $process $primaryTransferPath
     Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath

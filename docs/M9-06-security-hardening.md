@@ -100,3 +100,7 @@ Die vorherigen parallelen WSL-Läufe hatten wechselnde Fehler mit `database writ
 
 - Die beobachtbare Laufzeitabhängigkeit von der Zahl verborgener Quellzeilen bleibt eine dokumentierte Grenze. Es gibt keine Constant-Time-Behauptung; ein realistischer Korpus und eine Produktentscheidung über die gemessene Restabweichung gehören zur M9-07-Abnahme.
 - M9-04a/b/c-Fuzzkampagnen und ihre noch ausstehende plattformübergreifende Triage bleiben unabhängige offene Tasks.
+
+## Nachlauf auf PR-Head c42434c — 7. Oktober 2026
+
+Der neue macOS-M9-06-Lauf 37677284835 auf Head c42434c endete mit 41 PASS, 1 erwartetem Skip und 4 FAIL. Apple-Target-Clippy meldete sieben verbotene Index-/Slice-Zugriffe im Unix-Identitätsadapter; die Dependency-Policy beanstandete die Default-Features von libc. Die lokale Korrektur ersetzt Index-/Slice-Zugriffe durch bounds-sichere Iteration und deaktiviert die libc-Default-Features. Apple-Target-Clippy, cargo-deny --config .cargo/deny.toml --workspace --locked check all und die WSL-Prozessadaptertests (4/4) bestehen lokal. M9-06 bleibt bis zum korrigierten PR-Lauf READY. Der APFS-Lauf 37677284432 ist abgeschlossen; der Unix-Adapter und die APFS-Treiberkorrekturen können jetzt gemeinsam per PR-Push erneut verifiziert werden.
