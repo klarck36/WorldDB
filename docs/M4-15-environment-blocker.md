@@ -8,7 +8,7 @@
 
 ## Execution path
 
-A SHA-pinned GitHub Actions workflow, .github/workflows/m4-15-apfs-sync.yml, runs the prepared probe on macos-latest. It checks that the evidence directory is APFS, records macOS build and hardware model, retains diskutil metadata and raw CSV, summarizes fsync/F_FULLFSYNC returns and latency, and runs the storage crate's injected sync-failure tests. It was held until the active M8-26b APFS baseline finished; run 37767019927 has now completed, so the workflow is ready to run with the current macOS fixes.
+A SHA-pinned GitHub Actions workflow, .github/workflows/m4-15-apfs-sync.yml, runs the prepared probe on macos-latest. It checks the evidence directory's APFS personality, records macOS build and hardware model, retains diskutil metadata and raw CSV, summarizes fsync/F_FULLFSYNC returns and latency, and runs the storage crate's injected sync-failure tests. It was held until the active M8-26b APFS baseline finished; run 37767019927 has now completed. The first measurement attempt, 37771970754, stopped before measurement because BSD `stat -f %T` reports the file type rather than filesystem type. The check now reads the `File System Personality` from `diskutil info`; the APFS probe independently verifies the path with `statfs`.
 
 The hosted runner can provide evidence about that runner's APFS profile and API behavior. Its measurements do not prove persistence across power loss or generalize to every Mac model.
 

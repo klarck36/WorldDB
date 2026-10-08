@@ -36,13 +36,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$WORLDDB_M4_15_ROOT"
-          filesystem=$(stat -f %T "$WORLDDB_M4_15_ROOT")
-          test "$filesystem" = apfs
+          diskutil info "$WORLDDB_M4_15_ROOT" > "$WORLDDB_M4_15_ROOT/diskutil-info.txt"
+          filesystem=$(awk -F: '/^[[:space:]]*File System Personality:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }' "$WORLDDB_M4_15_ROOT/diskutil-info.txt")
+          if [ "$filesystem" != APFS ]; then
+            printf 'Expected APFS at %s; diskutil reported: %s\n' "$WORLDDB_M4_15_ROOT" "${filesystem:-unavailable}" >&2
+            cat "$WORLDDB_M4_15_ROOT/diskutil-info.txt" >&2
+            exit 1
+          fi
           printf 'filesystem=%s\n' "$filesystem" > "$WORLDDB_M4_15_ROOT/metadata.txt"
           printf 'source_revision=%s\n' "$(git rev-parse HEAD)" >> "$WORLDDB_M4_15_ROOT/metadata.txt"
           sw_vers >> "$WORLDDB_M4_15_ROOT/metadata.txt"
           printf 'hardware_model=%s\n' "$(sysctl -n hw.model)" >> "$WORLDDB_M4_15_ROOT/metadata.txt"
-          diskutil info "$WORLDDB_M4_15_ROOT" > "$WORLDDB_M4_15_ROOT/diskutil-info.txt"
 
       - name: Build APFS sync probe
         env:
