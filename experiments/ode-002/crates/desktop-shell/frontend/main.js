@@ -4772,14 +4772,14 @@ async function runSchemaSmoke(activeSessionId) {
   await recordFactsSmokeStage("schema-smoke:before-final-schema-snapshot");
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
   await recordFactsSmokeStage("schema-smoke:after-final-schema-snapshot");
+  if (current.definitions.find((item) => item.identity === deprecatedType.identity)?.lifecycle !== "active") {
+    throw new Error("the smoke EntityType was not active before deprecation");
+  }
   await recordFactsSmokeStage("schema-smoke:before-final-entity-type-deprecation");
-  await manageSchema({
-    command: "set_lifecycle",
-    expected_base_revision: current.revision,
-    family: "entity_type",
-    identity: deprecatedType.identity,
-    lifecycle: "deprecated",
-  });
+  stageDefinitionLifecycle(deprecatedType, "deprecated");
+  await publishLifecycleBatch();
+  const deprecated = selectedSchema?.definitions.find((item) => item.identity === deprecatedType.identity);
+  if (deprecated?.lifecycle !== "deprecated") throw new Error("EntityType deprecation did not publish");
   await recordFactsSmokeStage("schema-smoke:after-final-entity-type-deprecation");
 }
 
@@ -5319,6 +5319,7 @@ async function runFactsSmoke(activeSessionId) {
   await recordFactsSmokeStage("before-predicate-definition");
   await publishDefinition({
     propagateErrors: true,
+    refreshAfterPublish: false,
     diagnosticStage: (stage) => recordFactsSmokeStage(`predicate-definition:${stage}`),
   });
   await recordFactsSmokeStage("predicate-definition-published");
@@ -5334,6 +5335,7 @@ async function runFactsSmoke(activeSessionId) {
   await recordFactsSmokeStage("before-timeline-definition");
   await publishDefinition({
     propagateErrors: true,
+    refreshAfterPublish: false,
     diagnosticStage: (stage) => recordFactsSmokeStage(`timeline-definition:${stage}`),
   });
   await recordFactsSmokeStage("timeline-definition-published");
@@ -6447,7 +6449,7 @@ function clearDefinitionForm() {
   updateSchemaFormVisibility();
 }
 
-async function publishDefinition({ propagateErrors = false, diagnosticStage = null } = {}) {
+async function publishDefinition({ propagateErrors = false, diagnosticStage = null, refreshAfterPublish = true } = {}) {
   if (!sessionId || !projectOpen || !schemaCurrentMode) {
     if (propagateErrors) {
       const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${schemaCurrentMode}`;
@@ -6465,14 +6467,27 @@ async function publishDefinition({ propagateErrors = false, diagnosticStage = nu
     currentSchema = latest;
     const definition = buildDefinitionDraft();
     await diagnosticStage?.("before-create");
-    await manageSchema({ command: "create", expected_base_revision: latest.revision, definition });
+    const published = await manageSchema({ command: "create", expected_base_revision: latest.revision, definition });
+    if (published.kind !== "published") throw new Error("schema did not publish the requested definition");
     await diagnosticStage?.("after-create");
     schemaViewMode.value = "current";
     schemaCurrentMode = true;
     clearDefinitionForm();
-    await diagnosticStage?.("before-refresh");
-    await refreshSchema(sessionId);
-    await diagnosticStage?.("after-refresh");
+    if (refreshAfterPublish) {
+      await diagnosticStage?.("before-refresh");
+      await refreshSchema(sessionId);
+      await diagnosticStage?.("after-refresh");
+    } else {
+      selectedSchema = {
+        kind: "snapshot",
+        revision: published.revision,
+        definitions: published.definitions,
+      };
+      currentSchema = selectedSchema;
+      renderSchema(selectedSchema);
+      updateSchemaControls();
+      await diagnosticStage?.("after-published-render");
+    }
     schemaStatus.textContent = `Definition veröffentlicht. Aktuelle Schema-Revision ${selectedSchema.revision}.`;
   } catch (error) {
     schemaStatus.textContent = showError(error);

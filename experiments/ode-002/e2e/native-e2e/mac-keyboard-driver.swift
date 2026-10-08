@@ -24,11 +24,19 @@ guard let targetApplication = NSRunningApplication(processIdentifier: targetProc
     fputs("The target desktop application is no longer running.\n", stderr)
     exit(5)
 }
-guard targetApplication.activate(options: [.activateIgnoringOtherApps]) else {
-    fputs("Could not activate the target desktop application.\n", stderr)
+if !targetApplication.isActive {
+    _ = targetApplication.activate(options: [.activateAllWindows])
+    let activationDeadline = Date().addingTimeInterval(2)
+    while !targetApplication.isActive && Date() < activationDeadline {
+        _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+}
+guard targetApplication.isActive else {
+    let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
+    fputs("The target desktop application is not frontmost (target_pid=\(targetProcessID), frontmost_pid=\(frontmostProcessID)).\n", stderr)
     exit(6)
 }
-Thread.sleep(forTimeInterval: 0.1)
+Thread.sleep(forTimeInterval: 0.05)
 
 let keyCode: CGKeyCode
 let flags: CGEventFlags
