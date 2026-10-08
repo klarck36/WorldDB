@@ -215,9 +215,15 @@ function Wait-ForTransferOperations([System.Diagnostics.Process]$Process, [strin
     throw "Timed out waiting for the authenticated HistorySpace transfer catalog call. Primary: $primaryEvents"
 }
 
-function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
+function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     while ([DateTime]::UtcNow -lt $deadline) {
+        $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -like 'perspective-smoke:error:*'
+        } | Select-Object -Last 1)
+        if ($smokeError.Count -gt 0) {
+            throw "Perspective IPC smoke failed in the renderer: $($smokeError[0].details)"
+        }
         if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -422,7 +428,7 @@ try {
     Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath $primaryFactsPath
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
     Wait-ForTransferOperations $process $primaryTransferPath
-    Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath
+    Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath $primaryFactsPath
     Wait-ForSecurityPolicyOperations $process $primarySecurityPolicyPath
     Wait-ForFactsOperations $process $primaryFactsPath
     $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json

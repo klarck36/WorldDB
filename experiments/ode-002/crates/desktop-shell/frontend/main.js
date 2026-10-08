@@ -4971,6 +4971,8 @@ async function runPerspectiveSmoke(activeSessionId) {
     throw new Error("Perspective creation did not publish its private identity");
   }
   const id = created.perspective_id;
+  // Refresh the controls so the newly published identity is available to both context selectors.
+  await refreshPerspectives(activeSessionId);
   const beforeCreation = await invokePerspectiveSnapshot(activeSessionId, {
     mode: "historical", recorded_as_of: baseline.revision,
   });
@@ -6611,21 +6613,16 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       if (listen) {
         await listen("project-state-changed", async () => {
           if (factBusy) return;
-          if (startupSmokeModeEnabled) {
-            if (role !== "secondary") return;
-            try {
-              await refreshProject(sessionId);
-            } catch {
-              return;
-            }
-            return;
-          }
+          if (startupSmokeModeEnabled && role !== "secondary") return;
           try {
             await refreshProject(sessionId);
           } catch {
             return;
           }
           if (!projectOpen) return;
+          if (startupSmokeModeEnabled && !schemaBusy) refreshSchema(sessionId).catch((error) => {
+            schemaStatus.textContent = showError(error);
+          });
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
@@ -6685,7 +6682,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
             throw error;
           }
           await runBranchLayerSmoke(sessionId);
-          await runPerspectiveSmoke(sessionId);
+          try {
+            await runPerspectiveSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `perspective-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
           await runSecurityPolicySmoke(sessionId);
           factsSmokeActive = true;
           try {

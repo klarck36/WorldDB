@@ -1,8 +1,11 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
-guard CommandLine.arguments.count == 2 else {
-    fputs("Expected one allowlisted keyboard action.\n", stderr)
+guard CommandLine.arguments.count == 3,
+      let rawProcessID = Int32(CommandLine.arguments[1]),
+      rawProcessID > 0 else {
+    fputs("Expected a target process ID and one allowlisted keyboard action.\n", stderr)
     exit(2)
 }
 
@@ -16,9 +19,20 @@ guard let source = CGEventSource(stateID: .hidSystemState) else {
     exit(4)
 }
 
+let targetProcessID = pid_t(rawProcessID)
+guard let targetApplication = NSRunningApplication(processIdentifier: targetProcessID) else {
+    fputs("The target desktop application is no longer running.\n", stderr)
+    exit(5)
+}
+guard targetApplication.activate(options: [.activateIgnoringOtherApps]) else {
+    fputs("Could not activate the target desktop application.\n", stderr)
+    exit(6)
+}
+Thread.sleep(forTimeInterval: 0.1)
+
 let keyCode: CGKeyCode
 let flags: CGEventFlags
-switch CommandLine.arguments[1] {
+switch CommandLine.arguments[2] {
 case "tab":
     keyCode = 48
     flags = []
@@ -42,6 +56,11 @@ for isDown in [true, false] {
         exit(5)
     }
     event.flags = flags
-    event.post(tap: .cghidEventTap)
+    if keyCode == 98 {
+        // Control-F7 changes macOS's system-wide Full Keyboard Access mode.
+        event.post(tap: .cghidEventTap)
+    } else {
+        event.postToPid(targetProcessID)
+    }
     Thread.sleep(forTimeInterval: 0.05)
 }

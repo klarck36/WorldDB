@@ -18,9 +18,9 @@ const TAB = '\uE004';
 const ENTER = '\uE007';
 const PROJECT_NAME = 'KeyboardSuiteProject';
 
-function sendNativeMacKey(action) {
+function sendNativeMacKey(action, appProcessId) {
   const driverPath = join(packageRoot, 'mac-keyboard-driver.swift');
-  const result = spawnSync('swift', [driverPath, action], { encoding: 'utf8', timeout: 15000 });
+  const result = spawnSync('swift', [driverPath, String(appProcessId), action], { encoding: 'utf8', timeout: 15000 });
   if (result.error || result.status !== 0) {
     const reason = result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
     throw new Error(`Could not send native macOS keyboard action '${action}': ${reason}`);
@@ -170,7 +170,7 @@ async function appReport(reportPath) {
   return JSON.parse(await readFile(reportPath, 'utf8'));
 }
 
-async function tabToCreateButton(browser, nameInput) {
+async function tabToCreateButton(browser, nameInput, appProcessId) {
   const focusedElementId = () => browser.execute(() => document.activeElement?.id ?? '');
   const waitForCreateButtonFocus = timeout => browser.waitUntil(
     async () => (await focusedElementId()) === 'create-project',
@@ -181,7 +181,7 @@ async function tabToCreateButton(browser, nameInput) {
   );
 
   await nameInput.click();
-  if (process.platform === 'darwin') sendNativeMacKey('tab');
+  if (process.platform === 'darwin') sendNativeMacKey('tab', appProcessId);
   else await browser.keys(TAB);
   try {
     await waitForCreateButtonFocus(2000);
@@ -198,8 +198,8 @@ async function tabToCreateButton(browser, nameInput) {
     // use Quartz events so WebKit and the system can apply their native focus rules.
     for (const action of ['control-tab', 'control-f7', 'fn-control-f7']) {
       await nameInput.click();
-      sendNativeMacKey(action);
-      if (action !== 'control-tab') sendNativeMacKey('tab');
+      sendNativeMacKey(action, appProcessId);
+      if (action !== 'control-tab') sendNativeMacKey('tab', appProcessId);
       try {
         await waitForCreateButtonFocus(2500);
         return { focusedId: await focusedElementId(), navigationMode: action };
@@ -352,7 +352,7 @@ export async function runKeyboardDriver({
       throw new Error(`Native keyboard input mismatch (cleared=${JSON.stringify(clearedValue)}, entered=${JSON.stringify(enteredValue)}).`);
     }
 
-    const keyboardTab = await tabToCreateButton(browser, nameInput);
+    const keyboardTab = await tabToCreateButton(browser, nameInput, child.pid);
     let enterDispatchError = null;
     try {
       await browser.keys(ENTER);
