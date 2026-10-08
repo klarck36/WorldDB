@@ -2662,6 +2662,9 @@ checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
 dependencies = [
  "block2",
  "dispatch2",
+ "glib-sys 0.18.1",
+ "gobject-sys 0.18.0",
+ "gtk-sys",
  "js-sys",
  "log",
  "objc2",
@@ -4825,6 +4828,7 @@ dependencies = [
  "blake3",
  "fs4",
  "getrandom 0.4.3",
+ "libc",
  "windows-sys 0.61.2",
  "worlddb-core",
 ]

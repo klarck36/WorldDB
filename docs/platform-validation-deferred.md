@@ -38,6 +38,16 @@ Its clean merge checkout was `64ec5afd4b53d856b46323e98e4ab5859e630208`.
   The desktop-shell manifest now explicitly enables the GTK3 backend; the next
   M8-26c run also executes the storage and writer-lock contracts on ext4.
 
+## Follow-up native run — 8 October 2026
+
+Run `37834652977` tested head `8bf75adb49a425414351ffca1389e009a511250c`.
+The macOS job stopped at `Fetch locked Rust dependencies`; the native cases did
+not run and the Linux job was skipped. Enabling `gtk3` and adding the macOS
+`libc` adapter dependency required four additional locked dependency entries.
+They are now recorded in `experiments/ode-002/Cargo.lock`. Locked, dependency-
+free Cargo metadata and `git diff --check` pass; no local build was run. A new
+hosted run is pending this lockfile correction.
+
 ## Release rule
 
 Deferred tasks remain visibly open until their evidence is complete. Windows results do not count as Linux or macOS evidence. The completed M5-22a pre-gate does not close M5-23. The full M5-23 gate and platform-specific tests remain mandatory before the RC architecture audit and final 1.0 publication.
