@@ -40,6 +40,42 @@ function sendNativeMacKey(action, appProcessId, driverPath) {
   }
 }
 
+function sendNativeLinuxKey(action, appProcessId) {
+  const key = { tab: 'Tab', enter: 'Return' }[action];
+  if (!key) throw new Error(`Unsupported native Linux keyboard action '${action}'.`);
+  const windows = spawnSync('xdotool', ['search', '--onlyvisible', '--pid', String(appProcessId)], {
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  const windowId = windows.stdout?.trim().split(/\r?\n/).at(-1);
+  if (windows.error || windows.status !== 0 || !windowId) {
+    const reason = windows.error?.message ?? windows.stderr?.trim() ?? `exit ${windows.status}`;
+    throw new Error(`Could not find the native Linux app window for keyboard input: ${reason}`);
+  }
+  const focused = spawnSync('xdotool', ['windowfocus', '--sync', windowId], { encoding: 'utf8', timeout: 15000 });
+  if (focused.error || focused.status !== 0) {
+    const reason = focused.error?.message ?? focused.stderr?.trim() ?? `exit ${focused.status}`;
+    throw new Error(`Could not focus the native Linux app window: ${reason}`);
+  }
+  const sent = spawnSync('xdotool', ['key', '--clearmodifiers', key], { encoding: 'utf8', timeout: 15000 });
+  if (sent.error || sent.status !== 0) {
+    const reason = sent.error?.message ?? sent.stderr?.trim() ?? `exit ${sent.status}`;
+    throw new Error(`Could not send native Linux keyboard action '${action}': ${reason}`);
+  }
+}
+
+async function focusNativeWindow(browser) {
+  const focused = await browser.executeAsync(done => {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) {
+      done(false);
+      return;
+    }
+    invoke('focus_native_window').then(() => done(true), () => done(false));
+  });
+  if (!focused) throw new Error('The native app did not accept the window-focus request.');
+}
+
 async function enableMacFullKeyboardAccess(homeDirs) {
   if (process.platform !== 'darwin') return null;
   const version = spawnSync('sw_vers', ['-productVersion'], { encoding: 'utf8' });
@@ -212,6 +248,21 @@ async function tabToCreateButton(browser, nameInput, appProcessId, driverPath) {
   } catch {
     await nameInput.click();
   }
+  if (process.platform === 'linux') {
+    await focusNativeWindow(browser);
+    await nameInput.click();
+    sendNativeLinuxKey('tab', appProcessId);
+    try {
+      await waitForCreateButtonFocus(2000);
+      return { focusedId: await focusedElementId(), navigationMode: 'xdotool' };
+    } catch {
+      const activeElement = await browser.execute(() => ({
+        id: document.activeElement?.id ?? '',
+        tag: document.activeElement?.tagName ?? '',
+      }));
+      throw new Error(`Native Linux Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
+    }
+  }
   if (process.platform !== 'darwin') {
     const activeElement = await browser.execute(() => ({
       id: document.activeElement?.id ?? '',
@@ -219,15 +270,7 @@ async function tabToCreateButton(browser, nameInput, appProcessId, driverPath) {
     }));
     throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
   }
-  const focusRequested = await browser.executeAsync(done => {
-    const invoke = window.__TAURI__?.core?.invoke;
-    if (!invoke) {
-      done(false);
-      return;
-    }
-    invoke('focus_native_window').then(() => done(true), () => done(false));
-  });
-  if (!focusRequested) throw new Error('The native app did not accept the window-focus request.');
+  await focusNativeWindow(browser);
   await nameInput.click();
   sendNativeMacKey('tab', appProcessId, driverPath);
   try {
@@ -402,6 +445,7 @@ export async function runKeyboardDriver({
     let enterDispatchError = null;
     try {
       if (process.platform === 'darwin') sendNativeMacKey('enter', child.pid, macKeyboardDriverPath);
+      else if (process.platform === 'linux') sendNativeLinuxKey('enter', child.pid);
       else await browser.keys(ENTER);
     } catch (error) {
       if (!crashDuringCommit) throw error;
