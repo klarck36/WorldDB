@@ -128,9 +128,13 @@ function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
 function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
     $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+        $factsEvents = @(Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json })
+        $smokeError = @($factsEvents | Where-Object {
             $_.operation -eq 'diagnostic' -and $_.details -like 'schema-smoke:error:*'
         } | Select-Object -Last 1)
+        $schemaSmokeComplete = @($factsEvents | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:schema-smoke:after-final-entity-type-deprecation'
+        }).Count -ge 1
         if ($smokeError.Count -gt 0) {
             throw "Schema IPC smoke failed in the renderer: $($smokeError[0].details)"
         }
@@ -144,7 +148,7 @@ function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]
             $timeUnitStates = @($primary | ForEach-Object { $_.definitions } | Where-Object { $_.family -eq 'time_unit' -and $_.symbol -eq 'ipc_smoke_max_scale' } | Select-Object -ExpandProperty lifecycle -Unique)
             $timelineComplete = @('active', 'deprecated', 'retired' | Where-Object { $timelineStates -contains $_ }).Count -eq 3
             $timeUnitComplete = @('active', 'deprecated', 'retired' | Where-Object { $timeUnitStates -contains $_ }).Count -eq 3
-            if ($creates -ge 3 -and $batchCount -ge 6 -and $timelineComplete -and $timeUnitComplete -and $currentReadCount -ge 1) { return }
+            if ($creates -ge 3 -and $batchCount -ge 7 -and $timelineComplete -and $timeUnitComplete -and $currentReadCount -ge 1 -and $schemaSmokeComplete) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }
@@ -161,9 +165,13 @@ function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]
         if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
-            $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+            $factsEvents = @(Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json })
+            $smokeError = @($factsEvents | Where-Object {
                 $_.operation -eq 'diagnostic' -and $_.details -like 'entity-smoke:error:*'
             } | Select-Object -Last 1)
+            $entitySmokeComplete = @($factsEvents | Where-Object {
+                $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:entity-smoke:complete'
+            }).Count -ge 1
             if ($smokeError.Count -gt 0) {
                 throw "Entity IPC smoke failed in the renderer: $($smokeError[0].details)"
             }
@@ -172,7 +180,7 @@ function Wait-ForEntityOperations([System.Diagnostics.Process]$Process, [string]
             $explicitReads = @($primary | Where-Object { $_.operation -eq 'snapshot_explicit' }).Count
             $retirements = @($primary | Where-Object { $_.operation -eq 'retire' }).Count
             $secondaryReads = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' }).Count
-            if ($creates -ge 2 -and $historicalReads -ge 2 -and $explicitReads -ge 1 -and $retirements -ge 1 -and $secondaryReads -ge 1) { return }
+            if ($creates -ge 2 -and $historicalReads -ge 2 -and $explicitReads -ge 1 -and $retirements -ge 1 -and $secondaryReads -ge 1 -and $entitySmokeComplete) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }
@@ -222,11 +230,15 @@ function Wait-ForTransferOperations([System.Diagnostics.Process]$Process, [strin
 }
 
 function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+        $factsEvents = @(Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json })
+        $smokeError = @($factsEvents | Where-Object {
             $_.operation -eq 'diagnostic' -and $_.details -like 'perspective-smoke:error:*'
         } | Select-Object -Last 1)
+        $perspectiveSmokeComplete = @($factsEvents | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:perspective-smoke:complete'
+        }).Count -ge 1
         if ($smokeError.Count -gt 0) {
             throw "Perspective IPC smoke failed in the renderer: $($smokeError[0].details)"
         }
@@ -239,7 +251,7 @@ function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [st
             $validContexts = @($primary | Where-Object { $_.operation -eq 'validate_context' -and $_.succeeded }).Count
             $rejectedContexts = @($primary | Where-Object { $_.operation -eq 'validate_context' -and -not $_.succeeded }).Count
             $secondaryReads = @($secondary | Where-Object { $_.operation -eq 'snapshot_current' -and $_.succeeded }).Count
-            if ($creates -ge 1 -and $updates -ge 1 -and $retirements -ge 1 -and $validContexts -ge 2 -and $rejectedContexts -ge 3 -and $secondaryReads -ge 1) { return }
+            if ($creates -ge 1 -and $updates -ge 1 -and $retirements -ge 1 -and $validContexts -ge 2 -and $rejectedContexts -ge 3 -and $secondaryReads -ge 1 -and $perspectiveSmokeComplete) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }

@@ -1850,8 +1850,11 @@ async fn manage_schema(
             "facts-smoke:schema-ipc:authorized".to_owned(),
         )?;
     }
-    let compact_create_response =
-        matches!(&request.command, &SchemaCommand::Create { .. });
+    let compact_create_response = matches!(&request.command, SchemaCommand::Create { .. });
+    let compact_lifecycle_batch_response = matches!(
+        &request.command,
+        SchemaCommand::SetLifecycleBatch { .. }
+    );
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
     let facts_smoke_predicate = matches!(
@@ -1934,6 +1937,13 @@ async fn manage_schema(
                         publication
                             .definitions
                             .retain(|definition| definition.created_revision == revision);
+                    }
+                }
+                if compact_lifecycle_batch_response {
+                    if let SchemaResponse::Published(publication) = &mut result {
+                        // Lifecycle publication callers refresh the authoritative
+                        // snapshot separately and do not consume this catalogue.
+                        publication.definitions.clear();
                     }
                 }
                 let response = SchemaResponseV1 {
@@ -2275,25 +2285,62 @@ async fn manage_perspectives(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let window_label = window.label().to_owned();
+    let trace_facts_smoke = window_label == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
-            window.label(),
+            &window_label,
             &request.session_id,
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:authorized".to_owned(),
+        )?;
+    }
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = perspective_smoke_operation(&request.command);
-    let window_label = window.label().to_owned();
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:dispatching".to_owned(),
+        )?;
+    }
     let backend = backend.inner().clone();
+    let worker_window_label = window_label.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        match backend.perspectives_with_operation_id(request.command, operation_id) {
+        let result = backend.perspectives_with_operation_id(request.command, operation_id);
+        if trace_facts_smoke {
+            record_facts_smoke_diagnostic(
+                &worker_window_label,
+                format!(
+                    "facts-smoke:perspective-ipc:engine-returned:{}",
+                    if result.is_ok() { "ok" } else { "rejected" }
+                ),
+            )?;
+        }
+        match result {
             Ok(result) => {
-                record_perspective_smoke(&window_label, operation, true, Some(&result))?;
+                record_perspective_smoke(&worker_window_label, operation, true, Some(&result))?;
+                if trace_facts_smoke {
+                    record_facts_smoke_diagnostic(
+                        &worker_window_label,
+                        "facts-smoke:perspective-ipc:recorded".to_owned(),
+                    )?;
+                }
                 Ok(result)
             }
             Err(_) => {
-                record_perspective_smoke(&window_label, operation, false, None)?;
+                record_perspective_smoke(&worker_window_label, operation, false, None)?;
                 Err(IpcErrorV1::new("perspective_rejected"))
             }
         }
@@ -2303,10 +2350,18 @@ async fn manage_perspectives(
     if matches!(result, PerspectiveResponse::Published(_)) {
         let _ = app.emit("project-state-changed", ());
     }
-    Ok(PerspectiveResponseV1 {
+    let response = PerspectiveResponseV1 {
         protocol_version: IPC_PROTOCOL_VERSION,
         result,
-    })
+    };
+    if trace_facts_smoke {
+        serde_json::to_vec(&response).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:return-ready".to_owned(),
+        )?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]

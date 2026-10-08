@@ -4877,6 +4877,7 @@ async function runEntitySmoke(activeSessionId) {
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
+  await recordFactsSmokeStage("entity-smoke:complete");
 }
 
 async function runBranchLayerSmoke(activeSessionId) {
@@ -4971,12 +4972,14 @@ async function runBranchLayerSmoke(activeSessionId) {
 
 async function runPerspectiveSmoke(activeSessionId) {
   const baseline = await invokePerspectiveSnapshot(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage("perspective-smoke:before-create");
   const created = await invokePerspectivesFor(activeSessionId, {
     command: "create",
     expected_base_revision: baseline.revision,
     display_name: "IPC-Prüfung Stadtwache",
     description: "Temporäre Perspektive für die authentisierte Desktopprüfung.",
   });
+  await recordFactsSmokeStage("perspective-smoke:after-create");
   if (created.kind !== "published" || !created.perspective_id) {
     throw new Error("Perspective creation did not publish its private identity");
   }
@@ -5073,6 +5076,7 @@ async function runPerspectiveSmoke(activeSessionId) {
   }
   perspectiveViewMode.value = "current";
   await refreshPerspectives(activeSessionId);
+  await recordFactsSmokeStage("perspective-smoke:complete");
 }
 
 async function runSecurityPolicySmoke(activeSessionId) {
