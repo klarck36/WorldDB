@@ -27,7 +27,12 @@ foreach ($name in $environmentNames) {
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $stageRoot = Join-Path $tempBase ('worlddb-ode002-matrix-builds-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $stageRoot
-$targetRoot = Join-Path $workspaceRoot 'target\debug'
+$targetBase = if ([string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    Join-Path $workspaceRoot 'target'
+} else {
+    [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
+}
+$targetRoot = Join-Path $targetBase 'debug'
 
 function Invoke-CargoBuild([string[]]$Arguments, [string]$Label) {
     & $cargoPath @Arguments
@@ -59,7 +64,8 @@ try {
         -UpdatedInProcessExecutable (Join-Path $stageRoot 'in-process-v2.exe') `
         -SidecarExecutable (Join-Path $stageRoot 'sidecar.exe') `
         -EngineExecutable (Join-Path $stageRoot 'engine-v1.exe') `
-        -UpdatedEngineExecutable (Join-Path $stageRoot 'engine-v2.exe')
+        -UpdatedEngineExecutable (Join-Path $stageRoot 'engine-v2.exe') `
+        -KeepArtifacts:$KeepArtifacts
     if ($LASTEXITCODE -ne 0) { throw 'The ODE-002 process matrix failed.' }
 }
 finally {

@@ -8,7 +8,7 @@
 
 Alle Workspacecrates erben das Rust-Lint `unsafe_code = deny`. `worlddb-core` verschärft das auf Crate-Ebene zu `#![forbid(unsafe_code)]`. `worlddb-storage-file` und `worlddb-process-adapter` sind die genehmigten Plattformadapter und setzen selbst `#![deny(unsafe_code)]`; ihre eng begrenzten, geprüften Ausnahmen müssen lokal registriert sein.
 
-`tools/check_unsafe_policy.py` weist Unsafe außerhalb dieser beiden Adapter ab. Jeder Unsafe-Block braucht im lokalen Kontext ein `#[allow(unsafe_code, reason = "WDB-EXC-NNNN")]`-Attribut sowie `SAFETY:`, `TEST:` und `REVIEW:`-Belege. Rustc/Clippy erzwingen die Codegrenze; der Check prüft die zusätzlichen Reviewangaben. WDB-EXC-0002 bindet die Windows-Dateiveröffentlichung. WDB-EXC-0005 bindet Job-, Prozesszuweisungs- und Resume-Aufrufe des Prozessadapters. WDB-EXC-0006 bindet das begrenzte Lesen der Benutzer-SID aus dem Primärtoken des aktuellen Prozesses; nicht unterstützte Plattformen bleiben fail-closed.
+`tools/check_unsafe_policy.py` weist Unsafe außerhalb dieser beiden Adapter ab. Jeder Unsafe-Block braucht im lokalen Kontext ein `#[allow(unsafe_code, reason = "WDB-EXC-NNNN")]`-Attribut sowie `SAFETY:`, `TEST:` und `REVIEW:`-Belege. Rustc/Clippy erzwingen die Codegrenze; der Check prüft die zusätzlichen Reviewangaben. WDB-EXC-0002 bindet die Windows-Dateiveröffentlichung. WDB-EXC-0005 bindet Job-, Prozesszuweisungs- und Resume-Aufrufe des Prozessadapters. WDB-EXC-0006 bindet das begrenzte Lesen der Windows-Benutzer-SID aus dem aktuellen Prozesstoken. WDB-EXC-0009 bindet das Lesen von Unix-UID/macOS-Plattform-UUID an den Prozessadapter; fehlerhafte Quellen bleiben fail-closed.
 
 ## Ausnahme-Register
 

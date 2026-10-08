@@ -11,15 +11,13 @@
     },
     "macos": {
       "filesystem": "APFS",
-      "runner": null,
-      "state": "deferred",
-      "deferred_until": "M9-07"
+      "runner": "scripts/run-native-e2e-macos.mjs",
+      "state": "available"
     },
     "linux": {
       "filesystem": "ext4",
-      "runner": null,
-      "state": "deferred",
-      "deferred_until": "M9-07"
+      "runner": "scripts/run-native-e2e-linux.mjs",
+      "state": "available"
     }
   },
   "cases": [
@@ -27,48 +25,86 @@
       "id": "native_ipc_in_process",
       "scenario": "native_ipc",
       "scope": "core_workflows; two native windows; renderer manipulation; read-only inspection and explicit recovery",
-      "drivers": { "windows": "scripts/run-ipc-security-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["in-process"],
+      "drivers": {
+        "windows": "scripts/run-ipc-security-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "in-process"
+      ],
       "required": true
     },
     {
       "id": "native_ipc_sidecar",
       "scenario": "native_ipc",
       "scope": "core_workflows; two native windows; renderer manipulation; read-only inspection and explicit recovery",
-      "drivers": { "windows": "scripts/run-ipc-security-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["sidecar"],
+      "drivers": {
+        "windows": "scripts/run-ipc-security-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "sidecar"
+      ],
       "required": true
     },
     {
       "id": "competing_process_in_process",
       "scenario": "competing_process",
       "scope": "second process is denied the writer lock; reopen succeeds after shutdown",
-      "drivers": { "windows": "scripts/run-writer-lock-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["in-process"],
+      "drivers": {
+        "windows": "scripts/run-writer-lock-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "in-process"
+      ],
       "required": true
     },
     {
       "id": "competing_process_sidecar",
       "scenario": "competing_process",
       "scope": "second process is denied the writer lock; reopen succeeds and sidecar children are reaped",
-      "drivers": { "windows": "scripts/run-writer-lock-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["sidecar"],
+      "drivers": {
+        "windows": "scripts/run-writer-lock-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "sidecar"
+      ],
       "required": true
     },
     {
       "id": "keyboard_navigation",
       "scenario": "keyboard_navigation",
       "scope": "native accessibility tree exposes named controls; keyboard text entry, Tab traversal, and Enter activation across the primary workflow",
-      "drivers": { "windows": "scripts/run-keyboard-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["in-process", "sidecar"],
+      "drivers": {
+        "windows": "scripts/run-keyboard-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "in-process",
+        "sidecar"
+      ],
       "required": true
     },
     {
       "id": "commit_crash_recovery",
       "scenario": "commit_crash_recovery",
       "scope": "terminate the native app during durable commit, reopen, and verify committed-prefix/recovery outcome",
-      "drivers": { "windows": "scripts/run-keyboard-smoke.ps1", "macos": null, "linux": null },
-      "modes": ["in-process", "sidecar"],
+      "drivers": {
+        "windows": "scripts/run-keyboard-smoke.ps1",
+        "macos": "scripts/run-native-e2e-macos.mjs",
+        "linux": "scripts/run-native-e2e-linux.mjs"
+      },
+      "modes": [
+        "in-process",
+        "sidecar"
+      ],
       "required": true
     }
   ]

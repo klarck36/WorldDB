@@ -1328,6 +1328,8 @@ impl std::error::Error for JobError {}
 mod tests {
     use std::fmt;
 
+    use crate::non_interference::{CursorObservation, PairedWorld, PublicObservation};
+
     use super::{
         CommitError, CommitOutcome, ConflictFact, ConflictReport, IntegrityImpact, InternalError,
         JobError, OpenError, PublicErrorCode, RecoveryAction, RecoveryError, ResourceLookupFailure,
@@ -1372,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_report_filter_keeps_only_authorized_facts() {
+    fn conflict_report_filter_keeps_only_authorized_facts() -> Result<(), std::io::Error> {
         let report = ConflictReport::new(vec![
             ConflictFact::ReadDependencyChanged,
             ConflictFact::WriteTargetChanged,
@@ -1386,6 +1388,26 @@ mod tests {
                 ConflictFact::BaseRevisionAdvanced,
             ]
         );
+
+        let visible_only = ConflictReport::new(vec![
+            ConflictFact::ReadDependencyChanged,
+            ConflictFact::BaseRevisionAdvanced,
+        ]);
+        PairedWorld::new((), visible_only, report)
+            .compare(|_visible, world| {
+                PublicObservation::success(
+                    world
+                        .filtered(|fact| fact != ConflictFact::WriteTargetChanged)
+                        .facts()
+                        .to_vec(),
+                    vec!["facts".to_owned()],
+                    CursorObservation::Absent,
+                )
+            })
+            .map_err(|_| {
+                std::io::Error::other("hidden conflict facts changed the public conflict report")
+            })?;
+        Ok(())
     }
 
     #[test]
@@ -1426,6 +1448,34 @@ mod tests {
         let dto = to_public_error(&error);
         assert_eq!(dto, to_public_error(&error));
         assert_eq!(format!("{dto}"), display_first);
+    }
+
+    #[test]
+    fn paired_internal_error_id_is_hidden_by_the_public_error_projection()
+    -> Result<(), std::io::Error> {
+        let first =
+            operation_id().ok_or_else(|| std::io::Error::other("test operation ID is invalid"))?;
+        let mut bytes = [0_u8; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        bytes[15] = 3;
+        let second = OperationId::try_from_bytes(bytes)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        PairedWorld::new((), first, second)
+            .compare(|(), operation_id| {
+                let error = CommitError::UnknownCommitOutcome {
+                    operation_id: *operation_id,
+                };
+                PublicObservation::success(
+                    (error.public_code().to_owned(), error.to_string()),
+                    vec!["code".to_owned()],
+                    CursorObservation::Absent,
+                )
+            })
+            .map_err(|_| {
+                std::io::Error::other("public error projection exposed an internal operation ID")
+            })?;
+        Ok(())
     }
 
     #[derive(Debug)]

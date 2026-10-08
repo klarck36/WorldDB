@@ -807,7 +807,7 @@ struct NativeManifestPublication;
 
 impl ManifestPublication for NativeManifestPublication {
     fn sync_staged_file(&self, file: &File, _kind: StagedFileKind) -> io::Result<()> {
-        file.sync_all()
+        crate::platform_sync::sync_file(file)
     }
 
     fn publish_manifest_generation(&self, stage: &Path, target: &Path) -> io::Result<()> {
@@ -1685,14 +1685,15 @@ mod tests {
             drop(lock);
 
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point.name())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point.name())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point:?} exited with {:?}, expected crash code 86",

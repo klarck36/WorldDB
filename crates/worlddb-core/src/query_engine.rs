@@ -41,7 +41,7 @@ use crate::query_aggregate::{
     AggregateError, AggregateResult, AggregateSpec, ResolvedAggregateRow,
     aggregate_visible_resolved,
 };
-use crate::query_context::{BudgetDimension, QueryContext, WorldTimeSelector};
+use crate::query_context::{BudgetDimension, QueryBudgetClass, QueryContext, WorldTimeSelector};
 use crate::query_graph::{
     GraphCandidateSet, GraphError, GraphResult, GraphSpec, full_scan_authorized_graph_traversal,
 };
@@ -2044,6 +2044,31 @@ pub enum QueryEngineError {
     Explain,
 }
 
+impl QueryEngineError {
+    /// Coarse resource class for status and timing buckets.
+    ///
+    /// Candidate, work-unit, and result exhaustion share `QueryWork`; exact dimensions stay
+    /// available to trusted internal diagnostics but are not needed in public status buckets.
+    #[must_use]
+    pub const fn budget_class(&self) -> Option<QueryBudgetClass> {
+        match self {
+            Self::BudgetExceeded(_) | Self::FullScanBudgetExceeded(_) => {
+                Some(QueryBudgetClass::QueryWork)
+            }
+            Self::ResourceBudgetExceeded => Some(QueryBudgetClass::ProcessMemory),
+            Self::Search(QuerySearchError::BudgetExceeded)
+            | Self::Graph(GraphError::BudgetExceeded)
+            | Self::Aggregate(AggregateError::BudgetExceeded) => Some(QueryBudgetClass::QueryWork),
+            Self::Search(QuerySearchError::ResourceBudgetExceeded)
+            | Self::Graph(GraphError::ResourceBudgetExceeded)
+            | Self::Aggregate(AggregateError::ResourceBudgetExceeded) => {
+                Some(QueryBudgetClass::ProcessMemory)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolutionFailure {
     PredicateMismatch,
@@ -2170,12 +2195,17 @@ mod tests {
     use crate::layers::{LayerDefinition, LayerSelection};
     use crate::masks::{Mask, MaskSelector, ReplacementBoundary};
     use crate::multi_value_resolution::MultiValueOutcome;
+    use crate::non_interference::{
+        CursorObservation, PairedWorld, PublicFailure, PublicObservation,
+    };
     use crate::query_context::{
         AuthorizationMode, CancellationToken, QueryBudget, QueryBudgetLimits, QueryContextInput,
         SecurityContext, ValidatedLayerSelection,
     };
     use crate::record_refs::SnapshotRef;
-    use crate::reference_query::{HistoricalQueryBinding, ResolvedOutcome, ResolvedView};
+    use crate::reference_query::{
+        ExplainStage, HistoricalQueryBinding, ResolvedOutcome, ResolvedView,
+    };
     use crate::schema::{
         Cardinality, ConstraintSet, EntityTypeConstraint, Lifecycle, PredicateDefinitionSpec,
         ResolutionPolicy, ValueKind,
@@ -2337,6 +2367,153 @@ mod tests {
         visible_id: AssertionId,
         second_visible_id: AssertionId,
         hidden_id: AssertionId,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum PublicSingleOutcome {
+        Known {
+            value: String,
+            polarity: Polarity,
+            contributors: Vec<AssertionId>,
+        },
+        Unknown,
+        Conflict {
+            contributors: Vec<AssertionId>,
+        },
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    enum PublicQueryProjection {
+        Resolved(PublicSingleOutcome),
+        Explain {
+            outcome: PublicSingleOutcome,
+            stages: Vec<ExplainStage>,
+        },
+    }
+
+    fn public_single_outcome(view: &ResolvedView) -> PublicSingleOutcome {
+        match view.outcome() {
+            ResolvedOutcome::Single(SingleValueOutcome::Known {
+                value: Value::String(value),
+                polarity,
+                contributors,
+            }) => PublicSingleOutcome::Known {
+                value: value.clone(),
+                polarity: *polarity,
+                contributors: contributors.clone(),
+            },
+            ResolvedOutcome::Single(SingleValueOutcome::Known { contributors, .. }) => {
+                PublicSingleOutcome::Known {
+                    value: "<non-string-test-value>".to_owned(),
+                    polarity: Polarity::Positive,
+                    contributors: contributors.clone(),
+                }
+            }
+            ResolvedOutcome::Single(SingleValueOutcome::Unknown) => PublicSingleOutcome::Unknown,
+            ResolvedOutcome::Single(SingleValueOutcome::Conflict { contributors }) => {
+                PublicSingleOutcome::Conflict {
+                    contributors: contributors.clone(),
+                }
+            }
+            ResolvedOutcome::Multi(_) => PublicSingleOutcome::Unknown,
+        }
+    }
+
+    fn history_without_assertion(
+        fixture: &Fixture,
+        excluded: AssertionId,
+    ) -> TestResult<HistorySpaceReferenceModel<AssertionHistoryRecord>> {
+        let mut commits = std::collections::BTreeMap::<
+            Revision,
+            Vec<(HistorySpaceId, AssertionHistoryRecord)>,
+        >::new();
+        for (revision, owner, record) in fixture.history.iter_at(
+            fixture.context.history_space(),
+            fixture.context.snapshot_revision(),
+        )? {
+            if matches!(record, AssertionHistoryRecord::Assertion(assertion) if assertion.id() == excluded)
+            {
+                continue;
+            }
+            commits
+                .entry(revision)
+                .or_default()
+                .push((owner, record.clone()));
+        }
+        Ok(HistorySpaceReferenceModel::from_published_snapshot(
+            fixture.history.catalog().definitions().to_vec(),
+            fixture.history.latest_published(),
+            commits.into_iter().collect(),
+        )?)
+    }
+
+    fn paired_query_observation(
+        fixture: &Fixture,
+        history: &HistorySpaceReferenceModel<AssertionHistoryRecord>,
+        use_index: bool,
+        explain: bool,
+    ) -> PublicObservation<PublicQueryProjection> {
+        let store = AssertionQueryStore::new(
+            history,
+            &fixture.archive,
+            &fixture.layers,
+            &fixture.hidden_policies,
+        );
+        let (masks, boundaries) = empty_mask_and_boundary_sources();
+        let index = if use_index {
+            available_index(fixture)
+        } else {
+            AssertionPointIndexAccess::missing()
+        };
+        let request = point_request(
+            &fixture.context,
+            masks,
+            boundaries,
+            index,
+            FullScanBudget::Available,
+        );
+        if explain {
+            match ProductiveQueryEngine::explain_point(
+                store,
+                request,
+                fixture.slot,
+                &fixture.predicate,
+                |_, _| Ok(false),
+            ) {
+                Ok(output) => PublicObservation::success(
+                    PublicQueryProjection::Explain {
+                        outcome: public_single_outcome(output.query().value().resolved_view()),
+                        stages: output.query().value().stages().to_vec(),
+                    },
+                    vec!["outcome".to_owned(), "stages".to_owned()],
+                    CursorObservation::Absent,
+                ),
+                Err(error) => PublicObservation::failure(
+                    PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                    vec!["error".to_owned()],
+                    CursorObservation::Absent,
+                ),
+            }
+        } else {
+            match ProductiveQueryEngine::resolved_point(
+                store,
+                request,
+                fixture.slot,
+                &fixture.predicate,
+                |_, _| Ok(false),
+            ) {
+                Ok(output) => PublicObservation::success(
+                    PublicQueryProjection::Resolved(public_single_outcome(output.query().value())),
+                    vec!["outcome".to_owned()],
+                    CursorObservation::Absent,
+                ),
+                Err(error) => PublicObservation::failure(
+                    PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                    vec!["error".to_owned()],
+                    CursorObservation::Absent,
+                ),
+            }
+        }
     }
 
     fn id<T: DomainId>(tail: u8) -> TestResult<T> {
@@ -3491,6 +3668,28 @@ mod tests {
     }
 
     #[test]
+    fn paired_hidden_assertion_is_inert_for_resolved_and_explain_index_and_scan() -> TestResult {
+        let fixture = fixture()?;
+        let without_hidden = history_without_assertion(&fixture, fixture.hidden_id)?;
+        let worlds = PairedWorld::new(&fixture, &fixture.history, &without_hidden);
+
+        for use_index in [true, false] {
+            for explain in [false, true] {
+                worlds
+                    .compare(|fixture, history| {
+                        paired_query_observation(fixture, history, use_index, explain)
+                    })
+                    .map_err(|_| {
+                        std::io::Error::other(format!(
+                            "paired hidden-record result differed (index={use_index}, explain={explain})"
+                        ))
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn hidden_index_entries_do_not_consume_candidate_budget() -> TestResult {
         let fixture = fixture()?;
         let context = context_with_candidate_budget(&fixture.context, 2)?;
@@ -3575,6 +3774,47 @@ mod tests {
             ))
         ));
         Ok(())
+    }
+
+    #[test]
+    fn query_budget_errors_share_coarse_work_and_memory_buckets() {
+        for dimension in [
+            BudgetDimension::Candidates,
+            BudgetDimension::WorkUnits,
+            BudgetDimension::Results,
+        ] {
+            let error = QueryEngineError::BudgetExceeded(dimension);
+            assert_eq!(error.budget_class(), Some(QueryBudgetClass::QueryWork));
+            assert_eq!(
+                error.to_string(),
+                "query budget does not allow a complete result"
+            );
+        }
+        assert_eq!(
+            QueryEngineError::FullScanBudgetExceeded(BudgetDimension::WorkUnits).budget_class(),
+            Some(QueryBudgetClass::QueryWork)
+        );
+        assert_eq!(
+            QueryEngineError::Search(QuerySearchError::BudgetExceeded).budget_class(),
+            Some(QueryBudgetClass::QueryWork)
+        );
+        assert_eq!(
+            QueryEngineError::Graph(GraphError::BudgetExceeded).budget_class(),
+            Some(QueryBudgetClass::QueryWork)
+        );
+        assert_eq!(
+            QueryEngineError::Aggregate(AggregateError::BudgetExceeded).budget_class(),
+            Some(QueryBudgetClass::QueryWork)
+        );
+        assert_eq!(
+            QueryEngineError::ResourceBudgetExceeded.budget_class(),
+            Some(QueryBudgetClass::ProcessMemory)
+        );
+        assert_eq!(
+            QueryEngineError::Search(QuerySearchError::ResourceBudgetExceeded).budget_class(),
+            Some(QueryBudgetClass::ProcessMemory)
+        );
+        assert_eq!(QueryEngineError::Unauthorized.budget_class(), None);
     }
 
     #[test]

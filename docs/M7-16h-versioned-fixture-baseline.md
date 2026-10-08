@@ -7,7 +7,10 @@
 
 Der synthetische Korpus liegt unter `crates/worlddb-storage-file/tests/fixtures/m7-16h/`. Sein Manifest enthält 24 Dateien mit zusammen 15.553 Bytes. Die Testkonstante bindet die vollständige Manifestdatei an diesen BLAKE3-Digest:
 
-`41c7925b797c2851cba24da7be57e18bc93954f1e910690229b857a0b403e353`
+`e055937e2cc6a7613fc9d8c40a5a2e6ea9e18910c727d4eb6b3fcaa99cadea33`
+
+M8-14a upgraded the frozen Logical Export golden to v2 and refreshed this
+manifest digest. The physical storage fixture remained byte-identical.
 
 Jeder Manifesteintrag bindet relativen Pfad, Bytezahl und BLAKE3-Dateidigest. Der Test lehnt geänderte Bytes, zusätzliche oder fehlende Dateien, unsortierte und unsichere Pfade sowie Symlinks ab. Ohne das ausdrückliche Capture-Flag schreibt der Test keine Fixtures.
 

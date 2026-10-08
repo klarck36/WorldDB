@@ -1,4 +1,16 @@
 decoder_id	family	seed_id
+core.int_decimal	int_text	text/core.int_decimal
+core.uint_decimal	uint_text	text/core.uint_decimal
+core.decimal	decimal_text	text/core.decimal
+core.symbol_text	symbol_text	text/core.symbol_text
+core.id_text	id_text	text/core.id_text
+core.revision_text	revision_text	text/core.revision_text
+core.schema_revision_text	schema_revision_text	text/core.schema_revision_text
+core.int_canonical_bytes	int_bytes	core_bytes/core.int_canonical_bytes
+core.uint_canonical_bytes	uint_bytes	core_bytes/core.uint_canonical_bytes
+core.decimal_canonical_bytes	decimal_bytes	core_bytes/core.decimal_canonical_bytes
+core.cursor_token	cursor_token	core_bytes/core.cursor_token
+core.migration_run_journal	migration_run_journal	generated/migration_run_journal
 record.history_space_definition	record	record/history_space_root
 record.entity	record	record/entity
 record.entity_retirement	record	record/entity_retirement

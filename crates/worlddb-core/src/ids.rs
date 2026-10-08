@@ -726,15 +726,18 @@ define_domain_ids!(
 /// This function remains inside the private `ids` module so callers receive IDs
 /// through product actions, not through a free-standing generator API.
 pub fn generate_id<T: DomainId>() -> Result<T, IdGenerationError> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| IdGenerationError::ClockBeforeUnixEpoch)?
-        .as_millis();
-    let timestamp = u64::try_from(timestamp).map_err(|_| IdGenerationError::TimestampOutOfRange)?;
+    let timestamp = timestamp_millis_from_clock(SystemTime::now())?;
     let mut entropy = [0_u8; 10];
     getrandom::fill(&mut entropy).map_err(|_| IdGenerationError::EntropyUnavailable)?;
     let bytes = build_uuid_v7(timestamp, &entropy)?;
     T::try_from_bytes(bytes).map_err(IdGenerationError::InvalidGeneratedId)
+}
+
+fn timestamp_millis_from_clock(now: SystemTime) -> Result<u64, IdGenerationError> {
+    let elapsed = now
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| IdGenerationError::ClockBeforeUnixEpoch)?;
+    u64::try_from(elapsed.as_millis()).map_err(|_| IdGenerationError::TimestampOutOfRange)
 }
 
 fn build_uuid_v7(
@@ -965,9 +968,10 @@ mod tests {
         IdGenerationError, IdNamespace, IdPersistence, IdScope, IdValidationError, IdWire,
         PolicyRuleId, Revision, RevisionError, RoleAssignmentId, RoleId, SchemaRevision,
         SecurityEpoch, SecurityEpochError, SecurityPolicyRecordId, SnapshotId, UUID_BYTES,
-        build_uuid_v7, generate_id,
+        build_uuid_v7, generate_id, timestamp_millis_from_clock,
     };
     use std::str::FromStr;
+    use std::time::{Duration, UNIX_EPOCH};
     use uuid::{Uuid, Variant};
 
     const VALID_V7: &str = "00000000-0000-7000-8000-000000000001";
@@ -1055,6 +1059,36 @@ mod tests {
 
         let too_large = build_uuid_v7(1_u64 << 48, &[0; 10]);
         assert_eq!(too_large, Err(IdGenerationError::TimestampOutOfRange));
+    }
+
+    #[test]
+    fn m9_05_clock_rollback_is_non_monotonic_but_safe_and_pre_epoch_fails_closed()
+    -> Result<(), String> {
+        let later = UNIX_EPOCH + Duration::from_millis(20_000);
+        let earlier = UNIX_EPOCH + Duration::from_millis(10_000);
+        let later_millis = timestamp_millis_from_clock(later)
+            .map_err(|error| format!("later clock sample: {error:?}"))?;
+        let earlier_millis = timestamp_millis_from_clock(earlier)
+            .map_err(|error| format!("rolled-back clock sample: {error:?}"))?;
+        assert!(earlier_millis < later_millis);
+
+        let before_epoch = UNIX_EPOCH - Duration::from_millis(1);
+        assert_eq!(
+            timestamp_millis_from_clock(before_epoch),
+            Err(IdGenerationError::ClockBeforeUnixEpoch)
+        );
+
+        let first = build_uuid_v7(later_millis, &[0x11; 10])
+            .map_err(|error| format!("later UUID timestamp: {error:?}"))?;
+        let after_rollback = build_uuid_v7(earlier_millis, &[0x22; 10])
+            .map_err(|error| format!("rolled-back UUID timestamp: {error:?}"))?;
+        assert!(EntityId::try_from_bytes(first).is_ok());
+        assert!(EntityId::try_from_bytes(after_rollback).is_ok());
+        assert_ne!(first, after_rollback);
+        println!(
+            "M9-05 clock anomaly: rollback accepted as non-monotonic ID metadata; pre-epoch status=ClockBeforeUnixEpoch"
+        );
+        Ok(())
     }
 
     #[test]

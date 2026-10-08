@@ -560,13 +560,9 @@ impl AdapterProcessHost {
             .name(String::from("worlddb-adapter-stdin"))
             .spawn(move || {
                 let mut writer = stdin;
-                write_checked_frame(
-                    &mut writer,
-                    MANIFEST_MAGIC,
-                    MANIFEST_CONTEXT,
-                    &manifest_bytes,
-                    MAX_MANIFEST_BYTES,
-                )?;
+                writer
+                    .write_all(&manifest_bytes)
+                    .map_err(|error| AdapterProtocolError::ProcessIo(error.kind()))?;
                 writer
                     .flush()
                     .map_err(|error| AdapterProtocolError::ProcessIo(error.kind()))?;
@@ -630,7 +626,13 @@ pub fn read_adapter_manifest<R: Read>(
         MANIFEST_CONTEXT,
         MAX_MANIFEST_FRAME_BYTES,
     )?;
-    AdapterManifest::decode(&bytes)
+    let frame = encode_checked_frame(
+        MANIFEST_MAGIC,
+        MANIFEST_CONTEXT,
+        &bytes,
+        MAX_MANIFEST_FRAME_BYTES,
+    )?;
+    AdapterManifest::decode(&frame)
 }
 
 /// Writes an adapter's offered protocol version and capabilities to standard output.
@@ -768,7 +770,8 @@ fn receive_before_deadline<T>(
         }
         let wait = remaining.min(SUPERVISOR_POLL_INTERVAL);
         match receiver.recv_timeout(wait) {
-            Ok(result) => return result,
+            Ok(Ok(value)) => return Ok(value),
+            Ok(Err(error)) => return Err(error),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Some(status) = child
                     .try_wait()
@@ -1197,6 +1200,37 @@ impl fmt::Display for AdapterProtocolError {
 impl std::error::Error for AdapterProtocolError {}
 
 #[cfg(test)]
+pub(crate) fn fuzz_probe(target: &str, bytes: &[u8]) -> bool {
+    use std::io::Cursor;
+
+    match target {
+        "cli_adapter_manifest" => read_adapter_manifest(&mut Cursor::new(bytes)).is_ok(),
+        "cli_adapter_payload" => read_u64(&mut Cursor::new(bytes)).is_ok(),
+        "cli_adapter_handshake" => read_adapter_handshake(&mut Cursor::new(bytes)).is_ok(),
+        "cli_adapter_output" => read_adapter_output(&mut Cursor::new(bytes), MAX_IO_BYTES).is_ok(),
+        "cli_adapter_frame" => {
+            decode_checked_frame(
+                bytes,
+                MANIFEST_MAGIC,
+                MANIFEST_CONTEXT,
+                MAX_MANIFEST_FRAME_BYTES,
+            )
+            .is_ok()
+                || decode_checked_frame(
+                    bytes,
+                    HANDSHAKE_MAGIC,
+                    HANDSHAKE_CONTEXT,
+                    MAX_HANDSHAKE_BYTES,
+                )
+                .is_ok()
+                || decode_checked_frame(bytes, OUTPUT_MAGIC, OUTPUT_CONTEXT, MAX_IO_FRAME_BYTES)
+                    .is_ok()
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
@@ -1231,6 +1265,20 @@ mod tests {
         assert_eq!(first, second);
         let decoded = first.and_then(|bytes| AdapterManifest::decode(&bytes));
         assert_eq!(decoded, Ok(manifest));
+    }
+
+    #[test]
+    fn manifest_reader_accepts_the_canonical_frame() -> Result<(), AdapterProtocolError> {
+        let Some(manifest) = sample_manifest() else {
+            return Err(AdapterProtocolError::InvalidManifest);
+        };
+        let bytes = manifest.encode()?;
+        assert_eq!(
+            super::read_adapter_manifest(&mut Cursor::new(bytes.clone()))?,
+            manifest
+        );
+        assert!(super::fuzz_probe("cli_adapter_manifest", &bytes));
+        Ok(())
     }
 
     #[test]

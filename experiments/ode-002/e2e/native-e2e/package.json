@@ -1,0 +1,11 @@
+{
+  "name": "worlddb-ode-native-e2e",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "webdriverio": "9.30.1"
+  }
+}

@@ -241,13 +241,14 @@ fn process_crash_at_each_backup_boundary_leaves_only_incomplete_or_verified_targ
     let executable = env::current_exe().map_err(|error| error.to_string())?;
     for (index, checkpoint) in checkpoints.iter().enumerate() {
         let target = area.target(&format!("crash-{index}"));
-        let output = Command::new(&executable)
-            .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
-            .env(SOURCE_ENV, source.root())
-            .env(TARGET_ENV, &target)
-            .env(CHECKPOINT_ENV, checkpoint)
-            .output()
-            .map_err(|error| format!("spawn child for {checkpoint}: {error}"))?;
+        let output = crate::writer_lock::test_command_output(
+            Command::new(&executable)
+                .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
+                .env(SOURCE_ENV, source.root())
+                .env(TARGET_ENV, &target)
+                .env(CHECKPOINT_ENV, checkpoint),
+        )
+        .map_err(|error| format!("spawn child for {checkpoint}: {error}"))?;
         if output.status.code() != Some(CRASH_EXIT_CODE) {
             return Err(format!(
                 "child for {checkpoint} exited with {:?}, expected process exit {CRASH_EXIT_CODE}; {}",
@@ -327,17 +328,18 @@ fn process_crash_releases_stale_pin_after_reopen_without_reclaiming_live_snapsho
     let ready = area.target("child-ready");
     let resume = area.target("child-resume");
     let executable = env::current_exe().map_err(|error| error.to_string())?;
-    let mut child = Command::new(executable)
-        .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
-        .env(SOURCE_ENV, source.root())
-        .env(TARGET_ENV, &target)
-        .env(CHECKPOINT_ENV, "item_created_1")
-        .env(READY_ENV, &ready)
-        .env(CONTINUE_ENV, &resume)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|error| format!("spawn backup child: {error}"))?;
+    let mut child = crate::writer_lock::test_command_spawn(
+        Command::new(executable)
+            .args(["--exact", CRASH_TEST_NAME, "--nocapture"])
+            .env(SOURCE_ENV, source.root())
+            .env(TARGET_ENV, &target)
+            .env(CHECKPOINT_ENV, "item_created_1")
+            .env(READY_ENV, &ready)
+            .env(CONTINUE_ENV, &resume)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()),
+    )
+    .map_err(|error| format!("spawn backup child: {error}"))?;
 
     let start = Instant::now();
     while !ready.is_file() {

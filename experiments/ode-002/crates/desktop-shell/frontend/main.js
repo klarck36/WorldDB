@@ -461,6 +461,7 @@ let transferBusy = false;
 let factBusy = false;
 let diagnosticExportBusy = false;
 let factsSmokeActive = false;
+let startupSmokeModeEnabled = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
@@ -4762,20 +4763,30 @@ async function runSchemaSmoke(activeSessionId) {
     }
   }
 
+  await recordFactsSmokeStage("schema-smoke:before-active-entity-type");
   await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_available");
+  await recordFactsSmokeStage("schema-smoke:after-active-entity-type");
+  await recordFactsSmokeStage("schema-smoke:before-deprecated-entity-type");
   const deprecatedType = await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_deprecated");
+  await recordFactsSmokeStage("schema-smoke:after-deprecated-entity-type");
+  await recordFactsSmokeStage("schema-smoke:before-final-schema-snapshot");
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
-  await manageSchema({
-    command: "set_lifecycle",
-    expected_base_revision: current.revision,
-    family: "entity_type",
-    identity: deprecatedType.identity,
-    lifecycle: "deprecated",
-  });
+  await recordFactsSmokeStage("schema-smoke:after-final-schema-snapshot");
+  if (current.definitions.find((item) => item.identity === deprecatedType.identity)?.lifecycle !== "active") {
+    throw new Error("the smoke EntityType was not active before deprecation");
+  }
+  await recordFactsSmokeStage("schema-smoke:before-final-entity-type-deprecation");
+  stageDefinitionLifecycle(deprecatedType, "deprecated");
+  await publishLifecycleBatch();
+  const deprecated = selectedSchema?.definitions.find((item) => item.identity === deprecatedType.identity);
+  if (deprecated?.lifecycle !== "deprecated") throw new Error("EntityType deprecation did not publish");
+  await recordFactsSmokeStage("schema-smoke:after-final-entity-type-deprecation");
 }
 
 async function createSmokeEntityType(activeSessionId, symbol) {
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:before-base-snapshot`);
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-base-snapshot`);
   const result = await manageSchema({
     command: "create",
     expected_base_revision: current.revision,
@@ -4785,14 +4796,17 @@ async function createSmokeEntityType(activeSessionId, symbol) {
       description: "Entity catalog smoke verification type.",
     },
   }, activeSessionId);
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-create`);
   if (result.kind !== "published") throw new Error(`schema did not publish ${symbol}`);
   const published = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-published-snapshot`);
   const definition = published.definitions.find((item) => item.symbol === symbol);
   if (!definition || definition.lifecycle !== "active") throw new Error(`schema did not expose active ${symbol}`);
   return definition;
 }
 
 async function runEntitySmoke(activeSessionId) {
+  await recordFactsSmokeStage("entity-smoke:started");
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
@@ -4804,7 +4818,9 @@ async function runEntitySmoke(activeSessionId) {
   entityTypeSelect.value = activeType.entity_type_id;
   entityAcceptDeprecated.checked = false;
   updateEntityTypeSelectionState();
+  await recordFactsSmokeStage("entity-smoke:before-active-create");
   const created = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("entity-smoke:after-active-create");
   if (created.kind !== "published" || !created.entity_id) throw new Error("active Entity creation did not publish");
   const activeCreationRevision = created.revision;
   entityViewMode.value = "historical";
@@ -4833,7 +4849,9 @@ async function runEntitySmoke(activeSessionId) {
   if (entityDeprecatedOptIn.hidden || entityDeprecatedWarning.hidden || entityCreateButton.disabled) {
     throw new Error("Deprecated EntityType opt-in was not presented by the entity form");
   }
+  await recordFactsSmokeStage("entity-smoke:before-deprecated-create");
   const deprecatedCreated = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("entity-smoke:after-deprecated-create");
   if (deprecatedCreated.kind !== "published" || deprecatedCreated.warning?.code !== "deprecated_entity_type") {
     throw new Error("Deprecated EntityType opt-in did not return the typed warning");
   }
@@ -4859,6 +4877,7 @@ async function runEntitySmoke(activeSessionId) {
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
+  await recordFactsSmokeStage("entity-smoke:complete");
 }
 
 async function runBranchLayerSmoke(activeSessionId) {
@@ -4949,20 +4968,25 @@ async function runBranchLayerSmoke(activeSessionId) {
     || !Number.isSafeInteger(transferCatalog.current_revision)) {
     throw new Error("HistorySpace transfer catalog did not return a pinned typed inventory");
   }
+  await recordFactsSmokeStage("branch-layer-smoke:complete");
 }
 
 async function runPerspectiveSmoke(activeSessionId) {
   const baseline = await invokePerspectiveSnapshot(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage("perspective-smoke:before-create");
   const created = await invokePerspectivesFor(activeSessionId, {
     command: "create",
     expected_base_revision: baseline.revision,
     display_name: "IPC-Prüfung Stadtwache",
     description: "Temporäre Perspektive für die authentisierte Desktopprüfung.",
   });
+  await recordFactsSmokeStage("perspective-smoke:after-create");
   if (created.kind !== "published" || !created.perspective_id) {
     throw new Error("Perspective creation did not publish its private identity");
   }
   const id = created.perspective_id;
+  // Refresh the controls so the newly published identity is available to both context selectors.
+  await refreshPerspectives(activeSessionId);
   const beforeCreation = await invokePerspectiveSnapshot(activeSessionId, {
     mode: "historical", recorded_as_of: baseline.revision,
   });
@@ -5053,6 +5077,7 @@ async function runPerspectiveSmoke(activeSessionId) {
   }
   perspectiveViewMode.value = "current";
   await refreshPerspectives(activeSessionId);
+  await recordFactsSmokeStage("perspective-smoke:complete");
 }
 
 async function runSecurityPolicySmoke(activeSessionId) {
@@ -5162,6 +5187,7 @@ async function waitForFactPreview(expectedRevision = null) {
 }
 
 async function clickFactWrite(button, label) {
+  updateFactControls();
   if (button.disabled) throw new Error(`${label} form remained disabled with a complete valid fixture`);
   factsPreviewStatus.textContent = "";
   button.click();
@@ -5267,6 +5293,7 @@ async function runFactsSmoke(activeSessionId) {
   }
   await recordFactsSmokeStage("diagnostic-canary:rejected");
 
+  await recordFactsSmokeStage("before-diagnostic-renderer-paths");
   let rendererDiagnosticPathRejected = false;
   try {
     await invoke("export_diagnostics", {
@@ -5295,7 +5322,13 @@ async function runFactsSmoke(activeSessionId) {
   schemaCardinality.value = "multi";
   schemaResolution.value = "multi_value_replace";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await recordFactsSmokeStage("before-predicate-definition");
+  await publishDefinition({
+    propagateErrors: true,
+    refreshAfterPublish: false,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`predicate-definition:${stage}`),
+  });
+  await recordFactsSmokeStage("predicate-definition-published");
   const predicate = selectedSchema?.definitions.find((item) => item.family === "predicate" && item.symbol === "ipc_smoke_facts");
   if (predicate?.lifecycle !== "active" || predicate.details.resolution_policy !== "multi_value_replace") {
     throw new Error("the smoke predicate was not published with MultiValueReplace resolution");
@@ -5305,21 +5338,36 @@ async function runFactsSmoke(activeSessionId) {
   schemaSymbol.value = "ipc_smoke_facts_timeline";
   timelineCalendarProfile.value = "none";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await recordFactsSmokeStage("before-timeline-definition");
+  await publishDefinition({
+    propagateErrors: true,
+    refreshAfterPublish: false,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`timeline-definition:${stage}`),
+  });
+  await recordFactsSmokeStage("timeline-definition-published");
   const timeline = selectedSchema?.definitions.find((item) => item.family === "timeline" && item.symbol === "ipc_smoke_facts_timeline");
   if (timeline?.lifecycle !== "active") throw new Error("the smoke Timeline was not active after publication");
 
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
-  const subjectType = selectedEntities.entity_types.find((item) => item.symbol === "ipc_smoke_entity_available" && item.lifecycle === "active");
+  const entitySnapshot = selectedEntities;
+  const subjectType = entitySnapshot.entity_types.find((item) => item.symbol === "ipc_smoke_entity_available" && item.lifecycle === "active");
   if (!subjectType) throw new Error("the smoke EntityType was not active");
   entityTypeSelect.value = subjectType.entity_type_id;
   entityAcceptDeprecated.checked = false;
   updateEntityTypeSelectionState();
-  const createdEntity = await createEntity({ propagateErrors: true });
+  await recordFactsSmokeStage("facts-smoke:before-subject-entity");
+  const createdEntity = await manageEntities({
+    command: "create",
+    expected_base_revision: entitySnapshot.revision,
+    entity_type_id: subjectType.entity_type_id,
+    accept_deprecated_type: false,
+  }, activeSessionId);
+  await recordFactsSmokeStage("facts-smoke:subject-entity-published");
   if (createdEntity?.kind !== "published" || !createdEntity.entity_id) throw new Error("the smoke subject Entity was not persisted");
 
+  await recordFactsSmokeStage("before-event-kind-definition");
   schemaFamily.value = "event_kind";
   schemaSymbol.value = "ipc_smoke_event";
   stagedEventRoles = [{
@@ -5338,7 +5386,12 @@ async function runFactsSmoke(activeSessionId) {
   }];
   eventTimeForm.value = "open_span_allowed";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await publishDefinition({
+    propagateErrors: true,
+    refreshAfterPublish: false,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`event-kind-definition:${stage}`),
+  });
+  await recordFactsSmokeStage("event-kind-definition-published");
   const eventKind = selectedSchema?.definitions.find((item) => item.family === "event_kind" && item.symbol === "ipc_smoke_event");
   const eventRole = eventKind?.details.roles?.[0];
   const eventAttribute = eventKind?.details.attributes?.[0];
@@ -5406,7 +5459,9 @@ async function runFactsSmoke(activeSessionId) {
 
   factsValueText.value = "Exact-Mask-Target";
   const staleCommitBaseRevision = factCatalog.revision;
+  await recordFactsSmokeStage("before-initial-assertion");
   const assertion = await clickFactWrite(factsCreateAssertion, "Assertion");
+  await recordFactsSmokeStage("after-initial-assertion");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Known")
     || !factsPreviewResults.textContent.includes("Exact-Mask-Target")) {
@@ -5947,7 +6002,13 @@ async function runFactsSmoke(activeSessionId) {
 }
 
 async function createEntity({ propagateErrors = false } = {}) {
-  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) return;
+  if (!sessionId || !projectOpen || !entityCurrentMode || entityBusy) {
+    if (propagateErrors) {
+      const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${entityCurrentMode}, busy=${entityBusy}`;
+      throw new Error(`Entity creation was unavailable in the current renderer state (${state}).`);
+    }
+    return;
+  }
   entityBusy = true;
   updateEntityControls();
   entityStatus.textContent = "Entität wird geprüft und angelegt …";
@@ -6408,23 +6469,51 @@ function clearDefinitionForm() {
   updateSchemaFormVisibility();
 }
 
-async function publishDefinition() {
-  if (!sessionId || !projectOpen || !schemaCurrentMode) return;
+async function publishDefinition({ propagateErrors = false, diagnosticStage = null, refreshAfterPublish = true } = {}) {
+  if (!sessionId || !projectOpen || !schemaCurrentMode) {
+    if (propagateErrors) {
+      const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${schemaCurrentMode}`;
+      throw new Error(`Schema publication was unavailable in the current renderer state (${state}).`);
+    }
+    return;
+  }
   schemaBusy = true;
   updateSchemaControls();
   schemaStatus.textContent = "Definition wird geprüft und veröffentlicht …";
   try {
+    await diagnosticStage?.("before-snapshot");
     const latest = await invokeSchemaFor(sessionId, { mode: "current" });
+    await diagnosticStage?.("after-snapshot");
     currentSchema = latest;
     const definition = buildDefinitionDraft();
-    await manageSchema({ command: "create", expected_base_revision: latest.revision, definition });
+    await diagnosticStage?.("before-create");
+    const published = await manageSchema({ command: "create", expected_base_revision: latest.revision, definition });
+    if (published.kind !== "published") throw new Error("schema did not publish the requested definition");
+    await diagnosticStage?.("after-create");
     schemaViewMode.value = "current";
     schemaCurrentMode = true;
     clearDefinitionForm();
-    await refreshSchema(sessionId);
+    if (refreshAfterPublish) {
+      await diagnosticStage?.("before-refresh");
+      await refreshSchema(sessionId);
+      await diagnosticStage?.("after-refresh");
+    } else {
+      const mergedDefinitions = new Map(latest.definitions.map((definition) => [definition.identity, definition]));
+      for (const definition of published.definitions ?? []) mergedDefinitions.set(definition.identity, definition);
+      selectedSchema = {
+        kind: "snapshot",
+        revision: published.revision,
+        definitions: [...mergedDefinitions.values()],
+      };
+      currentSchema = selectedSchema;
+      renderSchema(selectedSchema);
+      updateSchemaControls();
+      await diagnosticStage?.("after-published-render");
+    }
     schemaStatus.textContent = `Definition veröffentlicht. Aktuelle Schema-Revision ${selectedSchema.revision}.`;
   } catch (error) {
     schemaStatus.textContent = showError(error);
+    if (propagateErrors) throw error;
   } finally {
     schemaBusy = false;
     updateSchemaControls();
@@ -6574,12 +6663,16 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       if (listen) {
         await listen("project-state-changed", async () => {
           if (factBusy) return;
+          if (startupSmokeModeEnabled && role !== "secondary") return;
           try {
             await refreshProject(sessionId);
           } catch {
             return;
           }
           if (!projectOpen) return;
+          if (startupSmokeModeEnabled && !schemaBusy) refreshSchema(sessionId).catch((error) => {
+            schemaStatus.textContent = showError(error);
+          });
           refreshEntities(sessionId).catch((error) => {
             entityStatus.textContent = showError(error);
           });
@@ -6615,6 +6708,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       if (securityMode.protocol_version !== 1 || projectMode.protocol_version !== 1) {
         throw new Error("unsupported_protocol");
       }
+      startupSmokeModeEnabled = projectMode.startup_smoke_enabled;
       if (securityMode.enabled) await runSecurityProbes(sessionId);
 
       await invoke("health", {
@@ -6628,16 +6722,46 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         await runProjectSmoke(sessionId);
         if (role === "primary") {
           operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Rechte-, Branch- und Layerprüfung läuft …";
-          await runSchemaSmoke(sessionId);
-          await runEntitySmoke(sessionId);
-          await runBranchLayerSmoke(sessionId);
-          await runPerspectiveSmoke(sessionId);
+          try {
+            await runSchemaSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `schema-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
+          try {
+            await runEntitySmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `entity-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
+          try {
+            await runBranchLayerSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `branch-layer-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
+          try {
+            await runPerspectiveSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `perspective-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
           await runSecurityPolicySmoke(sessionId);
           factsSmokeActive = true;
           try {
             await runFactsSmoke(sessionId);
           } catch (error) {
-            await invoke("facts_smoke_diagnostic", { details: String(error?.message ?? error) }).catch(() => {});
+            await invoke("facts_smoke_diagnostic", {
+              details: `facts-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
             throw error;
           } finally {
             factsSmokeActive = false;
@@ -6665,8 +6789,8 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       }
 
       window.setInterval(() => {
-        if (!factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
-        if (!jobsBusy && projectOpen) refreshJobs(sessionId).catch(() => {});
+        if (!startupSmokeModeEnabled && !factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
+        if (!startupSmokeModeEnabled && !jobsBusy && projectOpen) refreshJobs(sessionId).catch(() => {});
       }, 1200);
     })
     .catch((error) => {

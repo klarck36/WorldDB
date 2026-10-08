@@ -506,6 +506,14 @@ fn is_reparse_point(file_type: &FileType, _metadata: &std::fs::Metadata) -> bool
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_backup_dto(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<BackupRequestV1>(bytes)
+        .ok()
+        .is_some_and(|request| BackupProfile::parse(&request.profile).is_ok())
+        || serde_json::from_slice::<CliBackupSummary>(bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         BackupProfile, BackupRequestV1, CliBackupSummary, same_backup, validate_backup_summary,

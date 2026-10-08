@@ -339,6 +339,9 @@ mod tests {
     use crate::ids::{
         AuditOperationId, AuditRecordId, DomainId, PolicyRuleId, PrincipalId, SecurityEpoch,
     };
+    use crate::non_interference::{
+        CursorObservation, PairedWorld, PublicFailure, PublicObservation,
+    };
     use crate::security::{
         AuthorizationDecision, Capability, CapabilityGrant, CapabilityRule, GrantEffect,
         PolicyScope, PolicySubject, PolicyTarget, Principal, SecurityPolicySnapshot,
@@ -503,6 +506,47 @@ mod tests {
         assert_eq!(state.epoch(), SecurityEpoch::INITIAL);
         assert_eq!(state.fingerprint(), &old_fingerprint);
         assert!(audit.records().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn paired_required_audit_fault_hides_the_attempted_policy_fingerprint() -> Result<(), TestError>
+    {
+        let actor = id::<PrincipalId>(24)?;
+        let old_fingerprint = fingerprint(25)?;
+        let new_fingerprints = (fingerprint(26)?, fingerprint(27)?);
+        let worlds = PairedWorld::new(actor, new_fingerprints.0, new_fingerprints.1);
+        worlds
+            .compare(|actor, new_fingerprint| {
+                let mut state = InMemoryPolicyState::new(
+                    policy(*actor, true),
+                    SecurityEpoch::INITIAL,
+                    old_fingerprint.clone(),
+                );
+                let mut audit = InMemoryRequiredAuditPort::new(1)
+                    .unwrap_or_else(|_| unreachable!("positive audit capacity is valid"));
+                audit.fail_next_append();
+                match apply_required_policy_change(
+                    &mut state,
+                    policy(*actor, false),
+                    new_fingerprint.clone(),
+                    record(*actor, SecurityEpoch::INITIAL, old_fingerprint.clone())
+                        .unwrap_or_else(|_| unreachable!("test audit record is valid")),
+                    &mut audit,
+                ) {
+                    Err(error) => PublicObservation::<()>::failure(
+                        PublicFailure::new(error.to_string(), vec!["code".to_owned()]),
+                        vec!["error".to_owned()],
+                        CursorObservation::Absent,
+                    ),
+                    Ok(_) => PublicObservation::success(
+                        (),
+                        vec!["result".to_owned()],
+                        CursorObservation::Absent,
+                    ),
+                }
+            })
+            .map_err(|_| TestError::Audit)?;
         Ok(())
     }
 

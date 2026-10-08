@@ -3075,6 +3075,13 @@ fn decode_cursor_hex(value: &str) -> Result<Vec<u8>, EngineError> {
     Ok(bytes)
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_cursor(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|value| decode_cursor_hex(value.trim()).is_ok())
+}
+
 fn encode_cursor_hex(value: &[u8]) -> String {
     let mut encoded = String::with_capacity(value.len() * 2);
     for byte in value {

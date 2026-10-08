@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use std::time::Duration;
@@ -19,8 +19,8 @@ use worlddb_ode_engine::{
     HistorySpaceTransferCommand, HistorySpaceTransferResponse, JobListView, JobShutdownView,
     MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, RecoveryApplyView,
     RecoveryReportView, RecoverySalvageView, ResolutionOutcomeView, ResolutionResultView, Response,
-    SchemaCommand, SchemaResponse, SecurityPolicyCommand, SecurityPolicyResponse,
-    SecurityPolicySnapshotView, StreamPlan,
+    SchemaCommand, SchemaDefinitionDraft, SchemaFamily, SchemaLifecycle, SchemaResponse,
+    SecurityPolicyCommand, SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -55,6 +55,7 @@ const STREAM_TEST_BYTES: u64 = 100 * 1024 * 1024;
 const STREAM_TEST_CHUNK_BYTES: u32 = 256 * 1024;
 const STREAM_CANCEL_AFTER_BYTES: u64 = 8 * 1024 * 1024;
 const STREAM_MEASUREMENT_RUNS: usize = 5;
+static IPC_SMOKE_RESULT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "sidecar")]
 const SIDECAR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -76,8 +77,11 @@ fn run() -> Result<(), String> {
 
     let backend = Backend::new(database_root.as_deref())?;
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(all(feature = "native-e2e", debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .manage(backend)
         .manage(host_sessions)
         .manage(TransferManager::new())
@@ -216,6 +220,7 @@ fn run() -> Result<(), String> {
             manage_history_space_transfer,
             manage_facts,
             facts_smoke_diagnostic,
+            focus_native_window,
             diagnostic_smoke_canary,
             manage_perspectives,
             manage_security_policy
@@ -1510,10 +1515,30 @@ async fn export_diagnostics(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     session_id: String,
-    request: DiagnosticExportRequestV1,
+    request: serde_json::Value,
     sessions: tauri::State<'_, HostSessionManager>,
     backend: tauri::State<'_, Backend>,
 ) -> Result<diagnostics::DiagnosticExportViewV1, IpcErrorV1> {
+    record_facts_smoke_diagnostic(
+        window.label(),
+        "facts-smoke:diagnostic-export:entered".to_owned(),
+    )?;
+    // Decode the raw request into a strict DTO before authorization, native
+    // dialogs, or filesystem access can begin.
+    let request: DiagnosticExportRequestV1 = match serde_json::from_value(request) {
+        Ok(request) => request,
+        Err(_) => {
+            record_facts_smoke_diagnostic(
+                window.label(),
+                "facts-smoke:diagnostic-export:renderer-request-rejected".to_owned(),
+            )?;
+            return Err(IpcErrorV1::new("invalid_request"));
+        }
+    };
+    record_facts_smoke_diagnostic(
+        window.label(),
+        "facts-smoke:diagnostic-export:request-accepted".to_owned(),
+    )?;
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
@@ -1794,7 +1819,7 @@ fn close_project(
 }
 
 #[tauri::command]
-fn manage_schema(
+async fn manage_schema(
     window: tauri::WebviewWindow,
     request: SchemaRequestV1,
     sessions: tauri::State<'_, HostSessionManager>,
@@ -1803,32 +1828,150 @@ fn manage_schema(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let window_label = window.label().to_owned();
+    let trace_facts_smoke_schema = window_label == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:schema-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
-            window.label(),
+            &window_label,
             &request.session_id,
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:schema-ipc:authorized".to_owned(),
+        )?;
+    }
+    let compact_create_response = matches!(&request.command, SchemaCommand::Create { .. });
+    let compact_lifecycle_batch_response = matches!(
+        &request.command,
+        SchemaCommand::SetLifecycleBatch { .. }
+    );
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
-    match backend.schema_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_schema_smoke(window.label(), operation, true, Some(&result), &backend)?;
-            Ok(SchemaResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
+    let facts_smoke_predicate = matches!(
+        &request.command,
+        SchemaCommand::Create {
+            definition: SchemaDefinitionDraft::Predicate { symbol, .. },
+            ..
+        } if symbol == "ipc_smoke_facts"
+    );
+    let facts_smoke_entity_type_deprecation = matches!(
+        &request.command,
+        SchemaCommand::SetLifecycle {
+            family: SchemaFamily::EntityType,
+            lifecycle: SchemaLifecycle::Deprecated,
+            ..
         }
-        Err(_) => {
-            record_schema_smoke(window.label(), operation, false, None, &backend)?;
-            Err(IpcErrorV1::new("schema_rejected"))
-        }
+    );
+    if facts_smoke_predicate {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:predicate-schema-command:entered".to_owned(),
+        )?;
     }
+    if facts_smoke_entity_type_deprecation {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:entity-type-deprecation:entered".to_owned(),
+        )?;
+    }
+    let backend = backend.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if trace_facts_smoke_schema {
+            record_facts_smoke_diagnostic(
+                &window_label,
+                "facts-smoke:schema-ipc:dispatching".to_owned(),
+            )?;
+        }
+        let result = backend.schema_with_operation_id(request.command, operation_id);
+        if trace_facts_smoke_schema {
+            record_facts_smoke_diagnostic(
+                &window_label,
+                format!(
+                    "facts-smoke:schema-ipc:engine-returned:{}",
+                    if result.is_ok() { "ok" } else { "rejected" }
+                ),
+            )?;
+        }
+        if facts_smoke_predicate {
+            record_facts_smoke_diagnostic(
+                &window_label,
+                format!(
+                    "facts-smoke:predicate-schema-command:{}",
+                    if result.is_ok() { "returned" } else { "rejected" }
+                ),
+            )?;
+        }
+        if facts_smoke_entity_type_deprecation {
+            record_facts_smoke_diagnostic(
+                &window_label,
+                format!(
+                    "facts-smoke:entity-type-deprecation:{}",
+                    if result.is_ok() { "returned" } else { "rejected" }
+                ),
+            )?;
+        }
+        match result {
+            Ok(mut result) => {
+                record_schema_smoke(&window_label, operation, true, Some(&result), &backend)?;
+                if trace_facts_smoke_schema {
+                    record_facts_smoke_diagnostic(
+                        &window_label,
+                        "facts-smoke:schema-ipc:recorded".to_owned(),
+                    )?;
+                }
+                if compact_create_response {
+                    if let SchemaResponse::Published(publication) = &mut result {
+                        // The renderer already has the preceding snapshot. Return
+                        // only the new definition instead of the entire catalogue.
+                        let revision = publication.revision;
+                        publication
+                            .definitions
+                            .retain(|definition| definition.created_revision == revision);
+                    }
+                }
+                if compact_lifecycle_batch_response {
+                    if let SchemaResponse::Published(publication) = &mut result {
+                        // Lifecycle publication callers refresh the authoritative
+                        // snapshot separately and do not consume this catalogue.
+                        publication.definitions.clear();
+                    }
+                }
+                let response = SchemaResponseV1 {
+                    protocol_version: IPC_PROTOCOL_VERSION,
+                    result,
+                };
+                if trace_facts_smoke_schema {
+                    serde_json::to_vec(&response)
+                        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+                    record_facts_smoke_diagnostic(
+                        &window_label,
+                        "facts-smoke:schema-ipc:return-ready".to_owned(),
+                    )?;
+                }
+                Ok(response)
+            }
+            Err(_) => {
+                record_schema_smoke(&window_label, operation, false, None, &backend)?;
+                Err(IpcErrorV1::new("schema_rejected"))
+            }
+        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))?
 }
 
 #[tauri::command]
-fn manage_entities(
+async fn manage_entities(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: EntityRequestV1,
@@ -1838,35 +1981,78 @@ fn manage_entities(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let window_label = window.label().to_owned();
+    let trace_facts_smoke_entities = window_label == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:entity-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
-            window.label(),
+            &window_label,
             &request.session_id,
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:entity-ipc:authorized".to_owned(),
+        )?;
+    }
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = entity_smoke_operation(&request.command);
-    match backend.entities_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_entity_smoke(window.label(), operation, true, Some(&result))?;
-            if matches!(result, EntityResponse::Published(_)) {
-                let _ = app.emit("project-state-changed", ());
-            }
-            Ok(EntityResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
-        }
-        Err(_) => {
-            record_entity_smoke(window.label(), operation, false, None)?;
-            Err(IpcErrorV1::new("entity_rejected"))
-        }
+    let backend = backend.inner().clone();
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:entity-ipc:dispatching".to_owned(),
+        )?;
     }
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = backend.entities_with_operation_id(request.command, operation_id);
+        if trace_facts_smoke_entities {
+            record_facts_smoke_diagnostic(
+                &window_label,
+                format!(
+                    "facts-smoke:entity-ipc:engine-returned:{}",
+                    if result.is_ok() { "ok" } else { "rejected" }
+                ),
+            )?;
+        }
+        match result {
+            Ok(result) => {
+                record_entity_smoke(&window_label, operation, true, Some(&result))?;
+                if trace_facts_smoke_entities {
+                    record_facts_smoke_diagnostic(
+                        &window_label,
+                        "facts-smoke:entity-ipc:recorded".to_owned(),
+                    )?;
+                }
+                Ok(result)
+            }
+            Err(_) => {
+                record_entity_smoke(&window_label, operation, false, None)?;
+                Err(IpcErrorV1::new("entity_rejected"))
+            }
+        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
+    if matches!(result, EntityResponse::Published(_)) {
+        let _ = app.emit("project-state-changed", ());
+    }
+    Ok(EntityResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
 }
 
 #[tauri::command]
-fn manage_branch_layers(
+async fn manage_branch_layers(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: BranchLayerRequestV1,
@@ -1885,26 +2071,33 @@ fn manage_branch_layers(
         .map_err(map_session_error)?;
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = branch_layer_smoke_operation(&request.command);
-    match backend.branch_layers_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_branch_layer_smoke(window.label(), operation, true, Some(&result))?;
-            if matches!(result, BranchLayerResponse::Published(_)) {
-                let _ = app.emit("project-state-changed", ());
+    let window_label = window.label().to_owned();
+    let backend = backend.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        match backend.branch_layers_with_operation_id(request.command, operation_id) {
+            Ok(result) => {
+                record_branch_layer_smoke(&window_label, operation, true, Some(&result))?;
+                Ok(result)
             }
-            Ok(BranchLayerResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
+            Err(_) => {
+                record_branch_layer_smoke(&window_label, operation, false, None)?;
+                Err(IpcErrorV1::new("branch_layer_rejected"))
+            }
         }
-        Err(_) => {
-            record_branch_layer_smoke(window.label(), operation, false, None)?;
-            Err(IpcErrorV1::new("branch_layer_rejected"))
-        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
+    if matches!(result, BranchLayerResponse::Published(_)) {
+        let _ = app.emit("project-state-changed", ());
     }
+    Ok(BranchLayerResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
 }
 
 #[tauri::command]
-fn manage_history_space_transfer(
+async fn manage_history_space_transfer(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: HistorySpaceTransferRequestV1,
@@ -1923,26 +2116,33 @@ fn manage_history_space_transfer(
         .map_err(map_session_error)?;
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = history_space_transfer_smoke_operation(&request.command);
-    match backend.history_space_transfer_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_history_space_transfer_smoke(window.label(), operation, true, Some(&result))?;
-            if matches!(result, HistorySpaceTransferResponse::Published(_)) {
-                let _ = app.emit("project-state-changed", ());
+    let window_label = window.label().to_owned();
+    let backend = backend.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        match backend.history_space_transfer_with_operation_id(request.command, operation_id) {
+            Ok(result) => {
+                record_history_space_transfer_smoke(&window_label, operation, true, Some(&result))?;
+                Ok(result)
             }
-            Ok(HistorySpaceTransferResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
+            Err(_) => {
+                record_history_space_transfer_smoke(&window_label, operation, false, None)?;
+                Err(IpcErrorV1::new("history_space_transfer_rejected"))
+            }
         }
-        Err(_) => {
-            record_history_space_transfer_smoke(window.label(), operation, false, None)?;
-            Err(IpcErrorV1::new("history_space_transfer_rejected"))
-        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
+    if matches!(result, HistorySpaceTransferResponse::Published(_)) {
+        let _ = app.emit("project-state-changed", ());
     }
+    Ok(HistorySpaceTransferResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    })
 }
 
 #[tauri::command]
-fn manage_facts(
+async fn manage_facts(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: FactRequestV1,
@@ -1969,35 +2169,42 @@ fn manage_facts(
     );
     let operation = facts_smoke_operation(&request.command);
     let selector_kind = facts_smoke_selector_kind(&request.command);
-    match backend.facts_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_facts_smoke(
-                window.label(),
-                operation,
-                selector_kind,
-                true,
-                Some(&result),
-            )?;
-            if is_write {
-                let _ = app.emit("project-state-changed", ());
+    let window_label = window.label().to_owned();
+    let backend = backend.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        match backend.facts_with_operation_id(request.command, operation_id) {
+            Ok(result) => {
+                record_facts_smoke(
+                    &window_label,
+                    operation,
+                    selector_kind,
+                    true,
+                    Some(&result),
+                )?;
+                Ok(FactResponseV1 {
+                    protocol_version: IPC_PROTOCOL_VERSION,
+                    result,
+                })
             }
-            if let Some(operation_id) = injected_unknown_commit_response(operation_id) {
-                return Err(IpcErrorV1::unknown_commit(operation_id, None));
+            Err(error) => {
+                record_facts_smoke(&window_label, operation, selector_kind, false, None)?;
+                let _ = record_facts_smoke_diagnostic(
+                    &window_label,
+                    format!("facts_error:{operation}:{error}"),
+                );
+                Err(IpcErrorV1::new("facts_rejected"))
             }
-            Ok(FactResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
         }
-        Err(error) => {
-            record_facts_smoke(window.label(), operation, selector_kind, false, None)?;
-            let _ = record_facts_smoke_diagnostic(
-                window.label(),
-                format!("facts_error:{operation}:{error}"),
-            );
-            Err(IpcErrorV1::new("facts_rejected"))
-        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
+    if is_write {
+        let _ = app.emit("project-state-changed", ());
     }
+    if let Some(operation_id) = injected_unknown_commit_response(operation_id) {
+        return Err(IpcErrorV1::unknown_commit(operation_id, None));
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -2016,6 +2223,13 @@ fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Resu
         });
     }
     Ok(())
+}
+
+#[tauri::command]
+fn focus_native_window(window: tauri::WebviewWindow) -> Result<(), IpcErrorV1> {
+    window
+        .set_focus()
+        .map_err(|_| IpcErrorV1::new("window_focus_failed"))
 }
 
 fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<(), IpcErrorV1> {
@@ -2038,20 +2252,30 @@ fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<
         "window": window_label,
         "succeeded": true,
     });
+    append_smoke_jsonl(&result_path, &record, "ipc_diagnostic_unavailable")
+}
+
+fn append_smoke_jsonl(
+    path: &Path,
+    record: &serde_json::Value,
+    error_code: &'static str,
+) -> Result<(), IpcErrorV1> {
+    let _guard = IPC_SMOKE_RESULT_LOCK
+        .lock()
+        .map_err(|_| IpcErrorV1::new(error_code))?;
+    let mut encoded = serde_json::to_vec(record).map_err(|_| IpcErrorV1::new(error_code))?;
+    encoded.push(b'\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    serde_json::to_writer(&mut file, &record)
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    file.write_all(b"\n")
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    Ok(())
+        .open(path)
+        .map_err(|_| IpcErrorV1::new(error_code))?;
+    file.write_all(&encoded)
+        .map_err(|_| IpcErrorV1::new(error_code))
 }
 
 #[tauri::command]
-fn manage_perspectives(
+async fn manage_perspectives(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: PerspectiveRequestV1,
@@ -2061,35 +2285,87 @@ fn manage_perspectives(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let window_label = window.label().to_owned();
+    let trace_facts_smoke = window_label == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
-            window.label(),
+            &window_label,
             &request.session_id,
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:authorized".to_owned(),
+        )?;
+    }
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = perspective_smoke_operation(&request.command);
-    match backend.perspectives_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_perspective_smoke(window.label(), operation, true, Some(&result))?;
-            if matches!(result, PerspectiveResponse::Published(_)) {
-                let _ = app.emit("project-state-changed", ());
-            }
-            Ok(PerspectiveResponseV1 {
-                protocol_version: IPC_PROTOCOL_VERSION,
-                result,
-            })
-        }
-        Err(_) => {
-            record_perspective_smoke(window.label(), operation, false, None)?;
-            Err(IpcErrorV1::new("perspective_rejected"))
-        }
+    if trace_facts_smoke {
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:dispatching".to_owned(),
+        )?;
     }
+    let backend = backend.inner().clone();
+    let worker_window_label = window_label.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = backend.perspectives_with_operation_id(request.command, operation_id);
+        if trace_facts_smoke {
+            record_facts_smoke_diagnostic(
+                &worker_window_label,
+                format!(
+                    "facts-smoke:perspective-ipc:engine-returned:{}",
+                    if result.is_ok() { "ok" } else { "rejected" }
+                ),
+            )?;
+        }
+        match result {
+            Ok(result) => {
+                record_perspective_smoke(&worker_window_label, operation, true, Some(&result))?;
+                if trace_facts_smoke {
+                    record_facts_smoke_diagnostic(
+                        &worker_window_label,
+                        "facts-smoke:perspective-ipc:recorded".to_owned(),
+                    )?;
+                }
+                Ok(result)
+            }
+            Err(_) => {
+                record_perspective_smoke(&worker_window_label, operation, false, None)?;
+                Err(IpcErrorV1::new("perspective_rejected"))
+            }
+        }
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
+    if matches!(result, PerspectiveResponse::Published(_)) {
+        let _ = app.emit("project-state-changed", ());
+    }
+    let response = PerspectiveResponseV1 {
+        protocol_version: IPC_PROTOCOL_VERSION,
+        result,
+    };
+    if trace_facts_smoke {
+        serde_json::to_vec(&response).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
+        record_facts_smoke_diagnostic(
+            &window_label,
+            "facts-smoke:perspective-ipc:return-ready".to_owned(),
+        )?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]
-fn manage_security_policy(
+async fn manage_security_policy(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: SecurityPolicyRequestV1,
@@ -2109,16 +2385,22 @@ fn manage_security_policy(
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let is_write = !matches!(&request.command, SecurityPolicyCommand::Snapshot);
     let operation = security_policy_smoke_operation(&request.command);
-    let result = match backend.security_policy_with_operation_id(request.command, operation_id) {
-        Ok(result) => {
-            record_security_policy_smoke(window.label(), operation, true, Some(&result))?;
-            result
+    let window_label = window.label().to_owned();
+    let backend = backend.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        match backend.security_policy_with_operation_id(request.command, operation_id) {
+            Ok(result) => {
+                record_security_policy_smoke(&window_label, operation, true, Some(&result))?;
+                Ok(result)
+            }
+            Err(_) => {
+                record_security_policy_smoke(&window_label, operation, false, None)?;
+                Err(IpcErrorV1::new("security_policy_rejected"))
+            }
         }
-        Err(_) => {
-            record_security_policy_smoke(window.label(), operation, false, None)?;
-            return Err(IpcErrorV1::new("security_policy_rejected"));
-        }
-    };
+    })
+    .await
+    .map_err(|_| IpcErrorV1::new("host_unavailable"))??;
     if is_write {
         let _ = app.emit("project-state-changed", ());
     }
@@ -2702,15 +2984,7 @@ fn record_facts_smoke(
             _ => None,
         }),
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn resolution_outcome_kind(outcome: &ResolutionOutcomeView) -> &'static str {
@@ -2765,15 +3039,7 @@ fn record_security_policy_smoke(
         "gm_raw_history_allow": fields.gm_raw_history_allow,
         "gm_admin_raw_deny": fields.gm_admin_raw_deny,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 #[derive(Default)]
@@ -2883,15 +3149,7 @@ fn record_entity_smoke(
         "entity_types": entity_types,
         "warning": warning,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_branch_layer_smoke(
@@ -2940,15 +3198,7 @@ fn record_branch_layer_smoke(
         "branch_created": branch_created,
         "layer_changed": layer_changed,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_history_space_transfer_smoke(
@@ -3000,15 +3250,7 @@ fn record_history_space_transfer_smoke(
         "copied_record_count": copied_records,
         "copied_relation_count": copied_relations,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_perspective_smoke(
@@ -3052,15 +3294,7 @@ fn record_perspective_smoke(
         "perspective_count": perspective_count,
         "epistemic_mode": mode,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_schema_smoke(
@@ -3127,15 +3361,7 @@ fn record_schema_smoke(
         "definition_count": definition_count,
         "definitions": definitions,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_ipc_probe(window_label: &str) -> Result<(), IpcErrorV1> {
@@ -3504,9 +3730,10 @@ struct BackendState {
     windows: HashMap<String, WindowProjectSnapshot>,
 }
 
+#[derive(Clone)]
 struct Backend {
-    state: Mutex<BackendState>,
-    diagnostics: diagnostics::DiagnosticStore,
+    state: Arc<Mutex<BackendState>>,
+    diagnostics: Arc<diagnostics::DiagnosticStore>,
 }
 
 impl Backend {
@@ -3528,7 +3755,7 @@ impl Backend {
             None
         };
         Ok(Self {
-            state: Mutex::new(BackendState {
+            state: Arc::new(Mutex::new(BackendState {
                 engine,
                 project: None,
                 recovery_root: None,
@@ -3536,8 +3763,8 @@ impl Backend {
                 purge_draft: None,
                 migration_dialog_active: false,
                 windows: HashMap::new(),
-            }),
-            diagnostics: diagnostics::DiagnosticStore::new(),
+            })),
+            diagnostics: Arc::new(diagnostics::DiagnosticStore::new()),
         })
     }
 
@@ -5532,3 +5759,70 @@ const _: () = {
     assert!(STREAM_TEST_BYTES <= MAX_STREAM_BYTES);
     assert!(STREAM_TEST_CHUNK_BYTES <= MAX_STREAM_CHUNK_BYTES);
 };
+
+#[cfg(test)]
+fn desktop_fuzz_probe(target: &str, bytes: &[u8]) -> Result<bool, String> {
+    let accepted = match target {
+        "desktop_sidecar_request_response" => {
+            serde_json::from_slice::<Response>(bytes).is_ok()
+                || serde_json::from_slice::<worlddb_ode_engine::Request>(bytes).is_ok()
+                || std::str::from_utf8(bytes)
+                    .ok()
+                    .is_some_and(|value| parse_client_operation_id(Some(value.trim())).is_ok())
+        }
+        "desktop_backup_dto" => backup::fuzz_backup_dto(bytes),
+        "desktop_transfer_ids" => {
+            transfer::fuzz_transfer_id(bytes) || host_session::fuzz_session_id(bytes)
+        }
+        "desktop_export_import_dto" => export_import::fuzz_import_dto(bytes),
+        "desktop_migration_plan" => migration::fuzz_migration_plan(bytes)?,
+        "desktop_purge_report" => purge::fuzz_purge_report(bytes)?,
+        _ => return Err(format!("unknown desktop fuzz target: {target}")),
+    };
+    Ok(accepted)
+}
+
+#[cfg(test)]
+#[path = "../../../../../tools/fuzz/rust_campaign.rs"]
+mod fuzz_campaign_support;
+
+#[cfg(test)]
+#[test]
+#[ignore = "24-hour fuzz campaign; run through tools/fuzz/run-target.ps1"]
+fn desktop_fuzz_campaign() {
+    if let Err(error) = fuzz_campaign_support::run_campaign(
+        &[
+            "desktop_sidecar_request_response",
+            "desktop_backup_dto",
+            "desktop_transfer_ids",
+            "desktop_export_import_dto",
+            "desktop_migration_plan",
+            "desktop_purge_report",
+        ],
+        desktop_fuzz_probe,
+    ) {
+        panic!("desktop fuzz campaign failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod fuzz_campaign_tests {
+    use super::desktop_fuzz_probe;
+
+    const TARGETS: &[&str] = &[
+        "desktop_sidecar_request_response",
+        "desktop_backup_dto",
+        "desktop_transfer_ids",
+        "desktop_export_import_dto",
+        "desktop_migration_plan",
+        "desktop_purge_report",
+    ];
+
+    #[test]
+    fn fuzz_campaign_dispatch_rejects_unregistered_desktop_targets() {
+        assert!(desktop_fuzz_probe("unknown", b"seed").is_err());
+        for target in TARGETS {
+            assert!(desktop_fuzz_probe(target, b"seed").is_ok());
+        }
+    }
+}

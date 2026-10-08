@@ -3583,12 +3583,31 @@ impl<'a> FileFactManager<'a> {
         let spec = SearchSpec::new(vec![field], terms, request.matching)
             .map_err(|error| FactManagementError::Query(error.to_string()))?;
 
+        let policy = self
+            .schema
+            .policy_history
+            .policy()
+            .resolve(&prepared.context)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?
+            .snapshot();
+        let principal = prepared.context.security().principal_id();
+
         let mut commits = BTreeMap::<Revision, Vec<(HistorySpaceId, Assertion)>>::new();
         for assertion in prepared.facts.assertions() {
+            let history_space_id = assertion.context().history_space_id();
+            if !token_search_record_is_authorized(
+                assertion,
+                history_space_id,
+                field,
+                policy,
+                principal,
+            ) {
+                continue;
+            }
             commits
                 .entry(assertion.created_revision())
                 .or_default()
-                .push((assertion.context().history_space_id(), assertion.clone()));
+                .push((history_space_id, assertion.clone()));
         }
         let history = HistorySpaceReferenceModel::from_published_snapshot(
             prepared.history_spaces.definitions().to_vec(),
@@ -3602,39 +3621,20 @@ impl<'a> FileFactManager<'a> {
             .read_at(request.query.history_space_id, request.query.recorded_as_of)
             .map_err(|error| FactManagementError::Query(error.to_string()))?
         {
-            let context = assertion.context();
-            if !prepared.resolved_layers.contains(&context.layer_id())
-                || assertion.subject() != request.query.subject
-                || assertion.predicate_id() != request.query.predicate_id
-                || context.perspective_scope() != request.query.perspective_scope
-                || context.epistemic_mode() != request.query.epistemic_mode
-            {
-                continue;
-            }
-            if let WorldTimeSelector::At(time) = request.query.world_time {
-                if !assertion
-                    .validity()
-                    .contains(time)
-                    .map_err(|error| FactManagementError::Query(error.to_string()))?
-                {
-                    continue;
-                }
-            }
-            let Value::String(text) = assertion.value() else {
-                return Err(FactManagementError::InvalidCandidate(
-                    "a String-valued Predicate contains an incompatible Assertion",
-                ));
-            };
-            let record_ref = RecordRef::Assertion(assertion.id());
-            let document = SearchDocument::new(
-                record_ref,
+            let Some((record_ref, layer_id, document)) = token_search_document_if_authorized(
+                assertion,
                 history_space_id,
-                context.layer_id(),
-                vec![SearchTextField::new(field, text.clone())],
-            )
-            .map_err(|error| FactManagementError::Query(error.to_string()))?;
+                &request.query,
+                &prepared.resolved_layers,
+                field,
+                policy,
+                principal,
+            )?
+            else {
+                continue;
+            };
             documents.push(document);
-            coordinates.insert(record_ref, (history_space_id, context.layer_id()));
+            coordinates.insert(record_ref, (history_space_id, layer_id));
         }
         let results = ProductiveQueryEngine::token_search(
             &documents,
@@ -4435,6 +4435,89 @@ impl<'a> FileFactManager<'a> {
     }
 }
 
+fn token_search_document_if_authorized(
+    assertion: &Assertion,
+    history_space_id: HistorySpaceId,
+    query: &FactExplorerRequest,
+    resolved_layers: &[worlddb_core::LayerId],
+    field: FieldSelector,
+    policy: &worlddb_core::SecurityPolicySnapshot,
+    principal: worlddb_core::PrincipalId,
+) -> Result<Option<(RecordRef, worlddb_core::LayerId, SearchDocument)>, FactManagementError> {
+    let context = assertion.context();
+    let record_ref = RecordRef::Assertion(assertion.id());
+    if !token_search_record_is_authorized(assertion, history_space_id, field, policy, principal) {
+        return Ok(None);
+    }
+
+    if !resolved_layers.contains(&context.layer_id())
+        || assertion.subject() != query.subject
+        || assertion.predicate_id() != query.predicate_id
+        || context.perspective_scope() != query.perspective_scope
+        || context.epistemic_mode() != query.epistemic_mode
+    {
+        return Ok(None);
+    }
+    if let WorldTimeSelector::At(time) = query.world_time {
+        if !assertion
+            .validity()
+            .contains(time)
+            .map_err(|error| FactManagementError::Query(error.to_string()))?
+        {
+            return Ok(None);
+        }
+    }
+    let Value::String(text) = assertion.value() else {
+        return Err(FactManagementError::InvalidCandidate(
+            "a String-valued Predicate contains an incompatible Assertion",
+        ));
+    };
+    let document = SearchDocument::new(
+        record_ref,
+        history_space_id,
+        context.layer_id(),
+        vec![SearchTextField::new(field, text.clone())],
+    )
+    .map_err(|error| FactManagementError::Query(error.to_string()))?;
+    Ok(Some((record_ref, context.layer_id(), document)))
+}
+
+fn token_search_record_is_authorized(
+    assertion: &Assertion,
+    history_space_id: HistorySpaceId,
+    field: FieldSelector,
+    policy: &worlddb_core::SecurityPolicySnapshot,
+    principal: worlddb_core::PrincipalId,
+) -> bool {
+    let context = assertion.context();
+    let record_ref = RecordRef::Assertion(assertion.id());
+    let record_target = PolicyTarget::new(
+        Some(history_space_id),
+        Some(context.layer_id()),
+        Some(record_ref),
+        None,
+        None,
+    );
+    if policy.authorize(principal, Capability::AssertionRead, record_target)
+        != AuthorizationDecision::Allow
+    {
+        return false;
+    }
+    let field_target = PolicyTarget::new(
+        Some(history_space_id),
+        Some(context.layer_id()),
+        Some(record_ref),
+        Some(field),
+        None,
+    );
+    if policy.authorize(principal, Capability::FieldRead, field_target)
+        != AuthorizationDecision::Allow
+    {
+        return false;
+    }
+    true
+}
+
 fn context_target(context: ContextKey) -> PolicyTarget {
     context_target_parts(context.history_space_id(), context.layer_id())
 }
@@ -5134,21 +5217,22 @@ impl std::error::Error for FactManagementError {}
 #[cfg(test)]
 mod tests {
     use worlddb_core::{
-        ArchiveAction, ArchiveTargetRef, AssertionDraft, AssertionValidity, AuditAction,
+        ArchiveAction, ArchiveTargetRef, Assertion, AssertionDraft, AssertionValidity, AuditAction,
         AuditCommitContext, AuditObjectClass, AuditPolicyFingerprint, AuditRecord,
-        AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, Capability, Cardinality,
-        ConstraintSet, ContextKey, EntityTypeConstraint, EntityTypeDefinition, EntityTypeId,
-        EventAttributeDefinition, EventAttributeId, EventAttributeValue, EventDraft,
-        EventKindDefinition, EventKindId, EventParticipant, EventRelationInputKind,
-        EventRoleDefinition, EventRoleId, EventTime, EventTimeConstraint, EventTimeForm,
-        EvidenceRelation, EvidenceTargetRef, GrantEffect, LayerDefinition, LayerId,
-        LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId, Polarity, PolicyRuleId,
-        PolicySubject, PredicateDefinition, PredicateDefinitionSpec, PredicateId,
-        ProvenanceEndpointRef, ProvenanceRelation, Record, RecordRef, ResolutionPolicy,
-        ResolutionPreview, Revision, RoleCardinality, SchemaMode, SchemaRevision,
-        SecurityPolicyVersion, SourceContentDigest, SourceLocator, SourceMetadata, Subject, Symbol,
-        TimeInterval, Timeline, TimelineCalendarProfile, TimelineDefinition, TimelineId, Value,
-        ValueKind, WorldTime, WorldTimeSelector,
+        AuditRecordDetails, AuditRecordIdentity, AuditSequence, Bytes, Capability, CapabilityGrant,
+        CapabilityRule, Cardinality, ConstraintSet, ContextKey, EntityTypeConstraint,
+        EntityTypeDefinition, EntityTypeId, EventAttributeDefinition, EventAttributeId,
+        EventAttributeValue, EventDraft, EventKindDefinition, EventKindId, EventParticipant,
+        EventRelationInputKind, EventRoleDefinition, EventRoleId, EventTime, EventTimeConstraint,
+        EventTimeForm, EvidenceRelation, EvidenceTargetRef, FieldSelector, GrantEffect,
+        LayerDefinition, LayerId, LayerSchemaSnapshot, Lifecycle, MaskSelector, OperationId,
+        Polarity, PolicyRuleId, PolicyScope, PolicySubject, PredicateDefinition,
+        PredicateDefinitionSpec, PredicateId, Principal, ProvenanceEndpointRef, ProvenanceRelation,
+        Record, RecordRef, ResolutionPolicy, ResolutionPreview, Revision, RoleCardinality,
+        SchemaMode, SchemaRevision, SecurityPolicySnapshot, SecurityPolicyVersion,
+        SourceContentDigest, SourceLocator, SourceMetadata, Subject, Symbol, TimeInterval,
+        Timeline, TimelineCalendarProfile, TimelineDefinition, TimelineId, Value, ValueKind,
+        WorldTime, WorldTimeSelector,
     };
 
     use crate::{
@@ -5162,7 +5246,7 @@ mod tests {
     use super::{
         FactExplorerRequest, FactHistoryRecord, FactManagementError, FactQueryOperation,
         FactQueryRequest, FactQueryResult, FactTokenSearchRequest, FileFactManager as Manager,
-        SourceDraft,
+        SourceDraft, token_search_document_if_authorized,
     };
 
     struct Fixture {
@@ -6890,6 +6974,165 @@ mod tests {
             Err(FactManagementError::Unauthorized(Capability::QueryExplain))
         ) {
             return Err("Explain without QueryExplain was not rejected".to_owned());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn token_search_denies_field_before_inspecting_assertion_value() -> Result<(), String> {
+        let fixture = build_fixture(true, true)?;
+        let context = make_context(&fixture)?;
+        let assertion_id = id::<worlddb_core::AssertionId>(187)?;
+        let assertion = Assertion::new(
+            assertion_id,
+            AssertionDraft::new(
+                context,
+                Subject::new(fixture.entity_id),
+                fixture.predicate_id,
+                Value::Bool(true),
+                Polarity::Positive,
+                validity(&fixture)?,
+            ),
+            Revision::GENESIS,
+        );
+        let record_ref = RecordRef::Assertion(assertion_id);
+        let field = FieldSelector::AssertionValue(fixture.predicate_id);
+        let policy = SecurityPolicySnapshot::new(
+            vec![Principal::new(fixture.principal)],
+            vec![],
+            vec![],
+            vec![
+                worlddb_core::CapabilityRule::new(
+                    id::<PolicyRuleId>(188)?,
+                    PolicySubject::Principal(fixture.principal),
+                    CapabilityGrant::new(Capability::AssertionRead, GrantEffect::Allow),
+                    PolicyScope::project(),
+                ),
+                CapabilityRule::new(
+                    id::<PolicyRuleId>(189)?,
+                    PolicySubject::Principal(fixture.principal),
+                    CapabilityGrant::new(Capability::FieldRead, GrantEffect::Deny),
+                    PolicyScope::new(
+                        Some(fixture.history_space_id),
+                        Some(fixture.layer_id),
+                        Some(record_ref),
+                        Some(field),
+                        None,
+                    ),
+                ),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+        let query = FactExplorerRequest {
+            recorded_as_of: Revision::GENESIS,
+            schema_mode: SchemaMode::Current,
+            history_space_id: fixture.history_space_id,
+            layer_selection: worlddb_core::LayerSelection::BaseOnly,
+            subject: Subject::new(fixture.entity_id),
+            predicate_id: fixture.predicate_id,
+            perspective_scope: worlddb_core::PerspectiveScope::World,
+            epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+            world_time: WorldTimeSelector::AllTimes,
+            max_candidates: 10,
+            max_work_units: 10,
+            max_results: 10,
+        };
+        let result = token_search_document_if_authorized(
+            &assertion,
+            fixture.history_space_id,
+            &query,
+            &[fixture.layer_id],
+            field,
+            &policy,
+            fixture.principal,
+        )
+        .map_err(|error| error.to_string())?;
+        if result.is_some() {
+            return Err(
+                "a FieldRead-denied assertion reached TokenSearch document construction".to_owned(),
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn storage_token_search_omits_assertion_when_field_read_is_denied() -> Result<(), String> {
+        use worlddb_core::{CursorStateStore, CursorStoreLimits, QueryHash, SearchMatch};
+
+        let fixture = build_fixture_with_correction_rights(true, true, true)?;
+        let mut manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        manager
+            .create_assertion(
+                manager.revision(),
+                id::<OperationId>(196)?,
+                id::<worlddb_core::AssertionId>(197)?,
+                AssertionDraft::new(
+                    make_context(&fixture)?,
+                    Subject::new(fixture.entity_id),
+                    fixture.predicate_id,
+                    Value::String("private token".to_owned()),
+                    Polarity::Positive,
+                    validity(&fixture)?,
+                ),
+                false,
+            )
+            .map_err(|error| error.to_string())?;
+        drop(manager);
+
+        let mut security = FileSecurityPolicyManager::open(
+            fixture.layout.clone(),
+            &fixture.lock,
+            fixture.principal,
+        )
+        .map_err(|error| error.to_string())?;
+        security
+            .add_capability_rule(
+                security.revision(),
+                id::<OperationId>(198)?,
+                id::<PolicyRuleId>(199)?,
+                PolicySubject::Principal(fixture.principal),
+                Capability::FieldRead,
+                GrantEffect::Deny,
+            )
+            .map_err(|error| error.to_string())?;
+        drop(security);
+
+        let manager = Manager::open(fixture.layout.clone(), &fixture.lock, fixture.principal)
+            .map_err(|error| error.to_string())?;
+        let query = FactExplorerRequest {
+            recorded_as_of: manager.revision(),
+            schema_mode: SchemaMode::Current,
+            history_space_id: fixture.history_space_id,
+            layer_selection: worlddb_core::LayerSelection::BaseOnly,
+            subject: Subject::new(fixture.entity_id),
+            predicate_id: fixture.predicate_id,
+            perspective_scope: worlddb_core::PerspectiveScope::World,
+            epistemic_mode: worlddb_core::EpistemicMode::WorldState,
+            world_time: WorldTimeSelector::AllTimes,
+            max_candidates: 100,
+            max_work_units: 100,
+            max_results: 100,
+        };
+        let mut cursors = CursorStateStore::new(
+            CursorStoreLimits::new(4, 16_384, 60_000).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let (_, page) = manager
+            .start_token_search(
+                FactTokenSearchRequest {
+                    query,
+                    terms: vec!["private".to_owned()],
+                    matching: SearchMatch::AllTerms,
+                    page_size: 10,
+                    query_hash: QueryHash::new([0xa6; 32]),
+                },
+                &mut cursors,
+                1_000,
+            )
+            .map_err(|error| error.to_string())?;
+        if !page.hits.is_empty() {
+            return Err("TokenSearch returned a hit after FieldRead was denied".to_owned());
         }
         Ok(())
     }

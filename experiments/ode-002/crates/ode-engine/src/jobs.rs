@@ -544,6 +544,18 @@ fn read_envelope(path: &Path, database_id: &str) -> Result<JournalEnvelope, &'st
     Ok(envelope)
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_job_journal(bytes: &[u8]) -> bool {
+    let Ok(envelope) = serde_json::from_slice::<JournalEnvelope>(bytes) else {
+        return false;
+    };
+    let Ok(canonical) = serde_json::to_vec(&envelope.body) else {
+        return false;
+    };
+    parse_generation("JOB_STATE_00000000000000000001.json").is_some()
+        && blake3::hash(&canonical).to_hex().as_str() == envelope.checksum
+}
+
 fn entry_from_snapshot(snapshot: &JobSnapshot) -> JournalEntry {
     let descriptor = snapshot.descriptor();
     let progress = match descriptor.progress() {

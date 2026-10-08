@@ -26,11 +26,11 @@ Die bestehenden Windows-Verträge in `docs/M5-09-verification.md` belegen lokale
 - Das Profil behauptet derzeit **keine** Machine-Durability und keine bestätigte Persistenz bei echtem Stromausfall. Die vorhandenen Sync-Aufrufe und Prozess-/Fehlerinjektionstests ersetzen weder eine Hardware-Power-Cut-Messung noch einen Nachweis über den NVMe-Controller-Cache. `DurabilityLevel::Machine` bleibt bis zu den einschlägigen Implementierungs- und Gate-Nachweisen gesperrt.
 - OneDrive- und sonstige synchronisierte Verzeichnisse sind wegen ODE-004 ausgeschlossen. Das gilt auch dann, wenn die zugrunde liegende Partition NTFS ist. UNC/SMB-/Netzwerkpfade werden vom Windows-Publishadapter fail-closed abgelehnt.
 - APFS und ext4 bleiben read-only/unsupported, bis M4-15, M5-08 und M5-10 auf den passenden Hosts belegt sind. ReFS, FAT/exFAT, Wechseldatenträger und sonstige nicht profilierte Volumes erhalten ebenfalls keine Schreibfreigabe.
-- ODE-006 betrifft den macOS-`F_FULLFSYNC`-Pfad. Der Windows-Kandidat trifft dazu keine APFS-Entscheidung; M4-15 bleibt für einen späteren Mac-Lauf offen.
+- ODE-006 betrifft den macOS-`F_FULLFSYNC`-Pfad. Der Windows-Kandidat trifft dazu keine APFS-Implementierungsentscheidung. M4-15s Mess- und Policy-Entscheidung wurde am 8. Oktober 2026 abgeschlossen; der APFS-Adapter bleibt M5-10 vorbehalten.
 
 ## Abnahme für den Windows-Slice
 
 - Host- und Volumeinventar oben wurde lokal read-only erhoben.
 - M5-09 Windows-/NTFS-Verträge: PASS; siehe `docs/M5-09-verification.md`.
 - Profilkennung, erlaubte Umgebung, Sync-/Lock-Mechanismen, Grenzen und explizit ausgeschlossene Dateisysteme sind vor M5-22 dokumentiert.
-- Die Freigabe bleibt auf Windows/NTFS begrenzt; die Plattformabnahmen M4-15, M5-08, M5-10 und das finale M5-Gate M5-23 bleiben offen.
+- Die Freigabe bleibt auf Windows/NTFS begrenzt; M5-08 (Linux/ext4), M5-10 (macOS/APFS) und das finale M5-Gate M5-23 bleiben offen. M4-15 ist seit 8. Oktober 2026 mit APFS-Messung und ODE-006-Entscheidung abgeschlossen.

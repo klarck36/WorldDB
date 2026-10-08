@@ -1682,6 +1682,7 @@ fn parse_canonical_u64(value: &str) -> Result<u64, CliError> {
 }
 
 fn run_migration_command(request: MigrationCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let plan = load_migration_plan(&request.plan_path)?;
     if request.action == MigrationCommandAction::Plan && !request.steps.is_empty() {
         return Err(CliError::invalid_request());
@@ -2123,6 +2124,218 @@ fn load_policy_history(
         .map_err(|_| CliError::new(PublicCode::CORRUPT_DATA))
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static PARSER_ONLY_FUZZ_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+struct ParserOnlyFuzzGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl ParserOnlyFuzzGuard {
+    fn enter() -> Self {
+        let previous = PARSER_ONLY_FUZZ_MODE.with(|mode| mode.replace(true));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ParserOnlyFuzzGuard {
+    fn drop(&mut self) {
+        PARSER_ONLY_FUZZ_MODE.with(|mode| mode.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+fn parser_only_fuzz_mode() -> bool {
+    PARSER_ONLY_FUZZ_MODE.with(|mode| mode.get())
+}
+
+#[cfg(not(test))]
+fn parser_only_fuzz_mode() -> bool {
+    false
+}
+
+fn reject_fuzz_side_effects() -> Result<(), CliError> {
+    if parser_only_fuzz_mode() {
+        Err(CliError::invalid_request())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_arguments(bytes: &[u8]) -> bool {
+    let _parse_only = ParserOnlyFuzzGuard::enter();
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let arguments = text
+        .split_whitespace()
+        .map(OsString::from)
+        .collect::<VecDeque<_>>();
+    let (_, arguments, global_result) = parse_global_options(arguments);
+    global_result.is_ok() && parse_command(arguments).is_ok()
+}
+
+#[cfg(test)]
+static NEXT_IMPORT_FUZZ_FILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+struct ImportFuzzFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for ImportFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+fn write_import_fuzz_file(bytes: &[u8]) -> Result<ImportFuzzFile, String> {
+    let sequence = NEXT_IMPORT_FUZZ_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "worlddb-cli-import-fuzz-{}-{sequence}.record",
+        std::process::id()
+    ));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(ImportFuzzFile(path))
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_import_mapping(bytes: &[u8]) -> bool {
+    let Ok(value) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mapping_accepted = parse_import_mapping(value).is_ok();
+    let identity_accepted = parse_import_identity(value).is_ok();
+    mapping_accepted || identity_accepted
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_migration_plan_json(bytes: &[u8]) -> Result<bool, String> {
+    let file = write_import_fuzz_file(bytes)?;
+    Ok(load_migration_plan(&file.0).is_ok())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_migration_step_records(bytes: &[u8]) -> Result<bool, String> {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../worlddb-storage-file/tests/fixtures/m7-16h/migration/plan.record");
+    let plan = load_migration_plan(&fixture)
+        .map_err(|_| "migration plan fuzz fixture could not be decoded".to_owned())?;
+    let file = write_import_fuzz_file(bytes)?;
+    let step_files = plan
+        .steps()
+        .iter()
+        .map(|step_id| MigrationStepFiles {
+            step_id: *step_id,
+            operation_id: None,
+            record_files: vec![file.0.clone()],
+        })
+        .collect::<Vec<_>>();
+    Ok(load_migration_step_records(&plan, &step_files, false).is_ok())
+}
+
+#[cfg(test)]
+static POLICY_HISTORY_FUZZ_FIXTURE_ROOT: std::sync::OnceLock<Result<PathBuf, String>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+struct RestorePolicyHistoryFuzzFile(PathBuf, Vec<u8>);
+
+#[cfg(test)]
+impl Drop for RestorePolicyHistoryFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::write(&self.0, &self.1);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn cleanup_policy_history_fuzz_fixture() -> Result<(), String> {
+    let Some(Ok(root)) = POLICY_HISTORY_FUZZ_FIXTURE_ROOT.get() else {
+        return Ok(());
+    };
+    fs::remove_dir_all(root).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_policy_history(bytes: &[u8]) -> Result<bool, String> {
+    fn copy_tree(source: &Path, destination: &Path) -> io::Result<()> {
+        fs::create_dir_all(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "fuzz fixture unexpectedly contains a symlink",
+                ));
+            }
+            if metadata.is_dir() {
+                copy_tree(&source_path, &destination_path)?;
+            } else if metadata.is_file() {
+                fs::copy(source_path, destination_path)?;
+            }
+        }
+        Ok(())
+    }
+
+    let root = POLICY_HISTORY_FUZZ_FIXTURE_ROOT
+        .get_or_init(|| {
+            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../worlddb-storage-file/tests/fixtures/m7-16h/storage");
+            let report_path = std::env::var_os("WORLDDB_FUZZ_REPORT_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join("worlddb-fuzzer-report.json"));
+            let report_directory = report_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(std::env::temp_dir);
+            fs::create_dir_all(&report_directory).map_err(|error| error.to_string())?;
+            let destination =
+                report_directory.join(format!("cli-policy-history-fixture-{}", std::process::id()));
+            if destination.exists() {
+                fs::remove_dir_all(&destination).map_err(|error| error.to_string())?;
+            }
+            // Empty storage directories are not represented in Git. Create the canonical
+            // layout first so this harness also works from a clean macOS/Linux checkout.
+            DatabaseLayout::create(&destination).map_err(|error| error.to_string())?;
+            if let Err(error) = copy_tree(&source, &destination) {
+                let _ = fs::remove_dir_all(&destination);
+                return Err(error.to_string());
+            }
+            Ok(destination)
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let layout = DatabaseLayout::open(root).map_err(|error| error.to_string())?;
+    let Some(manifest) = ManifestStore::new(layout.clone())
+        .read_current()
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("policy history fuzz fixture has no current manifest".to_owned());
+    };
+    let Some(reference) = manifest
+        .segments()
+        .iter()
+        .find(|segment| segment.kind() == ManifestSegmentKind::SecurityPolicy)
+    else {
+        return Err("policy history fuzz fixture has no security segment".to_owned());
+    };
+    let file_name = format!("segment-{}.wdbseg", reference.id().to_canonical_string());
+    let path = root.join("security").join("segments").join(file_name);
+    let original = fs::read(&path).map_err(|error| error.to_string())?;
+    let _restore = RestorePolicyHistoryFuzzFile(path.clone(), original);
+    fs::write(path, bytes).map_err(|error| error.to_string())?;
+    Ok(load_policy_history(&layout, &manifest).is_ok())
+}
+
 fn schema_fingerprint_from_manifest(
     layout: &DatabaseLayout,
     manifest: &Manifest,
@@ -2343,6 +2556,7 @@ fn run_storage_upgrade(
     backup_path: &Path,
     restore_path: &Path,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(database_path)?;
     let layout = project.layout.clone();
@@ -2601,6 +2815,7 @@ fn run_backup_create(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let source = canonical_project_root(source)?;
     let layout = DatabaseLayout::open(&source).map_err(map_storage_file_error)?;
@@ -2661,6 +2876,7 @@ fn run_backup_verify(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let verification = match profile {
         BackupProfile::ExactDatabase => verify_exact_backup(backup, None),
         BackupProfile::AuditComplete => verify_audit_complete_backup(backup, None),
@@ -2684,6 +2900,7 @@ fn run_restore_clone(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let authorization_project = open_current_policy_project(authorization_project)?;
     let policy_view = authorization_project
@@ -2764,6 +2981,7 @@ fn run_restore_clone(
 }
 
 fn run_export_command(request: ExportCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let logical_scope = LogicalExportScope::new(
         request.from_revision,
         request.through_revision,
@@ -2867,6 +3085,7 @@ fn run_import_plan(
     output_path: &Path,
     mappings: Vec<LogicalImportIdMapping>,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(destination_path)?;
     let policy = project
@@ -2909,6 +3128,7 @@ fn run_import_prepare(
     input_path: &Path,
     plan_path: &Path,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(destination_path)?;
     let destination_database_id = project
@@ -2980,6 +3200,7 @@ fn run_import_prepare(
 }
 
 fn run_purge_plan(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let report_path = request
         .report_path
         .as_deref()
@@ -3013,6 +3234,7 @@ fn run_purge_plan(request: PurgeCommandRequest) -> Result<Success, CliError> {
 }
 
 fn run_purge(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let confirmation = request.confirmation.ok_or_else(CliError::invalid_request)?;
     validate_purge_destinations(
         &request.destination_path,
@@ -3513,6 +3735,7 @@ fn reject_restore_target_within_project(
 }
 
 fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
     let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
     let report = StorageVerifier::new(layout)
@@ -3527,6 +3750,7 @@ fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> 
 }
 
 fn run_recovery(path: &Path) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
     let lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
     let outcome = RecoveryManager::new(layout.clone())
@@ -3546,6 +3770,7 @@ fn run_recovery(path: &Path) -> Result<Success, CliError> {
 }
 
 fn run_salvage(source: &Path, target: &Path) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(source).map_err(map_storage_file_error)?;
     let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
     let report = SalvageManager::new(layout)
@@ -3577,6 +3802,7 @@ fn is_version_namespace(value: &str) -> bool {
 }
 
 fn run_adapter(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let mut manifest_path = None;
     let mut input_path = None;
     let mut output_path = None;

@@ -1,0 +1,4 @@
+--help
+--format json v1 version
+v1 verify --database C:\worlddb\synthetic
+v1 export logical --database C:\worlddb\synthetic --output C:\worlddb\synthetic.wdbx

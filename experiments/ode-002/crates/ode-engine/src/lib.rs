@@ -714,6 +714,88 @@ fn decode_stream_id(encoded: &str) -> Result<[u8; 16], EngineError> {
     Ok(id)
 }
 
+#[cfg(test)]
+fn fuzz_campaign_probe(target: &str, bytes: &[u8]) -> Result<bool, String> {
+    let accepted = match target {
+        "engine_ipc_request" => serde_json::from_slice::<Request>(bytes).is_ok(),
+        "engine_fact_command" => serde_json::from_slice::<FactCommand>(bytes).is_ok(),
+        "engine_schema_command" => serde_json::from_slice::<SchemaCommand>(bytes).is_ok(),
+        "engine_branch_layer_command" => {
+            serde_json::from_slice::<BranchLayerCommand>(bytes).is_ok()
+        }
+        "engine_entity_command" => serde_json::from_slice::<EntityCommand>(bytes).is_ok(),
+        "engine_perspective_command" => serde_json::from_slice::<PerspectiveCommand>(bytes).is_ok(),
+        "engine_security_policy_command" => {
+            serde_json::from_slice::<SecurityPolicyCommand>(bytes).is_ok()
+        }
+        "engine_history_space_transfer_command" => {
+            serde_json::from_slice::<HistorySpaceTransferCommand>(bytes).is_ok()
+        }
+        "engine_query_cursor" => facts::fuzz_cursor(bytes),
+        "engine_job_journal" => jobs::fuzz_job_journal(bytes),
+        "engine_stream_id" => std::str::from_utf8(bytes)
+            .ok()
+            .is_some_and(|value| decode_stream_id(value.trim()).is_ok()),
+        _ => return Err(format!("unknown engine fuzz target: {target}")),
+    };
+    Ok(accepted)
+}
+
+#[cfg(test)]
+#[path = "../../../../../tools/fuzz/rust_campaign.rs"]
+mod fuzz_campaign_support;
+
+#[cfg(test)]
+#[test]
+#[ignore = "24-hour fuzz campaign; run through tools/fuzz/run-target.ps1"]
+fn ode_fuzz_campaign() {
+    if let Err(error) = fuzz_campaign_support::run_campaign(
+        &[
+            "engine_ipc_request",
+            "engine_fact_command",
+            "engine_schema_command",
+            "engine_branch_layer_command",
+            "engine_entity_command",
+            "engine_perspective_command",
+            "engine_security_policy_command",
+            "engine_history_space_transfer_command",
+            "engine_query_cursor",
+            "engine_job_journal",
+            "engine_stream_id",
+        ],
+        fuzz_campaign_probe,
+    ) {
+        panic!("ODE fuzz campaign failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod fuzz_campaign_tests {
+    use super::fuzz_campaign_probe;
+
+    const TARGETS: &[&str] = &[
+        "engine_ipc_request",
+        "engine_fact_command",
+        "engine_schema_command",
+        "engine_branch_layer_command",
+        "engine_entity_command",
+        "engine_perspective_command",
+        "engine_security_policy_command",
+        "engine_history_space_transfer_command",
+        "engine_query_cursor",
+        "engine_job_journal",
+        "engine_stream_id",
+    ];
+
+    #[test]
+    fn fuzz_campaign_dispatch_rejects_unregistered_engine_targets() {
+        assert!(fuzz_campaign_probe("unknown", b"seed").is_err());
+        for target in TARGETS {
+            assert!(fuzz_campaign_probe(target, b"seed").is_ok());
+        }
+    }
+}
+
 pub fn fill_deterministic_chunk(chunk: &mut [u8], offset: u64) {
     for (index, byte) in chunk.iter_mut().enumerate() {
         *byte = ((offset

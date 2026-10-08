@@ -205,7 +205,9 @@ def execute() -> tuple[int, Path]:
         raise ValueError("WORLDDB_TEST_RUN_ID contains unsupported path characters")
     run_dir = output_root / run_id
     run_dir.mkdir()
-    target_dir = run_dir / "cargo-target"
+    # Reuse build artifacts across evidence runs instead of duplicating a full
+    # Cargo target directory under every timestamped run directory.
+    target_dir = output_root / ".cargo-target"
 
     environment = os.environ.copy()
     environment["WORLDDB_TEST_SEED"] = seed

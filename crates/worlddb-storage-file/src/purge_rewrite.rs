@@ -1026,7 +1026,7 @@ fn write_report(layout: &DatabaseLayout, bytes: &[u8]) -> Result<(), PurgeRewrit
             operation: "write staged PurgeReport",
             source,
         })?;
-    file.sync_all().map_err(|source| PurgeRewriteError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| PurgeRewriteError::Io {
         operation: "sync staged PurgeReport",
         source,
     })?;
@@ -1578,12 +1578,13 @@ mod tests {
                 .database_id()
                 .ok_or_else(|| String::from("source DatabaseId is missing"))?;
             let source_revision = fixture.plan.source_snapshot_revision();
-            let child = Command::new(env::current_exe().map_err(|error| error.to_string())?)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(AREA_ENV, &fixture._area.0)
-                .env(CRASH_ENV, checkpoint)
-                .status()
-                .map_err(|error| format!("start crash child for {checkpoint}: {error}"))?;
+            let child = crate::writer_lock::test_command_status(
+                Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(AREA_ENV, &fixture._area.0)
+                    .env(CRASH_ENV, checkpoint),
+            )
+            .map_err(|error| format!("start crash child for {checkpoint}: {error}"))?;
             if child.code() != Some(86) {
                 return Err(format!(
                     "crash child at {checkpoint} exited with {:?}, expected 86",

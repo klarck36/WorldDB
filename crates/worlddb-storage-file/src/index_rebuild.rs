@@ -1310,7 +1310,7 @@ struct NativeIndexPublication;
 
 impl IndexPublication for NativeIndexPublication {
     fn sync_staged_file(&self, file: &File, _kind: IndexFileKind) -> io::Result<()> {
-        file.sync_all()
+        crate::platform_sync::sync_file(file)
     }
 
     fn publish_generation(&self, stage: &Path, target: &Path) -> io::Result<()> {
@@ -1373,22 +1373,39 @@ impl Drop for StagePathGuard {
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_index_pointer(bytes: &[u8]) -> bool {
+    decode_pointer(bytes, IndexFamily::RecordId).is_ok()
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_index_generation_name(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|name| parse_generation_file_name(name.trim(), "index-0001-").is_ok())
+}
+
+#[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::{IndexDirectory, IndexFileKind};
     use super::{
-        IndexDirectory, IndexFileKind, IndexGenerationStore, IndexPublication, IndexRebuildError,
-        IndexRebuildLimits, IndexRebuildManager, IndexRebuildSource, NativeIndexPublication,
-        PinnedIndexSnapshot, StoredIndexGeneration,
+        IndexGenerationStore, IndexPublication, IndexRebuildError, IndexRebuildLimits,
+        IndexRebuildManager, IndexRebuildSource, NativeIndexPublication, PinnedIndexSnapshot,
+        StoredIndexGeneration,
     };
     use crate::{DatabaseLayout, IndexGenerationError};
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
+    #[cfg(windows)]
     use std::io;
     use std::ops::Bound::{Excluded, Included};
     use std::path::{Path, PathBuf};
     #[cfg(windows)]
     use std::process::{Command, Stdio};
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    #[cfg(windows)]
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use worlddb_core::{
         IndexBuildVersion, IndexFamily, IndexFormatVersion, IndexRevisionCoverage,
@@ -1700,6 +1717,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum PublicationPoint {
         SyncGenerationFile,
@@ -1736,11 +1754,13 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     struct RecordingPublication {
         crash_after: Option<PublicationPoint>,
         directory_sync_count: AtomicUsize,
     }
 
+    #[cfg(windows)]
     impl RecordingPublication {
         const fn crashing_after(point: PublicationPoint) -> Self {
             Self {
@@ -1757,6 +1777,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     impl IndexPublication for RecordingPublication {
         fn sync_staged_file(&self, file: &std::fs::File, kind: IndexFileKind) -> io::Result<()> {
             NativeIndexPublication.sync_staged_file(file, kind)?;
@@ -1827,14 +1848,15 @@ mod tests {
             .map_err(|error| error.to_string())?;
 
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point.name())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point.name())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point:?} exited with {:?}, expected crash code 86",

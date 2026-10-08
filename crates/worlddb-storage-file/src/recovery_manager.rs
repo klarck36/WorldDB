@@ -439,7 +439,7 @@ fn complete_tail_repair(
     if current_length == record.original_length {
         wal_file
             .set_len(record.offset)
-            .and_then(|()| wal_file.sync_all())
+            .and_then(|()| crate::platform_sync::sync_file(&wal_file))
             .map_err(|source| RecoveryError::Io {
                 operation: "truncate and sync quarantined WAL tail",
                 source,
@@ -509,7 +509,9 @@ fn ensure_quarantine_copy(
             operation: "create quarantine staging file",
             source,
         })?;
-    let result = file.write_all(suffix).and_then(|()| file.sync_all());
+    let result = file
+        .write_all(suffix)
+        .and_then(|()| crate::platform_sync::sync_file(&file));
     drop(file);
     result.map_err(|source| RecoveryError::Io {
         operation: "write and sync quarantine staging file",
@@ -763,7 +765,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         file.write_all(b"partial-marker")
             .map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
+        crate::platform_sync::sync_file(&file).map_err(|error| error.to_string())?;
         Ok((prepare.segment_sequence(), prepare.byte_offset()))
     }
 
@@ -1010,14 +1012,15 @@ mod tests {
             (RecoveryCheckpoint::JournalCompleted, "journal_completed"),
         ] {
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point_name)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point_name)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {checkpoint:?} exited with {:?}, expected crash code 86",
@@ -1036,14 +1039,15 @@ mod tests {
         }
 
         let executable = env::current_exe().map_err(|error| error.to_string())?;
-        let status = Command::new(executable)
-            .args(["--exact", TEST_NAME, "--nocapture"])
-            .env(ROOT_ENV, &database.0)
-            .env(POINT_ENV, "manifest_published")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|error| error.to_string())?;
+        let status = crate::writer_lock::test_command_status(
+            Command::new(executable)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, &database.0)
+                .env(POINT_ENV, "manifest_published")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .map_err(|error| error.to_string())?;
         if status.code() != Some(86) {
             return Err(format!(
                 "child for ManifestPublished exited with {:?}, expected crash code 86",
@@ -1164,14 +1168,15 @@ mod tests {
             (RecoveryCheckpoint::ManifestPublished, "manifest_published"),
         ] {
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point_name)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point_name)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {checkpoint:?} exited with {:?}, expected crash code 86",

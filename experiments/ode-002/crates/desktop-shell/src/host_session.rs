@@ -23,7 +23,7 @@ pub(super) struct HostIdentity(Vec<u8>);
 
 impl HostIdentity {
     pub(super) fn current() -> Result<Self, HostIdentityError> {
-        worlddb_process_adapter::current_process_identity_bytes()
+        worlddb_process_adapter::current_host_account_identity_bytes()
             .map(Self)
             .map_err(|error| match error {
                 worlddb_process_adapter::ProcessIdentityError::UnsupportedPlatform => {
@@ -197,6 +197,13 @@ fn decode_session_id(encoded: &str) -> Option<[u8; 16]> {
         *byte = u8::from_str_radix(&encoded[start..start + 2], 16).ok()?;
     }
     Some(session_id)
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_session_id(bytes: &[u8]) -> bool {
+    std::str::from_utf8(bytes)
+        .ok()
+        .is_some_and(|value| decode_session_id(value.trim()).is_some())
 }
 
 #[cfg(test)]

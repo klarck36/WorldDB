@@ -1,0 +1,1155 @@
+{
+  "contract_version": "1.0.0-rc.3",
+  "schema_version": 1,
+  "source_fingerprints": {
+    "contract_policy": {
+      "contracts/public/classification-rules.tsv": "d8d510e183ccc092daee7bdb7b166c1cb0d7da38d7f17af74bf8f360c02162bb",
+      "docs/contracts/public-contracts-v1.0.0-rc.1.md": "513c615278696d904dcd33fc7361cd3cc4f9ea79ca3f48ec42fa95e1c81eb1bc",
+      "docs/contracts/public-contracts-v1.0.0-rc.2.md": "d5b798a4563856462fa570fff4040dcbb040784936e2198ae95b3d5f9274ac1b",
+      "docs/contracts/public-contracts-v1.0.0-rc.3.md": "ebc0fc6bcfe74e566ac6a2f8c93d291766cde495ff8be82421c7510766b6d259",
+      "tools/check_public_contracts.py": "662a1ec7fe00bf57578937b6fcd3c0a6b1f6d4b087d475410533928fc2619e75"
+    },
+    "logical_export": {
+      "crates/worlddb-storage-file/src/logical_export.rs": "11c2b0fecca54e4a59b8d6b57dc93d32a2f65589a1b14d75dd7bc3b3dfb9f4c1",
+      "docs/contracts/logical-export-v2.md": "29d1557ca21d0de4b1ef9c94debd700f4d7d179a5ddf35b356b83509cbf5dd7d"
+    },
+    "persistent_format": {
+      "crates/worlddb-core/src/wire.rs": "c45788a6c3d9127944cb217c94db644cc840002d465db843ec18e3a656007e42",
+      "crates/worlddb-storage-file/src/manifest.rs": "69d57be284b34713532fae9bf0f94f762e46590f9a68962f1dacbf952ffbfdac",
+      "crates/worlddb-storage-file/src/platform_sync.rs": "102e41c1bbd072fbfd0d7908e2eb0fd677187c124ce4be007ceb29557f2e4409",
+      "crates/worlddb-storage-file/src/security_segment.rs": "01faf74f477c2d50f2202b66482bdf55fe2e69b0b3e78831c444f078bf054af1",
+      "crates/worlddb-storage-file/src/segment.rs": "fdd2faa36129ea870511ef78663a0c1fb8b5618c2838196a88575287014fa159"
+    },
+    "public_errors": {
+      "crates/worlddb-core/src/api.rs": "5256d69cb5d890c2a277c768ee48bbf1630de6209c018f310f9c11c0adb52c8e",
+      "crates/worlddb-core/src/errors.rs": "6aca2654842361e81023649096ce1e7d2036a328550d46a44985d8cdaa92b172",
+      "crates/worlddb-core/src/wire.rs": "c45788a6c3d9127944cb217c94db644cc840002d465db843ec18e3a656007e42"
+    },
+    "rust_api_v1": {
+      "crates/worlddb-core/src/api.rs": "5256d69cb5d890c2a277c768ee48bbf1630de6209c018f310f9c11c0adb52c8e"
+    },
+    "wire_tags": {
+      "crates/worlddb-core/src/audit_wire.rs": "0874c757d4d06dd222838dc484c4224549ea3bbebb8ed0afc0b5513c17b43806",
+      "crates/worlddb-core/src/record_refs.rs": "35b664ae42a38208525d1f53dbf2c0c4c7727e1bed79ef58c8110357d9dd01ee",
+      "crates/worlddb-core/src/wire.rs": "c45788a6c3d9127944cb217c94db644cc840002d465db843ec18e3a656007e42",
+      "crates/worlddb-core/src/wire_records.rs": "e442ffe760872a09ad981ac38e79b7a9a4db67d8477a85d8843b1d889f691389",
+      "policy/audit-wire-kinds.tsv": "0b1e7baa286dfd0f9c194c77e33ab32e7a84b02828a98a5cafe8b7920bb73510",
+      "policy/audit-wire-values.tsv": "63b8064ecf0234db299c18928736fd5cd55e77dda3dbd94fc28732379c3cc476",
+      "policy/record-ref-wire-tags.tsv": "8bb8eaa156a682d8a21fd8642b6db044a83607536709a9d29bee15ee82a06f09",
+      "policy/record-wire-kinds.tsv": "07583ab4dfffdf923eca4c2a5c7688581ae946055e33635a6f0dec9a83f35173"
+    }
+  },
+  "surfaces": {
+    "logical_export": {
+      "digest_context_literal": "WorldDB.LogicalExport.v2\\0",
+      "excluded_storage_classes": [
+        {
+          "tag": 1,
+          "variant": "SecurityPolicyHistory"
+        },
+        {
+          "tag": 2,
+          "variant": "AuditHistory"
+        },
+        {
+          "tag": 3,
+          "variant": "TransactionAndRecoveryState"
+        },
+        {
+          "tag": 4,
+          "variant": "StorageManifestAndFormat"
+        },
+        {
+          "tag": 5,
+          "variant": "DerivedIndexes"
+        }
+      ],
+      "format_version": 2,
+      "magic_literal": "WDBLEX\\0\\x02",
+      "max_bytes": 536870912,
+      "max_history_spaces": 65536,
+      "max_records": 1000000,
+      "semantics_sha256": "29d1557ca21d0de4b1ef9c94debd700f4d7d179a5ddf35b356b83509cbf5dd7d"
+    },
+    "persistent_format": {
+      "current_pointer_magics": {
+        "v1": "WDBCUR\\0\\x01",
+        "v2": "WDBCUR\\0\\x02"
+      },
+      "frame": {
+        "magic_literal": "WorldDB\\0",
+        "major": 1,
+        "minor": 0
+      },
+      "manifest_magic": "WDBMAN\\0\\x01",
+      "security_segment": {
+        "major": 1,
+        "minor": 0
+      },
+      "segment": {
+        "magic_literal": "WDBSEG\\0\\x01",
+        "major": 1,
+        "minor": 0
+      }
+    },
+    "public_errors": {
+      "core_codes": [
+        "WDB-BACKUP-AUTHENTICATION",
+        "WDB-BACKUP-INCOMPATIBLE-FORMAT",
+        "WDB-BACKUP-INTEGRITY-MISMATCH",
+        "WDB-BACKUP-INVALID-MANIFEST",
+        "WDB-BACKUP-SNAPSHOT-UNAVAILABLE",
+        "WDB-BACKUP-STORAGE",
+        "WDB-COMMIT-AUTHORIZATION",
+        "WDB-COMMIT-CONFLICT",
+        "WDB-COMMIT-READ-ONLY",
+        "WDB-COMMIT-SHUTTING-DOWN",
+        "WDB-COMMIT-STORAGE",
+        "WDB-COMMIT-UNKNOWN",
+        "WDB-COMMIT-VALIDATION",
+        "WDB-EXPORT-INVALID-SCOPE",
+        "WDB-EXPORT-IO",
+        "WDB-EXPORT-MISSING-DEPENDENCY",
+        "WDB-EXPORT-UNAUTHORIZED",
+        "WDB-EXPORT-UNSUPPORTED-FORMAT",
+        "WDB-JOB-BUDGET-EXCEEDED",
+        "WDB-JOB-CANCELLED",
+        "WDB-JOB-DEPENDENCY-FAILED",
+        "WDB-JOB-NOT-FOUND",
+        "WDB-JOB-RESUME-MISMATCH",
+        "WDB-MIGRATION-CONSTRAINT-VIOLATION",
+        "WDB-MIGRATION-DECISION-REQUIRED",
+        "WDB-MIGRATION-INVALID-PLAN",
+        "WDB-MIGRATION-RESUME-MISMATCH",
+        "WDB-MIGRATION-STORAGE",
+        "WDB-MIGRATION-UNSUPPORTED-FORMAT",
+        "WDB-OPEN-CORRUPT",
+        "WDB-OPEN-IO",
+        "WDB-OPEN-LOCKED",
+        "WDB-OPEN-NEEDS-MIGRATION",
+        "WDB-OPEN-NOT-FOUND",
+        "WDB-OPEN-PERMISSION-DENIED",
+        "WDB-OPEN-RECOVERY-REQUIRED",
+        "WDB-OPEN-UNSUPPORTED-FORMAT",
+        "WDB-QUERY-BUDGET-EXCEEDED",
+        "WDB-QUERY-CANCELLED",
+        "WDB-QUERY-CORRUPT-DATA",
+        "WDB-QUERY-INVALID",
+        "WDB-QUERY-SNAPSHOT-EXPIRED",
+        "WDB-QUERY-STORAGE-READ",
+        "WDB-QUERY-UNAUTHORIZED",
+        "WDB-RECOVERY-CORRUPT-COMMITTED-DATA",
+        "WDB-RECOVERY-DECISION-REQUIRED",
+        "WDB-RECOVERY-HISTORY-GAP",
+        "WDB-RECOVERY-INDETERMINATE-COMMIT",
+        "WDB-RECOVERY-STORAGE",
+        "WDB-SECURITY-ACCESS-DENIED",
+        "WDB-SECURITY-CAPABILITY-MISSING",
+        "WDB-SECURITY-EPOCH-CHANGED",
+        "WDB-SECURITY-INVALID-PRINCIPAL",
+        "WDB-SECURITY-NOT-FOUND",
+        "WDB-SECURITY-RESOURCE-UNAVAILABLE",
+        "WDB-STORAGE-CORRUPT",
+        "WDB-STORAGE-DURABILITY",
+        "WDB-STORAGE-IO",
+        "WDB-STORAGE-LOCKED",
+        "WDB-STORAGE-NOT-FOUND",
+        "WDB-STORAGE-PERMISSION-DENIED",
+        "WDB-VALIDATION-BUDGET-EXCEEDED",
+        "WDB-VALIDATION-INVALID-REFERENCE",
+        "WDB-VALIDATION-INVALID-TEMPORAL-RANGE",
+        "WDB-VALIDATION-INVALID-VALUE",
+        "WDB-VALIDATION-SCHEMA-VIOLATION",
+        "WDB-VALIDATION-UNSUPPORTED-OPERATION",
+        "WDB-WIRE-INVALID-FRAME",
+        "WDB-WIRE-RESOURCE-LIMIT",
+        "WDB-WIRE-UNKNOWN-EXTERNAL-CODE",
+        "WDB-WIRE-UNKNOWN-VALUE-TAG"
+      ],
+      "core_to_transport": [
+        {
+          "core_code": "WDB-BACKUP-AUTHENTICATION",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-BACKUP-INCOMPATIBLE-FORMAT",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-BACKUP-INTEGRITY-MISMATCH",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-BACKUP-INVALID-MANIFEST",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-BACKUP-SNAPSHOT-UNAVAILABLE",
+          "transport_code": "SnapshotExpired"
+        },
+        {
+          "core_code": "WDB-BACKUP-STORAGE",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-COMMIT-AUTHORIZATION",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-COMMIT-CONFLICT",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-COMMIT-READ-ONLY",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-COMMIT-SHUTTING-DOWN",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-COMMIT-STORAGE",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-COMMIT-UNKNOWN",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-COMMIT-VALIDATION",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-EXPORT-INVALID-SCOPE",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-EXPORT-IO",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-EXPORT-MISSING-DEPENDENCY",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-EXPORT-UNAUTHORIZED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-EXPORT-UNSUPPORTED-FORMAT",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-JOB-BUDGET-EXCEEDED",
+          "transport_code": "BudgetExceeded"
+        },
+        {
+          "core_code": "WDB-JOB-CANCELLED",
+          "transport_code": "Cancelled"
+        },
+        {
+          "core_code": "WDB-JOB-DEPENDENCY-FAILED",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-JOB-NOT-FOUND",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-JOB-RESUME-MISMATCH",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-MIGRATION-CONSTRAINT-VIOLATION",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-MIGRATION-DECISION-REQUIRED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-MIGRATION-INVALID-PLAN",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-MIGRATION-RESUME-MISMATCH",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-MIGRATION-STORAGE",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-MIGRATION-UNSUPPORTED-FORMAT",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-OPEN-CORRUPT",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-OPEN-IO",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-OPEN-LOCKED",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-OPEN-NEEDS-MIGRATION",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-OPEN-NOT-FOUND",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-OPEN-PERMISSION-DENIED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-OPEN-RECOVERY-REQUIRED",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-OPEN-UNSUPPORTED-FORMAT",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-QUERY-BUDGET-EXCEEDED",
+          "transport_code": "BudgetExceeded"
+        },
+        {
+          "core_code": "WDB-QUERY-CANCELLED",
+          "transport_code": "Cancelled"
+        },
+        {
+          "core_code": "WDB-QUERY-CORRUPT-DATA",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-QUERY-INVALID",
+          "transport_code": "InvalidQuery"
+        },
+        {
+          "core_code": "WDB-QUERY-SNAPSHOT-EXPIRED",
+          "transport_code": "SnapshotExpired"
+        },
+        {
+          "core_code": "WDB-QUERY-STORAGE-READ",
+          "transport_code": "StorageRead"
+        },
+        {
+          "core_code": "WDB-QUERY-UNAUTHORIZED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-RECOVERY-CORRUPT-COMMITTED-DATA",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-RECOVERY-DECISION-REQUIRED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-RECOVERY-HISTORY-GAP",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-RECOVERY-INDETERMINATE-COMMIT",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-RECOVERY-STORAGE",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-SECURITY-ACCESS-DENIED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-SECURITY-CAPABILITY-MISSING",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-SECURITY-EPOCH-CHANGED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-SECURITY-INVALID-PRINCIPAL",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-SECURITY-NOT-FOUND",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-SECURITY-RESOURCE-UNAVAILABLE",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-STORAGE-CORRUPT",
+          "transport_code": "CorruptData"
+        },
+        {
+          "core_code": "WDB-STORAGE-DURABILITY",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-STORAGE-IO",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-STORAGE-LOCKED",
+          "transport_code": "Internal"
+        },
+        {
+          "core_code": "WDB-STORAGE-NOT-FOUND",
+          "transport_code": "NotFound"
+        },
+        {
+          "core_code": "WDB-STORAGE-PERMISSION-DENIED",
+          "transport_code": "Unauthorized"
+        },
+        {
+          "core_code": "WDB-VALIDATION-BUDGET-EXCEEDED",
+          "transport_code": "BudgetExceeded"
+        },
+        {
+          "core_code": "WDB-VALIDATION-INVALID-REFERENCE",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-VALIDATION-INVALID-TEMPORAL-RANGE",
+          "transport_code": "InvalidQuery"
+        },
+        {
+          "core_code": "WDB-VALIDATION-INVALID-VALUE",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-VALIDATION-SCHEMA-VIOLATION",
+          "transport_code": "InvalidQuery"
+        },
+        {
+          "core_code": "WDB-VALIDATION-UNSUPPORTED-OPERATION",
+          "transport_code": "UnsupportedOperation"
+        },
+        {
+          "core_code": "WDB-WIRE-INVALID-FRAME",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-WIRE-RESOURCE-LIMIT",
+          "transport_code": "BudgetExceeded"
+        },
+        {
+          "core_code": "WDB-WIRE-UNKNOWN-EXTERNAL-CODE",
+          "transport_code": "InvalidRequest"
+        },
+        {
+          "core_code": "WDB-WIRE-UNKNOWN-VALUE-TAG",
+          "transport_code": "InvalidRequest"
+        }
+      ],
+      "transport_codes": [
+        "BudgetExceeded",
+        "Cancelled",
+        "CorruptData",
+        "CursorInvalidated",
+        "Internal",
+        "InvalidQuery",
+        "InvalidRequest",
+        "NotFound",
+        "SnapshotExpired",
+        "StorageRead",
+        "Unauthorized",
+        "UnsupportedOperation",
+        "UnsupportedProtocolVersion",
+        "UnsupportedQueryCapability"
+      ]
+    },
+    "rust_api_v1": {
+      "protocol_version": {
+        "major": 1,
+        "minor": 0
+      }
+    },
+    "wire_tags": {
+      "audit_kinds": [
+        {
+          "extensibility": "closed",
+          "fields": "1:audit_record_id;2:audit_sequence;3:audit_operation_id;4:actor_principal_id;5:action_code;6:object_class_code;7:outcome_code;8:commit_context_union;9:security_epoch;10:policy_fingerprint_bytes",
+          "kind_hex": "a001",
+          "record": "AuditRecord"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:audit_record_id;2:audit_sequence;3:audit_operation_id;4:client_request_id;5:principal_id;6:scope_fingerprint_bytes;7:snapshot_id;8:security_epoch;9:page_ordinal",
+          "kind_hex": "a002",
+          "record": "RawReadAttempt"
+        }
+      ],
+      "audit_values": [
+        {
+          "code": "1",
+          "family": "action",
+          "value": "SecurityPolicyChange"
+        },
+        {
+          "code": "2",
+          "family": "action",
+          "value": "RawReadAttempt"
+        },
+        {
+          "code": "3",
+          "family": "action",
+          "value": "ExportAuthorization"
+        },
+        {
+          "code": "4",
+          "family": "action",
+          "value": "ExportCompletion"
+        },
+        {
+          "code": "5",
+          "family": "action",
+          "value": "Migration"
+        },
+        {
+          "code": "6",
+          "family": "action",
+          "value": "Backup"
+        },
+        {
+          "code": "7",
+          "family": "action",
+          "value": "RestorePublication"
+        },
+        {
+          "code": "8",
+          "family": "action",
+          "value": "PurgePublication"
+        },
+        {
+          "code": "9",
+          "family": "action",
+          "value": "AuditConfigurationChange"
+        },
+        {
+          "code": "10",
+          "family": "action",
+          "value": "SchemaManagement"
+        },
+        {
+          "code": "11",
+          "family": "action",
+          "value": "EntityCreation"
+        },
+        {
+          "code": "12",
+          "family": "action",
+          "value": "EntityRetirement"
+        },
+        {
+          "code": "13",
+          "family": "action",
+          "value": "HistorySpaceTransfer"
+        },
+        {
+          "code": "14",
+          "family": "action",
+          "value": "FactualRecordWrite"
+        },
+        {
+          "code": "1",
+          "family": "object_class",
+          "value": "Database"
+        },
+        {
+          "code": "2",
+          "family": "object_class",
+          "value": "SecurityPolicy"
+        },
+        {
+          "code": "3",
+          "family": "object_class",
+          "value": "Migration"
+        },
+        {
+          "code": "4",
+          "family": "object_class",
+          "value": "Job"
+        },
+        {
+          "code": "5",
+          "family": "object_class",
+          "value": "Backup"
+        },
+        {
+          "code": "6",
+          "family": "object_class",
+          "value": "Export"
+        },
+        {
+          "code": "7",
+          "family": "object_class",
+          "value": "RawReadScope"
+        },
+        {
+          "code": "8",
+          "family": "object_class",
+          "value": "AuditConfiguration"
+        },
+        {
+          "code": "9",
+          "family": "object_class",
+          "value": "SchemaDefinition"
+        },
+        {
+          "code": "10",
+          "family": "object_class",
+          "value": "EntityCatalog"
+        },
+        {
+          "code": "11",
+          "family": "object_class",
+          "value": "FactualRecord"
+        },
+        {
+          "code": "1",
+          "family": "outcome",
+          "value": "Succeeded"
+        },
+        {
+          "code": "2",
+          "family": "outcome",
+          "value": "Denied"
+        },
+        {
+          "code": "3",
+          "family": "outcome",
+          "value": "Failed"
+        },
+        {
+          "code": "4",
+          "family": "outcome",
+          "value": "Indeterminate"
+        },
+        {
+          "code": "1",
+          "family": "commit_context",
+          "value": "NotCommitted"
+        },
+        {
+          "code": "2",
+          "family": "commit_context",
+          "value": "Committed"
+        }
+      ],
+      "audit_wire_source_sha256": "0874c757d4d06dd222838dc484c4224549ea3bbebb8ed0afc0b5513c17b43806",
+      "record_kind_count": 38,
+      "record_kinds": [
+        {
+          "extensibility": "closed",
+          "fields": "1:history_space_id;2:optional_parent_history_space_id;3:base_revision",
+          "kind_hex": "1001",
+          "record": "HistorySpaceDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:entity_id;2:entity_type_id;3:created_revision",
+          "kind_hex": "1002",
+          "record": "Entity"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:entity_retirement_id;2:entity_id;3:created_revision",
+          "kind_hex": "1003",
+          "record": "EntityRetirement"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:perspective_id;2:optional_display_name;3:optional_description;4:recorded_revision",
+          "kind_hex": "1004",
+          "record": "PerspectiveDefinitionRevision"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:perspective_retirement_id;2:perspective_id;3:created_revision",
+          "kind_hex": "1005",
+          "record": "PerspectiveRetirement"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:layer_id;2:symbol;3:optional_description;4:precedence_rank_i32_zigzag;5:lifecycle;6:created_schema_revision",
+          "kind_hex": "1006",
+          "record": "LayerDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:schema_revision;2:base_layer_id;3:layer_definitions_array",
+          "kind_hex": "1007",
+          "record": "LayerSchemaSnapshot"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:entity_type_id;2:symbol;3:optional_description;4:lifecycle;5:created_revision",
+          "kind_hex": "1008",
+          "record": "EntityTypeDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:predicate_id;2:symbol;3:subject_constraint;4:value_kind;5:optional_object_constraint;6:cardinality;7:resolution_policy;8:constraints_array;9:optional_decimal_metadata;10:lifecycle;11:created_revision",
+          "kind_hex": "1009",
+          "record": "PredicateDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:event_kind_id;2:symbol;3:roles_array;4:attributes_array;5:event_time_constraint;6:lifecycle;7:created_revision",
+          "kind_hex": "100a",
+          "record": "EventKindDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:migration_id;2:category;3:ordered_step_ids_array;4:source_schema_revision;5:source_schema_fingerprint_32;6:target_schema_revision;7:target_schema_fingerprint_32;8:transformer_version;9:max_work_units;10:max_memory_bytes;11:plan_fingerprint_32;12:schema_identity_changes_array;13:optional_calendar_shift(timeline_id,proleptic_gregorian_utc_profile,epoch_unix_nanoseconds_i128_be,years,months,days,direction)",
+          "kind_hex": "100b",
+          "record": "MigrationPlan"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:migration_run_id;2:migration_id;3:state",
+          "kind_hex": "100c",
+          "record": "MigrationRun"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:migration_id;2:migration_run_id;3:migration_step_id;4:operation_id;5:optional_input_fingerprint;6:optional_guarded_plan_fingerprint;7:optional_admin_decision_fingerprint",
+          "kind_hex": "100d",
+          "record": "MigrationStepCommitIdentity"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:timeline_id;2:symbol;3:calendar_profile_none_or_proleptic_gregorian_utc_epoch_unix_nanoseconds_i128;4:lifecycle;5:created_revision",
+          "kind_hex": "100e",
+          "record": "TimelineDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:symbol;2:nanoseconds_per_tick_uint64_nonzero;3:lifecycle;4:created_revision",
+          "kind_hex": "100f",
+          "record": "TimeUnitDefinition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:assertion_id;2:context;3:subject_entity_id;4:predicate_id;5:value;6:polarity;7:assertion_validity;8:created_revision",
+          "kind_hex": "1101",
+          "record": "Assertion"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:closure_id;2:assertion_id;3:close_at_world_time;4:created_revision",
+          "kind_hex": "1102",
+          "record": "AssertionValidityClosure"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:assertion_id;3:reason;4:created_revision",
+          "kind_hex": "1103",
+          "record": "AssertionRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:mask_id;2:context;3:closed_mask_selector;4:optional_validity;5:created_revision",
+          "kind_hex": "1104",
+          "record": "Mask"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:closure_id;2:mask_id;3:close_at_world_time;4:created_revision",
+          "kind_hex": "1105",
+          "record": "MaskValidityClosure"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:mask_id;3:reason;4:created_revision",
+          "kind_hex": "1106",
+          "record": "MaskRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:boundary_id;2:context;3:subject_entity_id;4:predicate_id;5:optional_validity;6:created_revision",
+          "kind_hex": "1107",
+          "record": "ReplacementBoundary"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:closure_id;2:boundary_id;3:close_at_world_time;4:created_revision",
+          "kind_hex": "1108",
+          "record": "ReplacementBoundaryValidityClosure"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:boundary_id;3:reason;4:created_revision",
+          "kind_hex": "1109",
+          "record": "ReplacementBoundaryRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:archive_transition_id;2:archive_target_record_ref;3:action;4:created_revision",
+          "kind_hex": "110a",
+          "record": "ArchiveTransition"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:event_id;2:history_space_id;3:layer_id;4:event_kind_id;5:participants_array;6:attributes_array;7:event_time;8:created_revision",
+          "kind_hex": "1201",
+          "record": "Event"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:event_mask_id;2:history_space_id;3:layer_id;4:target_event_id;5:created_revision",
+          "kind_hex": "1202",
+          "record": "EventMask"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:closure_id;2:event_id;3:close_at_event_time;4:created_revision",
+          "kind_hex": "1203",
+          "record": "EventSpanClosure"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:event_id;3:reason;4:created_revision",
+          "kind_hex": "1204",
+          "record": "EventRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:event_mask_id;3:reason;4:created_revision",
+          "kind_hex": "1205",
+          "record": "EventMaskRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:event_relation_id;2:from_event_id;3:to_event_id;4:canonical_relation_kind;5:created_revision",
+          "kind_hex": "1206",
+          "record": "EventRelation"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:event_relation_id;3:reason;4:created_revision",
+          "kind_hex": "1207",
+          "record": "EventRelationRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:source_id;2:source_kind_symbol;3:optional_locator;4:optional_content_digest_bytes;5:source_metadata_array;6:created_revision",
+          "kind_hex": "1301",
+          "record": "Source"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:evidence_id;2:source_id;3:evidence_target_record_ref;4:relation;5:created_revision",
+          "kind_hex": "1302",
+          "record": "Evidence"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:provenance_id;2:from_record_ref;3:to_record_ref;4:relation;5:created_revision",
+          "kind_hex": "1303",
+          "record": "Provenance"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:evidence_id;3:reason;4:created_revision",
+          "kind_hex": "1304",
+          "record": "EvidenceRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:retraction_id;2:provenance_id;3:reason;4:created_revision",
+          "kind_hex": "1305",
+          "record": "ProvenanceRetraction"
+        },
+        {
+          "extensibility": "closed",
+          "fields": "1:transfer_lineage_id;2:source_history_space_id;3:target_history_space_id;4:source_record_ref;5:target_record_ref;6:created_revision",
+          "kind_hex": "1306",
+          "record": "TransferLineage"
+        }
+      ],
+      "record_ref_enum": [
+        {
+          "tag": 1,
+          "variant": "Assertion"
+        },
+        {
+          "tag": 2,
+          "variant": "Mask"
+        },
+        {
+          "tag": 3,
+          "variant": "ReplacementBoundary"
+        },
+        {
+          "tag": 4,
+          "variant": "Event"
+        },
+        {
+          "tag": 5,
+          "variant": "EventMask"
+        },
+        {
+          "tag": 6,
+          "variant": "EventRelation"
+        },
+        {
+          "tag": 7,
+          "variant": "Source"
+        },
+        {
+          "tag": 8,
+          "variant": "Evidence"
+        },
+        {
+          "tag": 9,
+          "variant": "Provenance"
+        },
+        {
+          "tag": 10,
+          "variant": "AssertionValidityClosure"
+        },
+        {
+          "tag": 11,
+          "variant": "AssertionRetraction"
+        },
+        {
+          "tag": 12,
+          "variant": "MaskValidityClosure"
+        },
+        {
+          "tag": 13,
+          "variant": "MaskRetraction"
+        },
+        {
+          "tag": 14,
+          "variant": "ReplacementBoundaryValidityClosure"
+        },
+        {
+          "tag": 15,
+          "variant": "ReplacementBoundaryRetraction"
+        },
+        {
+          "tag": 16,
+          "variant": "EventSpanClosure"
+        },
+        {
+          "tag": 17,
+          "variant": "EventRetraction"
+        },
+        {
+          "tag": 18,
+          "variant": "EventMaskRetraction"
+        },
+        {
+          "tag": 19,
+          "variant": "EventRelationRetraction"
+        },
+        {
+          "tag": 20,
+          "variant": "EvidenceRetraction"
+        },
+        {
+          "tag": 21,
+          "variant": "ProvenanceRetraction"
+        },
+        {
+          "tag": 22,
+          "variant": "EntityRetirement"
+        },
+        {
+          "tag": 23,
+          "variant": "PerspectiveRetirement"
+        },
+        {
+          "tag": 24,
+          "variant": "ArchiveTransition"
+        },
+        {
+          "tag": 25,
+          "variant": "TransferLineage"
+        }
+      ],
+      "record_ref_tags": [
+        {
+          "id_type": "AssertionId",
+          "tag": "1",
+          "variant": "Assertion"
+        },
+        {
+          "id_type": "MaskId",
+          "tag": "2",
+          "variant": "Mask"
+        },
+        {
+          "id_type": "ReplacementBoundaryId",
+          "tag": "3",
+          "variant": "ReplacementBoundary"
+        },
+        {
+          "id_type": "EventId",
+          "tag": "4",
+          "variant": "Event"
+        },
+        {
+          "id_type": "EventMaskId",
+          "tag": "5",
+          "variant": "EventMask"
+        },
+        {
+          "id_type": "EventRelationId",
+          "tag": "6",
+          "variant": "EventRelation"
+        },
+        {
+          "id_type": "SourceId",
+          "tag": "7",
+          "variant": "Source"
+        },
+        {
+          "id_type": "EvidenceId",
+          "tag": "8",
+          "variant": "Evidence"
+        },
+        {
+          "id_type": "ProvenanceId",
+          "tag": "9",
+          "variant": "Provenance"
+        },
+        {
+          "id_type": "AssertionValidityClosureId",
+          "tag": "10",
+          "variant": "AssertionValidityClosure"
+        },
+        {
+          "id_type": "AssertionRetractionId",
+          "tag": "11",
+          "variant": "AssertionRetraction"
+        },
+        {
+          "id_type": "MaskValidityClosureId",
+          "tag": "12",
+          "variant": "MaskValidityClosure"
+        },
+        {
+          "id_type": "MaskRetractionId",
+          "tag": "13",
+          "variant": "MaskRetraction"
+        },
+        {
+          "id_type": "ReplacementBoundaryValidityClosureId",
+          "tag": "14",
+          "variant": "ReplacementBoundaryValidityClosure"
+        },
+        {
+          "id_type": "ReplacementBoundaryRetractionId",
+          "tag": "15",
+          "variant": "ReplacementBoundaryRetraction"
+        },
+        {
+          "id_type": "EventSpanClosureId",
+          "tag": "16",
+          "variant": "EventSpanClosure"
+        },
+        {
+          "id_type": "EventRetractionId",
+          "tag": "17",
+          "variant": "EventRetraction"
+        },
+        {
+          "id_type": "EventMaskRetractionId",
+          "tag": "18",
+          "variant": "EventMaskRetraction"
+        },
+        {
+          "id_type": "EventRelationRetractionId",
+          "tag": "19",
+          "variant": "EventRelationRetraction"
+        },
+        {
+          "id_type": "EvidenceRetractionId",
+          "tag": "20",
+          "variant": "EvidenceRetraction"
+        },
+        {
+          "id_type": "ProvenanceRetractionId",
+          "tag": "21",
+          "variant": "ProvenanceRetraction"
+        },
+        {
+          "id_type": "EntityRetirementId",
+          "tag": "22",
+          "variant": "EntityRetirement"
+        },
+        {
+          "id_type": "PerspectiveRetirementId",
+          "tag": "23",
+          "variant": "PerspectiveRetirement"
+        },
+        {
+          "id_type": "ArchiveTransitionId",
+          "tag": "24",
+          "variant": "ArchiveTransition"
+        },
+        {
+          "id_type": "TransferLineageId",
+          "tag": "25",
+          "variant": "TransferLineage"
+        }
+      ],
+      "value_tags": [
+        {
+          "tag": 1,
+          "variant": "Bool"
+        },
+        {
+          "tag": 2,
+          "variant": "Int"
+        },
+        {
+          "tag": 3,
+          "variant": "UInt"
+        },
+        {
+          "tag": 4,
+          "variant": "Decimal"
+        },
+        {
+          "tag": 5,
+          "variant": "String"
+        },
+        {
+          "tag": 6,
+          "variant": "Symbol"
+        },
+        {
+          "tag": 7,
+          "variant": "Entity"
+        },
+        {
+          "tag": 8,
+          "variant": "Time"
+        },
+        {
+          "tag": 9,
+          "variant": "Duration"
+        },
+        {
+          "tag": 10,
+          "variant": "Bytes"
+        }
+      ]
+    }
+  }
+}

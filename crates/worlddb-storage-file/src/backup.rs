@@ -1780,7 +1780,7 @@ fn copy_source_item_with_checkpoint(
             .checked_sub(u64::try_from(read).map_err(|_| BackupError::ResourceLimit)?)
             .ok_or(BackupError::ResourceLimit)?;
     }
-    output.sync_all().map_err(|source| BackupError::Io {
+    crate::platform_sync::sync_file(&output).map_err(|source| BackupError::Io {
         operation: "sync exact backup item",
         source,
     })?;
@@ -1890,8 +1890,7 @@ fn write_new_file_with_checkpoint(
     file.write_all(bytes)
         .map_err(|source| BackupError::Io { operation, source })?;
     after_write();
-    file.sync_all()
-        .map_err(|source| BackupError::Io { operation, source })
+    crate::platform_sync::sync_file(&file).map_err(|source| BackupError::Io { operation, source })
 }
 
 fn validate_items(items: &[BackupItem]) -> Result<(), BackupError> {
@@ -2340,4 +2339,9 @@ fn read_bounded_file(path: &Path, limit: usize, root: &Path) -> Result<Vec<u8>, 
         return Err(BackupError::IntegrityMismatch);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_backup_manifest(bytes: &[u8]) -> bool {
+    BackupManifest::decode(bytes).is_ok() || AuditBackupManifest::decode(bytes).is_ok()
 }

@@ -1915,13 +1915,14 @@ mod tests {
             .parent()
             .ok_or_else(|| String::from("fixture root has no parent"))?;
         let artifact_path = area_root.join("authorization-crash.wdbse");
-        let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
-            .args(["--exact", TEST_NAME, "--nocapture"])
-            .env(ROOT_ENV, layout.root())
-            .env(ARTIFACT_ENV, &artifact_path)
-            .env("WORLDDB_M7_12_CRASH_AFTER_AUTH_COMMIT", "1")
-            .status()
-            .map_err(|error| error.to_string())?;
+        let status = crate::writer_lock::test_command_status(
+            Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                .args(["--exact", TEST_NAME, "--nocapture"])
+                .env(ROOT_ENV, layout.root())
+                .env(ARTIFACT_ENV, &artifact_path)
+                .env("WORLDDB_M7_12_CRASH_AFTER_AUTH_COMMIT", "1"),
+        )
+        .map_err(|error| error.to_string())?;
         if status.code() != Some(86) {
             return Err(format!(
                 "sharing-export child exited with {:?}, expected process exit code 86",
@@ -1993,13 +1994,14 @@ mod tests {
                 .parent()
                 .ok_or_else(|| String::from("fixture root has no parent"))?;
             let artifact_path = area_root.join(format!("{checkpoint}.wdbse"));
-            let status = Command::new(env::current_exe().map_err(|error| error.to_string())?)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, layout.root())
-                .env(ARTIFACT_ENV, &artifact_path)
-                .env("WORLDDB_M7_16F_SHARING_CRASH_AT", checkpoint)
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(env::current_exe().map_err(|error| error.to_string())?)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, layout.root())
+                    .env(ARTIFACT_ENV, &artifact_path)
+                    .env("WORLDDB_M7_16F_SHARING_CRASH_AT", checkpoint),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "sharing-export child at {checkpoint} exited with {:?}, expected 86",

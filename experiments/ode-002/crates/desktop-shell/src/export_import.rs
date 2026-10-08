@@ -187,6 +187,18 @@ struct CliSharingExportSummary {
     source_modified: bool,
 }
 
+#[cfg(test)]
+pub(super) fn fuzz_import_dto(bytes: &[u8]) -> bool {
+    let export = serde_json::from_slice::<ExportRequestV1>(bytes).is_ok();
+    let plan = serde_json::from_slice::<ImportPlanRequestV1>(bytes).is_ok();
+    let summary = serde_json::from_slice::<CliSharingExportSummary>(bytes).is_ok();
+    let summary_value = serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|value| decode_summary::<CliSharingExportSummary>(value, "sharing export").ok())
+        .is_some();
+    export || plan || summary || summary_value
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct CliImportPlanSummary {

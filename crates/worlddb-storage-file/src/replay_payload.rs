@@ -224,6 +224,17 @@ pub(crate) fn decode_replay_payload(
     Ok(Some(DecodedReplaySnapshot { snapshot, staged }))
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_replay_payload(bytes: &[u8]) -> bool {
+    use worlddb_core::{DomainId, OperationId, Revision};
+
+    let operation_id = OperationId::try_from_bytes([
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0x7c, 0xde, 0x8f, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+        0xcd,
+    ]);
+    operation_id.is_ok_and(|id| decode_replay_payload(bytes, Revision::FIRST_COMMIT, id).is_ok())
+}
+
 fn segment_sort_key(reference: &ManifestSegmentReference) -> (ManifestSegmentKind, [u8; 16]) {
     (reference.kind(), reference.id().to_bytes())
 }

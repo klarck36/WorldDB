@@ -932,6 +932,11 @@ fn calculate_transform_fingerprint(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_guarded_migration_journal(bytes: &[u8]) -> bool {
+    MigrationRunJournalSnapshot::decode(bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use std::path::PathBuf;
     use std::process::Command;
@@ -1700,12 +1705,13 @@ mod tests {
             let layout =
                 DatabaseLayout::create(area.path("source")).map_err(|error| error.to_string())?;
             install_genesis_history(&layout)?;
-            let output = Command::new(&executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, layout.root())
-                .env(CHECKPOINT_ENV, checkpoint)
-                .output()
-                .map_err(|error| format!("spawn child for {checkpoint}: {error}"))?;
+            let output = crate::writer_lock::test_command_output(
+                Command::new(&executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, layout.root())
+                    .env(CHECKPOINT_ENV, checkpoint),
+            )
+            .map_err(|error| format!("spawn child for {checkpoint}: {error}"))?;
             if output.status.code() != Some(86) {
                 return Err(format!(
                     "child for {checkpoint} exited with {:?}, expected exit 86; stdout: {}; stderr: {}",

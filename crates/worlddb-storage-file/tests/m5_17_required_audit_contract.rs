@@ -12,10 +12,12 @@ use worlddb_core::{
     Revision, SecurityEpoch, SecurityPolicyChange, SecurityPolicyRecord, SecurityPolicyRecordId,
     SecurityPolicySnapshot, SecurityPolicyVersion, encode_audit_record,
 };
+#[cfg(windows)]
+use worlddb_storage_file::WalOperationStatus;
 use worlddb_storage_file::{
     DatabaseLayout, ManifestSegmentKind, ManifestSegmentReference, RecoveryDisposition,
     RecoveryFinding, RecoveryManager, RecoveryScanner, RequiredAuditError,
-    SecurityPolicyHistoryStore, WalError, WalOperationStatus, WalPrepareLog,
+    SecurityPolicyHistoryStore, WalError, WalPrepareLog,
 };
 
 static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);

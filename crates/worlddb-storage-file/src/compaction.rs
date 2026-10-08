@@ -612,11 +612,10 @@ fn create_durable_backup_pin(
                 operation: "write durable backup-pin file",
                 source,
             })?;
-        file.sync_all()
-            .map_err(|source| CompactionError::BackupPinIo {
-                operation: "sync durable backup-pin file",
-                source,
-            })?;
+        crate::platform_sync::sync_file(&file).map_err(|source| CompactionError::BackupPinIo {
+            operation: "sync durable backup-pin file",
+            source,
+        })?;
         crate::manifest::sync_directory(&directory).map_err(|source| {
             CompactionError::BackupPinIo {
                 operation: "sync durable backup-pin directory",
@@ -1075,6 +1074,11 @@ fn flush_chunk(
     *chunk_frame_bytes = 0;
     *chunk_revision = Revision::GENESIS;
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_compaction_pin_manifest(bytes: &[u8]) -> bool {
+    decode_backup_pin_manifest(bytes).is_ok()
 }
 
 #[cfg(test)]

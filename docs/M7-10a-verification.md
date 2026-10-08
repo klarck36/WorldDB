@@ -19,7 +19,9 @@ Breaking plans also require an explicit administrator action bound to current ri
 
 ## Current integration boundary
 
-This repository has no production persistent `RevisionBackend<Record>` adapter. The migration executor and atomic audit extension are therefore verified against an in-memory audited backend; a file-backed migration cannot yet be invoked through a production database handle. The storage crate does provide the exact-backup and real-clone-restore proof builder. A persistent adapter must implement the `MigrationCommitBackend` all-or-nothing guarantee before guarded migrations can publish to the file store.
+At the initial M7-10a review, the production persistent adapter was still open. M7-16c subsequently delivered `FileMigrationCommitBackend`, which writes the migration batch, canonical action, Required Audit Record, and replay snapshot under one WAL commit marker. M7-16d connected guarded execution to a real file-store handle and verified Restrictive and Breaking runs, current authorization, the exact backup/real-restore proof, OCC, Run Journal, and audit binding. Current evidence is in `docs/M7-16c-persistent-migration-commit.md` and `docs/M7-16d-guarded-file-store-integration.md`.
+
+Opening or recovering a database does not start a schema or storage-format upgrade. Schema changes require an explicit migration plan and run; a Breaking migration additionally requires administrator action and a verified restore proof. Published migration steps remain append-only; reversal uses an explicit compensating migration or restores a verified backup as a new clone.
 
 Transformer version 1 currently performs canonical pass-through or its declared calendar shift and does not generate unresolved cases. The guarded path still validates and binds the decision set, while M7-04 tests the individual unresolved-item decisions and their failure cases.
 

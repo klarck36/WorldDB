@@ -6,6 +6,119 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+// Unit tests spawn the test binary to model process crashes. Wait until all
+// test WriterLocks are closed before spawning so fork cannot copy live locks.
+#[cfg(test)]
+struct TestLockRegistry {
+    active_locks: usize,
+    active_by_thread: std::collections::HashMap<std::thread::ThreadId, usize>,
+    waiting_spawns: usize,
+}
+
+#[cfg(test)]
+static TEST_CHILD_PROCESS_LOCK: std::sync::LazyLock<std::sync::Mutex<TestLockRegistry>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(TestLockRegistry {
+            active_locks: 0,
+            active_by_thread: std::collections::HashMap::new(),
+            waiting_spawns: 0,
+        })
+    });
+
+#[cfg(test)]
+static TEST_CHILD_PROCESS_CONDITION: std::sync::Condvar = std::sync::Condvar::new();
+
+#[cfg(test)]
+struct TestLockRegistration {
+    owner: std::thread::ThreadId,
+}
+
+#[cfg(test)]
+impl TestLockRegistry {
+    fn register_lock(&mut self) -> TestLockRegistration {
+        let owner = std::thread::current().id();
+        self.active_locks += 1;
+        *self.active_by_thread.entry(owner).or_default() += 1;
+        TestLockRegistration { owner }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestLockRegistration {
+    fn drop(&mut self) {
+        let mut registry = TEST_CHILD_PROCESS_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        registry.active_locks -= 1;
+        if let Some(count) = registry.active_by_thread.get_mut(&self.owner) {
+            *count -= 1;
+            if *count == 0 {
+                registry.active_by_thread.remove(&self.owner);
+            }
+        }
+        TEST_CHILD_PROCESS_CONDITION.notify_all();
+    }
+}
+
+#[cfg(test)]
+fn test_child_process_guard() -> std::sync::MutexGuard<'static, TestLockRegistry> {
+    let owner = std::thread::current().id();
+    let mut registry = TEST_CHILD_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while registry.waiting_spawns > 0 && !registry.active_by_thread.contains_key(&owner) {
+        registry = TEST_CHILD_PROCESS_CONDITION
+            .wait(registry)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    registry
+}
+
+#[cfg(test)]
+pub(crate) fn test_command_spawn(
+    command: &mut std::process::Command,
+) -> io::Result<std::process::Child> {
+    let owner = std::thread::current().id();
+    let mut registry = TEST_CHILD_PROCESS_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if registry.active_by_thread.contains_key(&owner) {
+        return Err(io::Error::other(
+            "test subprocess must not start while its thread holds a database writer lock",
+        ));
+    }
+    registry.waiting_spawns += 1;
+    while registry.active_locks > 0 {
+        registry = TEST_CHILD_PROCESS_CONDITION
+            .wait(registry)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    registry.waiting_spawns -= 1;
+    let child = command.spawn();
+    TEST_CHILD_PROCESS_CONDITION.notify_all();
+    child
+}
+
+#[cfg(test)]
+pub(crate) fn test_command_status(
+    command: &mut std::process::Command,
+) -> io::Result<std::process::ExitStatus> {
+    test_command_spawn(command)?.wait()
+}
+
+#[cfg(test)]
+pub(crate) fn test_command_output(
+    command: &mut std::process::Command,
+) -> io::Result<std::process::Output> {
+    use std::process::Stdio;
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    test_command_spawn(command)?.wait_with_output()
+}
+
 use crate::recovery::RecoveryDisposition;
 
 const MODE_UNVERIFIED: u8 = 0;
@@ -55,12 +168,17 @@ pub struct WriterLock {
     _file: File,
     database_root: PathBuf,
     write_mode: AtomicU8,
+    #[cfg(test)]
+    _test_lock_registration: TestLockRegistration,
 }
 
 impl WriterLock {
     /// Opens the stable lock file and attempts to acquire its exclusive lock
     /// without waiting for another process.
     pub(crate) fn try_acquire(database_root: &Path, path: &Path) -> Result<Self, WriterLockError> {
+        #[cfg(test)]
+        let mut test_child_process_guard = test_child_process_guard();
+
         if let Ok(metadata) = fs::symlink_metadata(path) {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(WriterLockError::Io(io::Error::new(
@@ -83,6 +201,8 @@ impl WriterLock {
                 _file: file,
                 database_root: canonical_root,
                 write_mode: AtomicU8::new(MODE_UNVERIFIED),
+                #[cfg(test)]
+                _test_lock_registration: test_child_process_guard.register_lock(),
             }),
             Err(fs4::TryLockError::WouldBlock) => Err(WriterLockError::AlreadyHeld),
             Err(fs4::TryLockError::Error(error)) => Err(WriterLockError::Io(error)),
@@ -97,6 +217,9 @@ impl WriterLock {
         database_root: &Path,
         path: &Path,
     ) -> Result<Self, WriterLockError> {
+        #[cfg(test)]
+        let mut test_child_process_guard = test_child_process_guard();
+
         match fs::symlink_metadata(path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -125,6 +248,8 @@ impl WriterLock {
                 _file: file,
                 database_root: canonical_root,
                 write_mode: AtomicU8::new(MODE_READ_ONLY),
+                #[cfg(test)]
+                _test_lock_registration: test_child_process_guard.register_lock(),
             }),
             Err(fs4::TryLockError::WouldBlock) => Err(WriterLockError::AlreadyHeld),
             Err(fs4::TryLockError::Error(error)) => Err(WriterLockError::Io(error)),

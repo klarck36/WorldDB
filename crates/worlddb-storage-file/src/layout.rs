@@ -163,12 +163,12 @@ impl DatabaseLayout {
                 operation: "write database identity",
                 source,
             })?;
-        database_id_file
-            .sync_all()
-            .map_err(|source| StorageFileError::Io {
+        crate::platform_sync::sync_file(&database_id_file).map_err(|source| {
+            StorageFileError::Io {
                 operation: "sync database identity",
                 source,
-            })?;
+            }
+        })?;
         crate::manifest::sync_directory(&root).map_err(|source| StorageFileError::Io {
             operation: "sync database identity directory",
             source,
@@ -193,12 +193,10 @@ impl DatabaseLayout {
                 operation: "write database format probe",
                 source,
             })?;
-        format_file
-            .sync_all()
-            .map_err(|source| StorageFileError::Io {
-                operation: "sync database format probe",
-                source,
-            })?;
+        crate::platform_sync::sync_file(&format_file).map_err(|source| StorageFileError::Io {
+            operation: "sync database format probe",
+            source,
+        })?;
 
         Ok(Self {
             root,
@@ -444,12 +442,10 @@ impl DatabaseLayout {
                 operation: "write staged format probe",
                 source,
             })?;
-        stage_file
-            .sync_all()
-            .map_err(|source| StorageFileError::Io {
-                operation: "sync staged format probe",
-                source,
-            })?;
+        crate::platform_sync::sync_file(&stage_file).map_err(|source| StorageFileError::Io {
+            operation: "sync staged format probe",
+            source,
+        })?;
         drop(stage_file);
         fs::rename(&stage_path, self.format_file()).map_err(|source| StorageFileError::Io {
             operation: "publish format probe",

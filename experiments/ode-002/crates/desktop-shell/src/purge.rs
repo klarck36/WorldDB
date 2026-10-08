@@ -225,6 +225,37 @@ struct PurgePlanReport {
     secure_erase_claimed: bool,
 }
 
+#[cfg(test)]
+static NEXT_PURGE_FUZZ_FILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+struct PurgeFuzzFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for PurgeFuzzFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_purge_report(bytes: &[u8]) -> Result<bool, String> {
+    let report = serde_json::from_slice::<PurgePlanReport>(bytes).is_ok();
+    let summary = serde_json::from_slice::<Value>(bytes)
+        .ok()
+        .and_then(|value| decode_summary::<PurgePlanReport>(value, "purge").ok())
+        .is_some();
+    let sequence = NEXT_PURGE_FUZZ_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "worlddb-desktop-purge-fuzz-{}-{sequence}.report",
+        std::process::id()
+    ));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    let file = PurgeFuzzFile(path);
+    let bounded = read_bounded_report(&file.0).is_ok();
+    Ok((report || summary) && bounded)
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct CliPurgeRecord {

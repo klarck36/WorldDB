@@ -1186,9 +1186,9 @@ pub use query_aggregate::{
 };
 pub use query_context::{
     AuthorizationMode, BudgetDimension, CancellationToken, MAX_QUERY_CANDIDATES, MAX_QUERY_RESULTS,
-    MAX_QUERY_WORK_UNITS, QueryBudget, QueryBudgetError, QueryBudgetLimits, QueryContext,
-    QueryContextBinding, QueryContextError, QueryContextInput, SecurityContext, SnapshotSelector,
-    ValidatedLayerSelection, WorldTimeSelector,
+    MAX_QUERY_WORK_UNITS, QueryBudget, QueryBudgetClass, QueryBudgetError, QueryBudgetLimits,
+    QueryContext, QueryContextBinding, QueryContextError, QueryContextInput, SecurityContext,
+    SnapshotSelector, ValidatedLayerSelection, WorldTimeSelector,
 };
 pub use query_engine::{
     AssertionPointIndexAccess, AssertionPointRequest, AssertionQueryStore, ProductiveQueryEngine,

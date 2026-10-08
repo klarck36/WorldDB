@@ -942,7 +942,7 @@ impl WalPrepareLog {
                     operation: "open WAL segment for checkpoint sync",
                     source,
                 })?;
-            file.sync_all().map_err(|source| WalError::Io {
+            crate::platform_sync::sync_file(&file).map_err(|source| WalError::Io {
                 operation: "sync WAL checkpoint segment",
                 source,
             })?;
@@ -968,7 +968,7 @@ impl WalPrepareLog {
                         operation: "publish next WAL segment at checkpoint",
                         source,
                     })?;
-                next_file.sync_all().map_err(|source| WalError::Io {
+                crate::platform_sync::sync_file(&next_file).map_err(|source| WalError::Io {
                     operation: "sync next WAL segment at checkpoint",
                     source,
                 })?;
@@ -1102,7 +1102,7 @@ impl WalPrepareLog {
                         operation: "open reconciled WAL segment for sync",
                         source,
                     })?;
-                file.sync_all().map_err(|source| WalError::Io {
+                crate::platform_sync::sync_file(&file).map_err(|source| WalError::Io {
                     operation: "sync reconciled WAL commit marker",
                     source,
                 })?;
@@ -1412,6 +1412,23 @@ impl WalPrepareLog {
         payload: &[u8],
         sync: impl FnOnce(&File) -> io::Result<()>,
     ) -> Result<WalPrepareReference, WalError> {
+        self.append_prepare_with_io(
+            lock,
+            operation_id,
+            payload,
+            |file, bytes| file.write_all(bytes),
+            sync,
+        )
+    }
+
+    fn append_prepare_with_io(
+        &self,
+        lock: &WriterLock,
+        operation_id: OperationId,
+        payload: &[u8],
+        write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+        sync: impl FnOnce(&File) -> io::Result<()>,
+    ) -> Result<WalPrepareReference, WalError> {
         self.require_lock(lock)?;
         if !lock.require_write_access() {
             return Err(WalError::RecoveryRequired);
@@ -1496,7 +1513,7 @@ impl WalPrepareLog {
                 actual: current_length.saturating_add(frame_length),
             });
         }
-        append_frame_and_sync(&mut file, &frame, sync)?;
+        append_frame_and_sync_with(&mut file, &frame, write, sync)?;
         drop(file);
 
         Ok(WalPrepareReference {
@@ -1621,13 +1638,23 @@ impl WalPrepareLog {
 
     fn publish_prepared_commit_with_sync(
         &self,
-        mut prepared: PreparedWalCommit,
+        prepared: PreparedWalCommit,
         sync: impl FnOnce(&File) -> io::Result<()>,
     ) -> Result<WalCommitReceipt, WalError> {
-        if let Err(error) = append_commit_marker_and_sync(
+        self.publish_prepared_commit_with_io(prepared, |file, bytes| file.write_all(bytes), sync)
+    }
+
+    fn publish_prepared_commit_with_io(
+        &self,
+        mut prepared: PreparedWalCommit,
+        write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
+        sync: impl FnOnce(&File) -> io::Result<()>,
+    ) -> Result<WalCommitReceipt, WalError> {
+        if let Err(error) = append_commit_marker_and_sync_with(
             &mut prepared.file,
             &prepared.marker_frame,
             prepared.operation_id,
+            write,
             sync,
         ) {
             if matches!(&error, WalError::UnknownCommitOutcome { .. }) {
@@ -1651,7 +1678,7 @@ impl WalPrepareLog {
                 );
                 if let Ok(mut signal_file) = File::create(signal_path) {
                     let _ = signal_file.write_all(signal.as_bytes());
-                    let _ = signal_file.sync_all();
+                    let _ = crate::platform_sync::sync_file(&signal_file);
                 }
             }
             std::process::exit(86);
@@ -2589,12 +2616,13 @@ fn calculate_commit_hash(
     *hasher.finalize().as_bytes()
 }
 
-fn append_frame_and_sync(
+fn append_frame_and_sync_with(
     file: &mut File,
     bytes: &[u8],
+    write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
     sync: impl FnOnce(&File) -> io::Result<()>,
 ) -> Result<(), WalError> {
-    file.write_all(bytes).map_err(|source| WalError::Io {
+    write(file, bytes).map_err(|source| WalError::Io {
         operation: "append WAL prepare frame",
         source,
     })?;
@@ -2604,18 +2632,18 @@ fn append_frame_and_sync(
     })
 }
 
-fn append_commit_marker_and_sync(
+fn append_commit_marker_and_sync_with(
     file: &mut File,
     bytes: &[u8],
     operation_id: OperationId,
+    write: impl FnOnce(&mut File, &[u8]) -> io::Result<()>,
     sync: impl FnOnce(&File) -> io::Result<()>,
 ) -> Result<(), WalError> {
-    file.write_all(bytes)
-        .map_err(|source| WalError::UnknownCommitOutcome {
-            operation_id,
-            operation: "append commit marker",
-            source,
-        })?;
+    write(file, bytes).map_err(|source| WalError::UnknownCommitOutcome {
+        operation_id,
+        operation: "append commit marker",
+        source,
+    })?;
     sync(file).map_err(|source| WalError::UnknownCommitOutcome {
         operation_id,
         operation: "second WAL sync",
@@ -2624,15 +2652,34 @@ fn append_commit_marker_and_sync(
 }
 
 #[cfg(test)]
+pub(crate) fn fuzz_wal_segment(bytes: &[u8]) -> bool {
+    let sequence = 1;
+    parse_segment_sequence("segment-00000000000000000001.wal").is_ok()
+        && (decode_segment(sequence, bytes).is_ok() || decode_raw_segment(sequence, bytes).is_ok())
+}
+
+#[cfg(test)]
+pub(crate) fn fuzz_wal_payloads(bytes: &[u8]) -> bool {
+    decode_raw_segment_prefix(1, bytes).is_ok()
+        || decode_prepare_payload(1, 0, bytes).is_ok()
+        || decode_commit_payload(1, 0, bytes).is_ok()
+}
+
+#[cfg(test)]
 mod tests {
     use std::env;
-    use std::fs;
-    use std::io;
+    use std::fs::{self, File};
+    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use worlddb_core::{DomainId, OperationId, Revision};
+    use worlddb_core::{
+        AuditAction, AuditCommitContext, AuditObjectClass, AuditOperationId, AuditOutcome,
+        AuditPolicyFingerprint, AuditRecord, AuditRecordDetails, AuditRecordId,
+        AuditRecordIdentity, AuditSequence, Bytes, DomainId, OperationId, PrincipalId, Revision,
+        SecurityEpoch,
+    };
 
     use super::{RawWalFrame, decode_raw_segment, encode_commit_marker, segment_file_name};
     use crate::{
@@ -2674,6 +2721,128 @@ mod tests {
         ])
     }
 
+    fn domain_id<T: DomainId>(tail: u8) -> Result<T, String> {
+        let mut bytes = [0_u8; 16];
+        bytes[6] = 0x70;
+        bytes[8] = 0x80;
+        bytes[15] = tail;
+        T::try_from_bytes(bytes).map_err(|error| error.to_string())
+    }
+
+    fn stress_audit_record(
+        record_tail: u8,
+        sequence: u64,
+        revision: Revision,
+        operation_id: OperationId,
+    ) -> Result<AuditRecord, String> {
+        Ok(AuditRecord::new(
+            AuditRecordIdentity {
+                record_id: domain_id::<AuditRecordId>(record_tail)?,
+                sequence: AuditSequence::new(sequence),
+                audit_operation_id: domain_id::<AuditOperationId>(record_tail.wrapping_add(80))?,
+            },
+            AuditRecordDetails {
+                actor: domain_id::<PrincipalId>(1)?,
+                action: AuditAction::SecurityPolicyChange,
+                object_class: AuditObjectClass::SecurityPolicy,
+                outcome: AuditOutcome::Succeeded,
+                commit_context: AuditCommitContext::Committed {
+                    revision,
+                    operation_id,
+                },
+                security_epoch: SecurityEpoch::INITIAL,
+                policy_fingerprint: AuditPolicyFingerprint::new(Bytes::new(vec![
+                    0x4d,
+                    record_tail,
+                ]))
+                .map_err(|error| error.to_string())?,
+            },
+        ))
+    }
+
+    fn commit_stress_audit(
+        log: &WalPrepareLog,
+        lock: &crate::WriterLock,
+        sequence: u64,
+        tail: u8,
+    ) -> Result<(), String> {
+        let operation_id = domain_id::<OperationId>(tail)?;
+        let revision = Revision::try_from(sequence).map_err(|error| error.to_string())?;
+        let record = stress_audit_record(tail, sequence, revision, operation_id)?;
+        log.commit_required_audit(lock, operation_id, &[tail], &record)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    fn assert_audit_prefix(
+        log: &WalPrepareLog,
+        lock: &crate::WriterLock,
+        expected_revision: Revision,
+        expected_records: usize,
+    ) -> Result<(), String> {
+        assert_eq!(
+            log.commit_head(lock)
+                .map_err(|error| error.to_string())?
+                .revision(),
+            expected_revision
+        );
+        let records = log
+            .committed_required_audit_records(lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(records.len(), expected_records);
+        for (index, committed) in records.iter().enumerate() {
+            assert_eq!(
+                committed.record().sequence(),
+                AuditSequence::new(u64::try_from(index + 1).map_err(|error| error.to_string())?)
+            );
+        }
+        Ok(())
+    }
+
+    fn append_partial_then_fail(file: &mut File, bytes: &[u8], error: io::Error) -> io::Result<()> {
+        let partial_length = (bytes.len() / 2).max(1);
+        let partial = bytes.get(..partial_length).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "partial write exceeds frame")
+        })?;
+        file.write_all(partial)?;
+        Err(error)
+    }
+
+    fn disk_full_error() -> io::Error {
+        #[cfg(windows)]
+        {
+            io::Error::from_raw_os_error(112)
+        }
+        #[cfg(not(windows))]
+        {
+            io::Error::new(io::ErrorKind::StorageFull, "injected disk full")
+        }
+    }
+
+    fn quota_error() -> io::Error {
+        #[cfg(windows)]
+        {
+            io::Error::from_raw_os_error(1295)
+        }
+        #[cfg(not(windows))]
+        {
+            io::Error::other("injected user quota exceeded")
+        }
+    }
+
+    #[cfg(windows)]
+    struct ReadOnlyFileGuard {
+        path: PathBuf,
+        original_permissions: fs::Permissions,
+    }
+
+    #[cfg(windows)]
+    impl Drop for ReadOnlyFileGuard {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.original_permissions.clone());
+        }
+    }
+
     #[test]
     fn sync_fault_is_reported_and_the_read_back_prepare_stays_uncommitted() -> Result<(), String> {
         let database = TempDatabase::create()?;
@@ -2712,6 +2881,272 @@ mod tests {
                 if entry.reference().operation_id() == operation_id
                     && entry.payload() == b"payload-before-commit-marker"
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn m9_05_disk_full_fault_preserves_safe_prefix_and_audit_continuity() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let log = WalPrepareLog::new(&layout);
+        commit_stress_audit(&log, &lock, 1, 1)?;
+        let failed_operation = domain_id::<OperationId>(2)?;
+
+        let append = log.append_prepare_with_io(
+            &lock,
+            failed_operation,
+            b"partial prepare under disk-full fault",
+            move |file, bytes| append_partial_then_fail(file, bytes, disk_full_error()),
+            File::sync_all,
+        );
+        let error = match append {
+            Err(WalError::Io {
+                operation: "append WAL prepare frame",
+                source,
+            }) => source,
+            other => {
+                return Err(format!(
+                    "disk-full write returned unexpected result: {other:?}"
+                ));
+            }
+        };
+        #[cfg(windows)]
+        assert_eq!(error.raw_os_error(), Some(112));
+        #[cfg(not(windows))]
+        assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+
+        drop(log);
+        drop(lock);
+        let reopened = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let reopened_lock = reopened
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let before = RecoveryScanner::new(reopened.clone())
+            .scan(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(before.safe_revision(), Revision::FIRST_COMMIT);
+        assert!(!before.is_clean());
+
+        RecoveryManager::new(reopened.clone())
+            .recover(&reopened_lock)
+            .map_err(|error| format!("recovery after disk-full write: {error}"))?;
+        let after = RecoveryScanner::new(reopened.clone())
+            .scan(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(after.is_clean());
+        assert_eq!(after.safe_revision(), Revision::FIRST_COMMIT);
+        let reopened_log = WalPrepareLog::new(&reopened);
+        assert_eq!(
+            reopened_log
+                .reconcile_operation_after_recovery(&reopened_lock, failed_operation)
+                .map_err(|error| error.to_string())?,
+            WalOperationStatus::NotCommitted
+        );
+        assert_audit_prefix(&reopened_log, &reopened_lock, Revision::FIRST_COMMIT, 1)?;
+        println!(
+            "M9-05 disk-full: safe_revision=1 audit_sequence=1 recovery=clean status=write_failed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn m9_05_quota_fault_preserves_safe_prefix_and_audit_continuity() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let log = WalPrepareLog::new(&layout);
+        commit_stress_audit(&log, &lock, 1, 1)?;
+        let failed_operation = domain_id::<OperationId>(2)?;
+        let prepare = log
+            .append_prepare(&lock, failed_operation, b"prepare before quota fault")
+            .map_err(|error| error.to_string())?;
+        let prepared = log
+            .prepare_commit_marker(&lock, prepare)
+            .map_err(|error| error.to_string())?;
+        let commit = log.publish_prepared_commit_with_io(
+            prepared,
+            move |file, bytes| append_partial_then_fail(file, bytes, quota_error()),
+            File::sync_all,
+        );
+        let error = match commit {
+            Err(WalError::UnknownCommitOutcome {
+                operation: "append commit marker",
+                source,
+                ..
+            }) => source,
+            other => {
+                return Err(format!(
+                    "quota-limited commit returned unexpected result: {other:?}"
+                ));
+            }
+        };
+        #[cfg(windows)]
+        assert_eq!(error.raw_os_error(), Some(1295));
+        #[cfg(not(windows))]
+        assert_eq!(error.to_string(), "injected user quota exceeded");
+
+        drop(log);
+        drop(lock);
+        let reopened = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let reopened_lock = reopened
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let before = RecoveryScanner::new(reopened.clone())
+            .scan(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(before.safe_revision(), Revision::FIRST_COMMIT);
+        assert!(!before.is_clean());
+
+        RecoveryManager::new(reopened.clone())
+            .recover(&reopened_lock)
+            .map_err(|error| format!("recovery after quota-limited commit: {error}"))?;
+        let after = RecoveryScanner::new(reopened.clone())
+            .scan(&reopened_lock)
+            .map_err(|error| error.to_string())?;
+        assert!(after.is_clean());
+        assert_eq!(after.safe_revision(), Revision::FIRST_COMMIT);
+        let reopened_log = WalPrepareLog::new(&reopened);
+        assert_eq!(
+            reopened_log
+                .reconcile_operation_after_recovery(&reopened_lock, failed_operation)
+                .map_err(|error| error.to_string())?,
+            WalOperationStatus::NotCommitted
+        );
+        assert_audit_prefix(&reopened_log, &reopened_lock, Revision::FIRST_COMMIT, 1)?;
+        println!(
+            "M9-05 quota: safe_revision=1 audit_sequence=1 recovery=clean status=outcome_reconciled"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn m9_05_repeated_recovery_under_audited_write_load_has_no_sequence_gaps() -> Result<(), String>
+    {
+        const CYCLES: u64 = 64;
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let log = WalPrepareLog::new(&layout);
+
+        for sequence in 1..=CYCLES {
+            let committed_tail = u8::try_from(sequence).map_err(|error| error.to_string())?;
+            commit_stress_audit(&log, &lock, sequence, committed_tail)?;
+            let committed_revision =
+                Revision::try_from(sequence).map_err(|error| error.to_string())?;
+            let failed_tail = u8::try_from(128 + sequence).map_err(|error| error.to_string())?;
+            let failed_operation = domain_id::<OperationId>(failed_tail)?;
+            let append = log.append_prepare_with_io(
+                &lock,
+                failed_operation,
+                b"partial prepare during repeated recovery load",
+                move |file, bytes| append_partial_then_fail(file, bytes, disk_full_error()),
+                File::sync_all,
+            );
+            assert!(matches!(
+                append,
+                Err(WalError::Io {
+                    operation: "append WAL prepare frame",
+                    ..
+                })
+            ));
+
+            let damaged = RecoveryScanner::new(layout.clone())
+                .scan(&lock)
+                .map_err(|error| error.to_string())?;
+            assert_eq!(damaged.safe_revision(), committed_revision);
+            assert!(!damaged.is_clean());
+            RecoveryManager::new(layout.clone())
+                .recover(&lock)
+                .map_err(|error| format!("recovery cycle {sequence}: {error}"))?;
+            let clean = RecoveryScanner::new(layout.clone())
+                .scan(&lock)
+                .map_err(|error| error.to_string())?;
+            assert!(
+                clean.is_clean(),
+                "recovery cycle {sequence} did not clean the tail"
+            );
+            assert_eq!(clean.safe_revision(), committed_revision);
+            assert_eq!(
+                log.reconcile_operation_after_recovery(&lock, failed_operation)
+                    .map_err(|error| error.to_string())?,
+                WalOperationStatus::NotCommitted
+            );
+            assert_audit_prefix(&log, &lock, committed_revision, sequence as usize)?;
+        }
+
+        println!(
+            "M9-05 repeated recovery: cycles={CYCLES} committed_audits={CYCLES} safe_prefix=continuous status=clean"
+        );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn m9_05_permission_change_blocks_append_without_advancing_audit() -> Result<(), String> {
+        let database = TempDatabase::create()?;
+        let layout = DatabaseLayout::open(&database.0).map_err(|error| error.to_string())?;
+        let lock = layout
+            .try_writer_lock()
+            .map_err(|error| error.to_string())?;
+        let log = WalPrepareLog::new(&layout);
+        commit_stress_audit(&log, &lock, 1, 1)?;
+        let wal_path = log.segment_path(1);
+        let original_permissions = fs::metadata(&wal_path)
+            .map_err(|error| error.to_string())?
+            .permissions();
+        let mut readonly_permissions = original_permissions.clone();
+        readonly_permissions.set_readonly(true);
+        fs::set_permissions(&wal_path, readonly_permissions).map_err(|error| error.to_string())?;
+        let permission_guard = ReadOnlyFileGuard {
+            path: wal_path,
+            original_permissions,
+        };
+
+        let failed_operation = domain_id::<OperationId>(2)?;
+        let failed_record = stress_audit_record(
+            2,
+            2,
+            Revision::try_from(2).map_err(|error| error.to_string())?,
+            failed_operation,
+        )?;
+        let attempt = log.commit_required_audit(
+            &lock,
+            failed_operation,
+            b"permission-change action",
+            &failed_record,
+        );
+        assert!(matches!(
+            attempt,
+            Err(crate::RequiredAuditError::Wal(WalError::Io {
+                operation: "open WAL segment for append",
+                source,
+            })) if source.kind() == io::ErrorKind::PermissionDenied
+        ));
+        let scan = RecoveryScanner::new(layout.clone())
+            .scan(&lock)
+            .map_err(|error| error.to_string())?;
+        assert!(scan.is_clean());
+        assert_eq!(scan.safe_revision(), Revision::FIRST_COMMIT);
+        assert_audit_prefix(&log, &lock, Revision::FIRST_COMMIT, 1)?;
+
+        drop(permission_guard);
+        commit_stress_audit(&log, &lock, 2, 3)?;
+        assert_audit_prefix(
+            &log,
+            &lock,
+            Revision::try_from(2).map_err(|error| error.to_string())?,
+            2,
+        )?;
+        println!(
+            "M9-05 permission change: denied_write=reported safe_revision=1 audit_sequence=1 restored_write=revision_2"
+        );
         Ok(())
     }
 
@@ -2823,7 +3258,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         repaired_after_unknown
             .set_len(reference.byte_offset() + reference.frame_length())
-            .and_then(|()| repaired_after_unknown.sync_all())
+            .and_then(|()| crate::platform_sync::sync_file(&repaired_after_unknown))
             .map_err(|error| error.to_string())?;
         assert_eq!(
             log.operation_status(&lock, operation_id)
@@ -2867,7 +3302,7 @@ mod tests {
                     operation_id,
                     b"m5-22-uncommitted-prepare",
                     |file| {
-                        file.sync_all()?;
+                        crate::platform_sync::sync_file(file)?;
                         std::process::exit(86);
                     },
                 );
@@ -2879,7 +3314,7 @@ mod tests {
                     .append_prepare(&lock, operation_id, &payload)
                     .map_err(|error| error.to_string())?;
                 let _ = log.commit_prepared_with_sync(&lock, reference, |file| {
-                    file.sync_all()?;
+                    crate::platform_sync::sync_file(file)?;
                     std::process::exit(86);
                 });
             }
@@ -2895,14 +3330,15 @@ mod tests {
         ] {
             let database = TempDatabase::create()?;
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {point} exited with {:?}, expected crash code 86",

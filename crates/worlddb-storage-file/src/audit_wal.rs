@@ -869,6 +869,56 @@ fn scan_wal_bytes(bytes: Vec<u8>) -> Result<AuditScan, RawReadAuditError> {
     })
 }
 
+#[cfg(test)]
+pub(crate) fn fuzz_audit_wal(layout: &DatabaseLayout, bytes: &[u8]) -> bool {
+    let path = layout.audit_wal_directory().join(AUDIT_WAL_FILE);
+    if fs::write(&path, bytes).is_err() {
+        return false;
+    }
+    let path_cleanup = AuditFuzzWalFile(path);
+    let scan_path = scan_wal(layout).is_ok() || scan_wal_allow_incomplete_tail(layout).is_ok();
+    let scan_bytes = scan_wal_bytes(bytes.to_vec()).is_ok();
+    let repair = decode_repair_intent(bytes).is_ok();
+    let prepare = decode_prepare(bytes).is_ok();
+    let commit = decode_commit(bytes).is_ok();
+    let field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_u64_field(&mut decoder, 1).is_ok()
+    };
+    let id_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_id_field::<AuditOperationId>(&mut decoder, 1).is_ok()
+    };
+    let fixed_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_fixed_field::<32>(&mut decoder, 1).is_ok()
+    };
+    let bytes_field = || {
+        let mut decoder = TlvDecoder::new(bytes);
+        decode_bytes_field(&mut decoder, 1).is_ok()
+    };
+    drop(path_cleanup);
+    scan_path
+        || scan_bytes
+        || repair
+        || prepare
+        || commit
+        || field()
+        || id_field()
+        || fixed_field()
+        || bytes_field()
+}
+
+#[cfg(test)]
+struct AuditFuzzWalFile(PathBuf);
+
+#[cfg(test)]
+impl Drop for AuditFuzzWalFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
 fn snapshot_from_scan(layout: &DatabaseLayout, scan: AuditScan) -> RawReadAuditSnapshot {
     RawReadAuditSnapshot {
         database_id: layout.database_id(),
@@ -1056,7 +1106,7 @@ fn persist_quarantined_tail(
             operation: "write staged raw-read audit quarantine copy",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync staged raw-read audit quarantine copy",
         source,
     })?;
@@ -1232,7 +1282,7 @@ fn truncate_wal_to(
         return Err(RawReadAuditError::CorruptWAL);
     }
     file.set_len(safe_length)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::platform_sync::sync_file(&file))
         .map_err(|source| RawReadAuditError::Io {
             operation: "truncate and sync raw-read audit WAL to verified commit prefix",
             source,
@@ -1323,7 +1373,7 @@ fn persist_immutable_marker(
             source,
         })?;
     file.write_all(expected)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::platform_sync::sync_file(&file))
         .map_err(|source| RawReadAuditError::Io {
             operation: "write and sync staged raw-read audit recovery marker",
             source,
@@ -1519,7 +1569,7 @@ fn append_attempt(
             operation: "append raw-read audit prepare",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync raw-read audit prepare",
         source,
     })?;
@@ -1528,7 +1578,7 @@ fn append_attempt(
             operation: "append raw-read audit commit marker",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync raw-read audit commit marker",
         source,
     })?;
@@ -1988,7 +2038,7 @@ mod tests {
             .open(&wal_path)
             .map_err(|error| error.to_string())?;
         file.write_all(&tail).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
+        crate::platform_sync::sync_file(&file).map_err(|error| error.to_string())?;
         drop(file);
 
         for (checkpoint, point_name) in [
@@ -2001,14 +2051,15 @@ mod tests {
             (AuditRecoveryCheckpoint::RepairCompleted, "repair_completed"),
         ] {
             let executable = env::current_exe().map_err(|error| error.to_string())?;
-            let status = Command::new(executable)
-                .args(["--exact", TEST_NAME, "--nocapture"])
-                .env(ROOT_ENV, &database.0)
-                .env(POINT_ENV, point_name)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map_err(|error| error.to_string())?;
+            let status = crate::writer_lock::test_command_status(
+                Command::new(executable)
+                    .args(["--exact", TEST_NAME, "--nocapture"])
+                    .env(ROOT_ENV, &database.0)
+                    .env(POINT_ENV, point_name)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null()),
+            )
+            .map_err(|error| error.to_string())?;
             if status.code() != Some(86) {
                 return Err(format!(
                     "child for {checkpoint:?} exited with {:?}, expected crash code 86",
