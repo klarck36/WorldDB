@@ -194,19 +194,25 @@ async function tabToCreateButton(browser, nameInput, appProcessId, driverPath) {
   );
 
   await nameInput.click();
-  if (process.platform === 'darwin') sendNativeMacKey('tab', appProcessId, driverPath);
-  else await browser.keys(TAB);
+  try {
+    await browser.keys(TAB);
+    await waitForCreateButtonFocus(2000);
+    return { focusedId: await focusedElementId(), navigationMode: 'webdriver' };
+  } catch {
+    await nameInput.click();
+  }
+  if (process.platform !== 'darwin') {
+    const activeElement = await browser.execute(() => ({
+      id: document.activeElement?.id ?? '',
+      tag: document.activeElement?.tagName ?? '',
+    }));
+    throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
+  }
+  sendNativeMacKey('tab', appProcessId, driverPath);
   try {
     await waitForCreateButtonFocus(2000);
-    return { focusedId: await focusedElementId(), navigationMode: 'default' };
+    return { focusedId: await focusedElementId(), navigationMode: 'quartz' };
   } catch {
-    if (process.platform !== 'darwin') {
-      const activeElement = await browser.execute(() => ({
-        id: document.activeElement?.id ?? '',
-        tag: document.activeElement?.tagName ?? '',
-      }));
-      throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
-    }
     // The WebDriver adapter dispatches synthetic DOM KeyboardEvents on macOS;
     // use Quartz events so WebKit and the system can apply their native focus rules.
     for (const action of ['control-tab', 'control-f7', 'fn-control-f7']) {

@@ -1934,6 +1934,14 @@ fn manage_entities(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let trace_facts_smoke_entities = window.label() == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:entity-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
             window.label(),
@@ -1941,11 +1949,39 @@ fn manage_entities(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:entity-ipc:authorized".to_owned(),
+        )?;
+    }
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = entity_smoke_operation(&request.command);
-    match backend.entities_with_operation_id(request.command, operation_id) {
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:entity-ipc:dispatching".to_owned(),
+        )?;
+    }
+    let result = backend.entities_with_operation_id(request.command, operation_id);
+    if trace_facts_smoke_entities {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            format!(
+                "facts-smoke:entity-ipc:engine-returned:{}",
+                if result.is_ok() { "ok" } else { "rejected" }
+            ),
+        )?;
+    }
+    match result {
         Ok(result) => {
             record_entity_smoke(window.label(), operation, true, Some(&result))?;
+            if trace_facts_smoke_entities {
+                record_facts_smoke_diagnostic(
+                    window.label(),
+                    "facts-smoke:entity-ipc:recorded".to_owned(),
+                )?;
+            }
             if matches!(result, EntityResponse::Published(_)) {
                 let _ = app.emit("project-state-changed", ());
             }

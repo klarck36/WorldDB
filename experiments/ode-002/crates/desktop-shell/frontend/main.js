@@ -4763,9 +4763,15 @@ async function runSchemaSmoke(activeSessionId) {
     }
   }
 
+  await recordFactsSmokeStage("schema-smoke:before-active-entity-type");
   await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_available");
+  await recordFactsSmokeStage("schema-smoke:after-active-entity-type");
+  await recordFactsSmokeStage("schema-smoke:before-deprecated-entity-type");
   const deprecatedType = await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_deprecated");
+  await recordFactsSmokeStage("schema-smoke:after-deprecated-entity-type");
+  await recordFactsSmokeStage("schema-smoke:before-final-schema-snapshot");
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage("schema-smoke:after-final-schema-snapshot");
   await recordFactsSmokeStage("schema-smoke:before-final-entity-type-deprecation");
   await manageSchema({
     command: "set_lifecycle",
@@ -4778,7 +4784,9 @@ async function runSchemaSmoke(activeSessionId) {
 }
 
 async function createSmokeEntityType(activeSessionId, symbol) {
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:before-base-snapshot`);
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-base-snapshot`);
   const result = await manageSchema({
     command: "create",
     expected_base_revision: current.revision,
@@ -4788,8 +4796,10 @@ async function createSmokeEntityType(activeSessionId, symbol) {
       description: "Entity catalog smoke verification type.",
     },
   }, activeSessionId);
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-create`);
   if (result.kind !== "published") throw new Error(`schema did not publish ${symbol}`);
   const published = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage(`schema-smoke:${symbol}:after-published-snapshot`);
   const definition = published.definitions.find((item) => item.symbol === symbol);
   if (!definition || definition.lifecycle !== "active") throw new Error(`schema did not expose active ${symbol}`);
   return definition;
