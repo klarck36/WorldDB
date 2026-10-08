@@ -114,28 +114,42 @@ async function appReport(reportPath) {
   return JSON.parse(await readFile(reportPath, 'utf8'));
 }
 
-function fullKeyboardAccessEnabled() {
-  const result = spawnSync('swift', ['-e', 'import AppKit; print(NSApplication.shared.isFullKeyboardAccessEnabled ? "enabled" : "disabled")'], {
-    encoding: 'utf8',
-    timeout: 15000,
-  });
-  if (result.error || result.status !== 0) {
-    throw new Error('Could not read the macOS Full Keyboard Access setting.');
-  }
-  return result.stdout.trim() === 'enabled';
-}
+async function tabToCreateButton(browser, nameInput) {
+  const focusedElementId = () => browser.execute(() => document.activeElement?.id ?? '');
+  const waitForCreateButtonFocus = timeout => browser.waitUntil(
+    async () => (await focusedElementId()) === 'create-project',
+    {
+      timeout,
+      timeoutMsg: 'Tab did not move native keyboard focus to Neues Projekt.',
+    },
+  );
 
-async function ensureFullKeyboardAccess(browser) {
-  if (process.platform !== 'darwin' || fullKeyboardAccessEnabled()) return;
-  // macOS defaults to tabbing through text fields and lists only. Control-F7
-  // switches Tab navigation to all controls, which this keyboard smoke checks.
-  await browser.keys([CONTROL, F7]);
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    if (fullKeyboardAccessEnabled()) return;
-    await delay(100);
+  await nameInput.click();
+  await browser.keys(TAB);
+  try {
+    await waitForCreateButtonFocus(2000);
+    return { focusedId: await focusedElementId(), navigationMode: 'default' };
+  } catch {
+    // Control-F7 toggles macOS keyboard focus between text-only and all
+    // controls. AppKit's Full Keyboard Access property reports a separate
+    // accessibility setting and cannot be used to verify this shortcut.
+    for (let toggle = 1; toggle <= 2; toggle += 1) {
+      await browser.keys([CONTROL, F7]);
+      await nameInput.click();
+      await browser.keys(TAB);
+      try {
+        await waitForCreateButtonFocus(2500);
+        return { focusedId: await focusedElementId(), navigationMode: `control-f7-toggle-${toggle}` };
+      } catch {
+        // Try the other system focus mode once, based on observed focus.
+      }
+    }
+    const activeElement = await browser.execute(() => ({
+      id: document.activeElement?.id ?? '',
+      tag: document.activeElement?.tagName ?? '',
+    }));
+    throw new Error(`Tab did not focus Neues Projekt after checking both Control-F7 modes; active element was ${JSON.stringify(activeElement)}.`);
   }
-  throw new Error('Could not enable macOS Full Keyboard Access for native Tab navigation.');
 }
 
 async function parseCrashSignal(signalPath) {
@@ -233,8 +247,6 @@ export async function runKeyboardDriver({
       capabilities: { browserName: 'tauri' },
     });
 
-    await ensureFullKeyboardAccess(browser);
-
     const nameInput = await browser.$('#project-name');
     const createButton = await browser.$('#create-project');
     const projectStatus = await browser.$('#project-status');
@@ -275,12 +287,7 @@ export async function runKeyboardDriver({
       throw new Error(`Native keyboard input mismatch (cleared=${JSON.stringify(clearedValue)}, entered=${JSON.stringify(enteredValue)}).`);
     }
 
-    await browser.keys(TAB);
-    await browser.waitUntil(async () => browser.execute(() => document.activeElement?.id === 'create-project'), {
-      timeout: 10000,
-      timeoutMsg: 'Tab did not move native keyboard focus to Neues Projekt.',
-    });
-    const focusedId = await browser.execute(() => document.activeElement?.id ?? '');
+    const keyboardTab = await tabToCreateButton(browser, nameInput);
     let enterDispatchError = null;
     try {
       await browser.keys(ENTER);
@@ -304,7 +311,7 @@ export async function runKeyboardDriver({
       }
       await stopApp(child, exitPromise);
       const recovery = await inspectRecovery(recoveryCliPath, databaseRoot, recoveryPath);
-      body = { mode, accessibility, keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', enterDispatchError, durableCommitCrash: 'PASS', readOnlyRecovery: 'PASS', signal, recovery };
+      body = { mode, accessibility, keyboardTab, keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', enterDispatchError, durableCommitCrash: 'PASS', readOnlyRecovery: 'PASS', signal, recovery };
     } else {
       await browser.waitUntil(async () => (await browser.$('#project-status').getText()) === PROJECT_NAME, {
         timeout: 60000,
@@ -314,7 +321,7 @@ export async function runKeyboardDriver({
         timeout: 30000,
         timeoutMsg: 'The created project did not enable Projekt schließen.',
       });
-      body = { mode, accessibility, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: PROJECT_NAME };
+      body = { mode, accessibility, keyboardTab, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: PROJECT_NAME };
       await stopApp(child, exitPromise);
     }
 

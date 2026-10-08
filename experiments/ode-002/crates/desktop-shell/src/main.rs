@@ -19,8 +19,8 @@ use worlddb_ode_engine::{
     HistorySpaceTransferCommand, HistorySpaceTransferResponse, JobListView, JobShutdownView,
     MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, RecoveryApplyView,
     RecoveryReportView, RecoverySalvageView, ResolutionOutcomeView, ResolutionResultView, Response,
-    SchemaCommand, SchemaResponse, SecurityPolicyCommand, SecurityPolicyResponse,
-    SecurityPolicySnapshotView, StreamPlan,
+    SchemaCommand, SchemaDefinitionDraft, SchemaResponse, SecurityPolicyCommand,
+    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -1815,7 +1815,30 @@ fn manage_schema(
         .map_err(map_session_error)?;
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
-    match backend.schema_with_operation_id(request.command, operation_id) {
+    let facts_smoke_predicate = matches!(
+        &request.command,
+        SchemaCommand::Create {
+            definition: SchemaDefinitionDraft::Predicate { symbol, .. },
+            ..
+        } if symbol == "ipc_smoke_facts"
+    );
+    if facts_smoke_predicate {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:predicate-schema-command:entered".to_owned(),
+        )?;
+    }
+    let result = backend.schema_with_operation_id(request.command, operation_id);
+    if facts_smoke_predicate {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            format!(
+                "facts-smoke:predicate-schema-command:{}",
+                if result.is_ok() { "returned" } else { "rejected" }
+            ),
+        )?;
+    }
+    match result {
         Ok(result) => {
             record_schema_smoke(window.label(), operation, true, Some(&result), &backend)?;
             Ok(SchemaResponseV1 {

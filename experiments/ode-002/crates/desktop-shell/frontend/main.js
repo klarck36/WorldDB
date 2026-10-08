@@ -5301,7 +5301,10 @@ async function runFactsSmoke(activeSessionId) {
   schemaResolution.value = "multi_value_replace";
   updateSchemaFormVisibility();
   await recordFactsSmokeStage("before-predicate-definition");
-  await publishDefinition({ propagateErrors: true });
+  await publishDefinition({
+    propagateErrors: true,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`predicate-definition:${stage}`),
+  });
   await recordFactsSmokeStage("predicate-definition-published");
   const predicate = selectedSchema?.definitions.find((item) => item.family === "predicate" && item.symbol === "ipc_smoke_facts");
   if (predicate?.lifecycle !== "active" || predicate.details.resolution_policy !== "multi_value_replace") {
@@ -6425,7 +6428,7 @@ function clearDefinitionForm() {
   updateSchemaFormVisibility();
 }
 
-async function publishDefinition({ propagateErrors = false } = {}) {
+async function publishDefinition({ propagateErrors = false, diagnosticStage = null } = {}) {
   if (!sessionId || !projectOpen || !schemaCurrentMode) {
     if (propagateErrors) {
       const state = `session=${Boolean(sessionId)}, projectOpen=${projectOpen}, currentMode=${schemaCurrentMode}`;
@@ -6437,14 +6440,20 @@ async function publishDefinition({ propagateErrors = false } = {}) {
   updateSchemaControls();
   schemaStatus.textContent = "Definition wird geprüft und veröffentlicht …";
   try {
+    await diagnosticStage?.("before-snapshot");
     const latest = await invokeSchemaFor(sessionId, { mode: "current" });
+    await diagnosticStage?.("after-snapshot");
     currentSchema = latest;
     const definition = buildDefinitionDraft();
+    await diagnosticStage?.("before-create");
     await manageSchema({ command: "create", expected_base_revision: latest.revision, definition });
+    await diagnosticStage?.("after-create");
     schemaViewMode.value = "current";
     schemaCurrentMode = true;
     clearDefinitionForm();
+    await diagnosticStage?.("before-refresh");
     await refreshSchema(sessionId);
+    await diagnosticStage?.("after-refresh");
     schemaStatus.textContent = `Definition veröffentlicht. Aktuelle Schema-Revision ${selectedSchema.revision}.`;
   } catch (error) {
     schemaStatus.textContent = showError(error);

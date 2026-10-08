@@ -14,7 +14,7 @@ VALID_GRAPH = {
 VALID_EXTERNAL = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
     "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
-    "worlddb-process-adapter": {"windows-sys"},
+    "worlddb-process-adapter": {"libc", "windows-sys"},
     "worlddb-testkit": {"rusqlite"},
     "worlddb-cli": {"blake3", "getrandom"},
 }

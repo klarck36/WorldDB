@@ -6,10 +6,14 @@
 - Available Linux environment: WSL2 Ubuntu.
 - No macOS host or APFS volume is attached to this workspace.
 
-## Blocker
+## Execution path
 
-M4-15 requires measurements of `fsync` and `F_FULLFSYNC` on APFS hardware, with error injection and recorded API returns. Windows/NTFS and WSL/Linux cannot provide evidence about Apple’s APFS sync path or real-device durability, so this task cannot make the ODE-006 choice from the current machine. A macOS-only probe and run protocol are now prepared in `tools/m4-15/macos_sync_probe.c` and `docs/M4-15-measurement-kit.md`; neither substitutes for the hardware run. The probe is intentionally macOS-only and has not been compiled on this Windows host; the first build is part of the target-Mac runbook.
+A SHA-pinned GitHub Actions workflow, .github/workflows/m4-15-apfs-sync.yml, runs the prepared probe on macos-latest. It checks that the evidence directory is APFS, records macOS build and hardware model, retains diskutil metadata and raw CSV, summarizes fsync/F_FULLFSYNC returns and latency, and runs the storage crate's injected sync-failure tests. It was held until the active M8-26b APFS baseline finished; run 37767019927 has now completed, so the workflow is ready to run with the current macOS fixes.
 
-## Resume requirement
+The hosted runner can provide evidence about that runner's APFS profile and API behavior. Its measurements do not prove persistence across power loss or generalize to every Mac model.
 
-Run the measurement kit on a real macOS/APFS system and record its OS/build, APFS device class, sync operations and return values, latency distribution, and injected failure outcomes. The probe includes a closed-descriptor `EBADF` negative control; backend-level injected I/O failure evidence remains required once the M5 sync abstraction exists. Then decide whether `Durability::Machine` uses Full Sync when supported and how the backend behaves when it is unavailable. No GitHub connection is needed; the blocker is the absent macOS/APFS test host.
+## Remaining acceptance limits
+
+M4-15 requires the measurement kit to report the OS/build, APFS volume, sync operations and return values, latency distribution, and injected failure outcomes. The probe includes a closed-descriptor EBADF negative control; backend-level injected I/O failure evidence comes from the storage tests. Then decide whether Durability::Machine uses Full Sync when supported and how the backend behaves when it is unavailable. No GitHub connection is required after the workflow result is collected; the current machine itself still has no Mac/APFS volume.
+
+The probe in tools/m4-15/macos_sync_probe.c and run protocol in docs/M4-15-measurement-kit.md remain the source of the measurement definition.
