@@ -1,6 +1,20 @@
 # M9-06 – Security-Härtung (Abnahme)
 
-**Status:** DONE. Windows, WSL2/Ubuntu 26.04 und der native macOS-PR-Lauf sind geprüft. Der letzte Lauf `37662001113` auf PR `#1` bestand mit 45 PASS, einem erwarteten `ci-matrix`-SKIP und 0 FAIL. Der WSL-Workspace lag unter `/mnt/c`; Testdaten lagen unter `/tmp` (tmpfs), daher ist dies kein nativer ext4-Nachweis.
+**Status:** READY für einen sauberen CI-Nachlauf. Frühere Windows-, WSL2- und macOS-Läufe bestanden, aber der neueste Lauf `37834967707` auf Head `dcad7bf` fand sieben Policy-/Contract-Befunde. Die lokalen Korrekturen stehen bereit; der Abschluss wartet auf den erneuten CI-Nachweis.
+
+## Aktueller CI-Nachlauf – 8. Oktober 2026
+
+Run `37834967707` endete mit 38 PASS, einem erwarteten SKIP und 7 FAIL. Das
+Artefakt `11576000720` (SHA-256
+`931b93c023098a41908a909cfc2160f9b69065eb9ca8e6a9389e3954bebb6158`)
+belegt einen unnötigen Borrow, eine nicht registrierte unsafe-Ausnahme für
+macOS `F_FULLFSYNC`, aktivierte libc-Default-Features, einen fehlenden
+Dependency-Graph-Eintrag sowie einen unveränderten rc.2-Fingerprintfehler.
+Die lokalen Korrekturen entfernen den Borrow, begrenzen und registrieren den
+OS-Aufruf als `WDB-EXC-0010`, deaktivieren libc-Default-Features und prüfen die
+Dependency-Kante. rc.2 bleibt unverändert; rc.3 friert den aktualisierten
+Implementierungsfingerprint ein. Ein lokaler Build- oder Testsuite-Lauf wurde
+nicht wiederholt; ein sauberer CI-Nachlauf bleibt erforderlich.
 
 ## Geprüfte Non-Interference-Pfade
 

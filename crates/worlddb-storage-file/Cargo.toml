@@ -19,4 +19,4 @@ worlddb-core = { path = "../worlddb-core" }
 windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "=0.2.190"
+libc = { version = "=0.2.190", default-features = false }

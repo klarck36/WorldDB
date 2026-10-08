@@ -13,8 +13,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT_VERSION = "1.0.0-rc.2"
-BASELINE = ROOT / "contracts/public/v1.0.0-rc.2/manifest.json"
+CONTRACT_VERSION = "1.0.0-rc.3"
+BASELINE = ROOT / "contracts/public/v1.0.0-rc.3/manifest.json"
 RULES = ROOT / "contracts/public/classification-rules.tsv"
 LOGICAL_EXPORT_SEMANTICS = ROOT / "docs/contracts/logical-export-v2.md"
 
@@ -37,6 +37,7 @@ SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "persistent_format": (
         "crates/worlddb-core/src/wire.rs",
+        "crates/worlddb-storage-file/src/platform_sync.rs",
         "crates/worlddb-storage-file/src/segment.rs",
         "crates/worlddb-storage-file/src/security_segment.rs",
         "crates/worlddb-storage-file/src/manifest.rs",
@@ -50,6 +51,7 @@ SOURCE_GROUPS: dict[str, tuple[str, ...]] = {
         "contracts/public/classification-rules.tsv",
         "docs/contracts/public-contracts-v1.0.0-rc.1.md",
         "docs/contracts/public-contracts-v1.0.0-rc.2.md",
+        "docs/contracts/public-contracts-v1.0.0-rc.3.md",
     ),
 }
 

@@ -8,11 +8,16 @@ use std::io;
 /// macOS uses `F_FULLFSYNC`, because `File::sync_all` only requests `fsync` and
 /// does not provide the APFS machine-durability operation selected by ODE-006.
 /// Errors are returned directly so unsupported full-sync operations fail closed.
-#[allow(unsafe_code)] // The OS call is isolated here because Rust exposes no safe F_FULLFSYNC wrapper.
 pub(crate) fn sync_file(file: &File) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         sync_file_with(file, |descriptor| {
+            // SAFETY: descriptor is borrowed from a live File for this call; fcntl
+            // does not read or retain a pointer, and the descriptor stays open.
+            // TEST: platform_sync::tests::apfs_regular_file_full_sync_succeeds and
+            // platform_sync::tests::full_sync_error_is_returned_without_fallback.
+            // REVIEW: storage-file-platform-sync-owner; isolate macOS durability call.
+            #[allow(unsafe_code, reason = "WDB-EXC-0010")]
             let result = unsafe { libc::fcntl(descriptor, libc::F_FULLFSYNC) };
             if result == -1 {
                 Err(io::Error::last_os_error())

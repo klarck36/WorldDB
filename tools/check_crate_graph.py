@@ -22,7 +22,7 @@ EXPECTED_CRATES = {
 # their task evidence; rusqlite is the optional M5-20 testkit reference adapter.
 EXPECTED_EXTERNALS = {
     "worlddb-core": {"blake3", "getrandom", "uuid"},
-    "worlddb-storage-file": {"blake3", "fs4", "getrandom", "windows-sys"},
+    "worlddb-storage-file": {"blake3", "fs4", "getrandom", "libc", "windows-sys"},
     "worlddb-process-adapter": {"libc", "windows-sys"},
     "worlddb-cli": {"blake3", "getrandom"},
     "worlddb-testkit": {"rusqlite"},
