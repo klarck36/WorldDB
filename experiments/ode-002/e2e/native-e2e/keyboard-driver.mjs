@@ -20,7 +20,7 @@ const TAB = '\uE004';
 const ENTER = '\uE007';
 const PROJECT_NAME = 'KeyboardSuiteProject';
 
-async function enableMacFullKeyboardAccess(homeDir) {
+async function enableMacFullKeyboardAccess(homeDirs) {
   if (process.platform !== 'darwin') return null;
   const version = spawnSync('sw_vers', ['-productVersion'], { encoding: 'utf8' });
   const majorVersion = Number(version.stdout?.trim().split('.')[0]);
@@ -29,23 +29,44 @@ async function enableMacFullKeyboardAccess(homeDir) {
   }
   // Sonoma changed AppleKeyboardUIMode's enabled value from 3 to 2.
   const keyboardMode = majorVersion >= 14 ? 2 : 3;
-  await mkdir(join(homeDir, 'Library', 'Preferences'), { recursive: true });
-  const preferenceEnv = { ...process.env, HOME: homeDir };
-  const written = spawnSync('defaults', ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', String(keyboardMode)], {
-    encoding: 'utf8',
-    env: preferenceEnv,
-  });
-  if (written.error || written.status !== 0) {
-    throw new Error(`Could not enable macOS full keyboard access: ${written.error?.message ?? written.stderr ?? `exit ${written.status}`}`);
+  const preferences = [];
+  const restore = () => {
+    let restoreError = null;
+    for (const preference of [...preferences].reverse()) {
+      const args = preference.hadPrevious
+        ? ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', preference.previousValue]
+        : ['delete', 'NSGlobalDomain', 'AppleKeyboardUIMode'];
+      const result = spawnSync('defaults', args, { encoding: 'utf8', env: preference.env });
+      if ((result.error || result.status !== 0) && !restoreError) {
+        restoreError = new Error(`Could not restore macOS keyboard navigation preference: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`);
+      }
+    }
+    if (restoreError) throw restoreError;
+  };
+  try {
+    for (const homeDir of new Set(homeDirs.filter(Boolean))) {
+      await mkdir(join(homeDir, 'Library', 'Preferences'), { recursive: true });
+      const env = { ...process.env, HOME: homeDir };
+      const previous = spawnSync('defaults', ['read', 'NSGlobalDomain', 'AppleKeyboardUIMode'], { encoding: 'utf8', env });
+      const preference = { env, hadPrevious: previous.status === 0, previousValue: previous.stdout?.trim() };
+      preferences.push(preference);
+      const written = spawnSync('defaults', ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', String(keyboardMode)], { encoding: 'utf8', env });
+      if (written.error || written.status !== 0) {
+        throw new Error(`Could not enable macOS full keyboard access: ${written.error?.message ?? written.stderr ?? `exit ${written.status}`}`);
+      }
+      const read = spawnSync('defaults', ['read', 'NSGlobalDomain', 'AppleKeyboardUIMode'], { encoding: 'utf8', env });
+      if (read.error || read.status !== 0 || read.stdout.trim() !== String(keyboardMode)) {
+        throw new Error(`macOS full keyboard access did not verify mode ${keyboardMode}: ${read.error?.message ?? read.stdout ?? read.stderr ?? `exit ${read.status}`}`);
+      }
+    }
+  } catch (error) {
+    try { restore(); } catch { }
+    throw error;
   }
-  const read = spawnSync('defaults', ['read', 'NSGlobalDomain', 'AppleKeyboardUIMode'], {
-    encoding: 'utf8',
-    env: preferenceEnv,
-  });
-  if (read.error || read.status !== 0 || read.stdout.trim() !== String(keyboardMode)) {
-    throw new Error(`macOS full keyboard access did not verify mode ${keyboardMode}: ${read.error?.message ?? read.stdout ?? read.stderr ?? `exit ${read.status}`}`);
-  }
-  return keyboardMode;
+  return {
+    mode: keyboardMode,
+    restore,
+  };
 }
 
 function unsetTestEnvironment(env) {
@@ -231,7 +252,8 @@ export async function runKeyboardDriver({
   await mkdir(tmpRoot, { recursive: true });
   const isolatedHome = join(tmpRoot, 'home');
   await mkdir(isolatedHome, { recursive: true });
-  const macKeyboardMode = await enableMacFullKeyboardAccess(isolatedHome);
+  const macKeyboard = await enableMacFullKeyboardAccess([process.env.HOME, isolatedHome]);
+  const macKeyboardMode = macKeyboard?.mode ?? null;
   const port = await unusedLoopbackPort();
   const reportPath = join(caseRoot, 'app-startup.json');
   const crashSignalPath = join(caseRoot, 'crash-signal.txt');
@@ -388,5 +410,6 @@ export async function runKeyboardDriver({
     await new Promise(resolve => stdout.end(resolve));
     await new Promise(resolve => stderr.end(resolve));
     if (failure && child.exitCode === null) child.kill('SIGKILL');
+    macKeyboard?.restore();
   }
 }

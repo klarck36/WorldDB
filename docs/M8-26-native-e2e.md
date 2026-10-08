@@ -75,7 +75,11 @@ Sidecar erreicht die Faktenprüfung und zeichnet `facts-smoke:diagnostic-canary:
 
 Die verschobene Linux-Ausführung ist hier kein Auslöser: M8-26c hängt als wiederverwendbarer Job mit `needs: native-macos-e2e` hinter dem APFS-Gate. Linux startet erst, wenn macOS besteht. Der aktuelle Fehler entsteht bereits innerhalb des Mac-Laufs.
 
-Die gezielten Korrekturen und der abhängige Linux-Workflow sind mit Commit `ab1bdf2` auf PR #1. APFS-Rerun `37776375601` startete am 8. Oktober um 12:22 UTC; Checkout ist bestanden und Node-Setup läuft. Linux/ext4 bleibt bis zum Ergebnis dieses APFS-Gates ausstehend.
+Die gezielten Korrekturen und der abhängige Linux-Workflow sind mit Commit `ab1bdf2` auf PR #1. APFS-Rerun `37776375601` endete mit `FAIL`; der Linux/ext4-Job wurde wegen des APFS-Gates übersprungen.
+
+Der nächste Lauf `37780128625` auf PR-Head `ad716b0` endete auf macOS 26.6.2/arm64/APFS ebenfalls mit `FAIL`: 8/14 Fälle bestanden, 6 scheiterten, 0 blieben unausgeführt. Das Artefakt `11552470690` enthält ein Manifest mit Commit `e904e5e9`, 48 gehashte Dateien und verifizierte Bytezahlen; SHA-256 des ZIP-Artefakts ist `07bb146e66897f8043c33c9d671519bc11ce2d4bbf1fe9bf613163a894d9f73f`, SHA-256 des Manifests `7b024dc801be303f7f84f94d84688dfd4a674af122685743d479158b93465172`. Beide IPC-Smokes brachen vor dem App-Test mit einem PowerShell-Parserfehler in `run-ipc-security-smoke.ps1` Zeile 103 ab (`$engineProcessId:`). Die vier Tastatur-/Crashfälle scheiterten am Tab-Fokus; der Treiber hatte `AppleKeyboardUIMode` nur im isolierten Test-`HOME` gesetzt und damit die Systemeinstellung des angemeldeten macOS-Users nicht umgestellt. Das sind lokale Treiberfehler, keine OpenAI-Serverstörung und keine Folge des zurückgestellten Linux-Laufs.
+
+Der Korrekturstand ersetzt den fehlerhaften PowerShell-Variablenbezug und setzt die Tastaturpräferenz für das Runner-`HOME` sowie das isolierte App-`HOME`, wobei beide vorherigen Werte nach dem Lauf wiederhergestellt werden. Ein neuer sauberer APFS-Lauf ist erforderlich; M8-26b bleibt `RUNNING`, Linux/ext4 bleibt bis zu einem bestandenen APFS-Gate übersprungen.
 
 ## Linux/ext4-Runnerentwurf für M8-26c
 

@@ -100,7 +100,7 @@ function Stop-SmokeSidecarChild {
     } catch [System.ArgumentException] {
         # The sidecar already exited and released its database lock.
     } catch {
-        Write-Warning "Could not confirm sidecar cleanup for process $engineProcessId: $_"
+        Write-Warning "Could not confirm sidecar cleanup for process ${engineProcessId}: $_"
     }
 }
 
