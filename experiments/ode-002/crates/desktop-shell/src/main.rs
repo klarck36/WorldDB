@@ -55,7 +55,7 @@ const STREAM_TEST_BYTES: u64 = 100 * 1024 * 1024;
 const STREAM_TEST_CHUNK_BYTES: u32 = 256 * 1024;
 const STREAM_CANCEL_AFTER_BYTES: u64 = 8 * 1024 * 1024;
 const STREAM_MEASUREMENT_RUNS: usize = 5;
-static FACTS_SMOKE_RESULT_LOCK: Mutex<()> = Mutex::new(());
+static IPC_SMOKE_RESULT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "sidecar")]
 const SIDECAR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -2242,15 +2242,15 @@ fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<
         "window": window_label,
         "succeeded": true,
     });
-    append_facts_smoke_jsonl(&result_path, &record, "ipc_diagnostic_unavailable")
+    append_smoke_jsonl(&result_path, &record, "ipc_diagnostic_unavailable")
 }
 
-fn append_facts_smoke_jsonl(
+fn append_smoke_jsonl(
     path: &Path,
     record: &serde_json::Value,
     error_code: &'static str,
 ) -> Result<(), IpcErrorV1> {
-    let _guard = FACTS_SMOKE_RESULT_LOCK
+    let _guard = IPC_SMOKE_RESULT_LOCK
         .lock()
         .map_err(|_| IpcErrorV1::new(error_code))?;
     let mut encoded = serde_json::to_vec(record).map_err(|_| IpcErrorV1::new(error_code))?;
@@ -2929,7 +2929,7 @@ fn record_facts_smoke(
             _ => None,
         }),
     });
-    append_facts_smoke_jsonl(&result_path, &record, "host_unavailable")
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn resolution_outcome_kind(outcome: &ResolutionOutcomeView) -> &'static str {
@@ -2984,15 +2984,7 @@ fn record_security_policy_smoke(
         "gm_raw_history_allow": fields.gm_raw_history_allow,
         "gm_admin_raw_deny": fields.gm_admin_raw_deny,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 #[derive(Default)]
@@ -3102,15 +3094,7 @@ fn record_entity_smoke(
         "entity_types": entity_types,
         "warning": warning,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_branch_layer_smoke(
@@ -3159,15 +3143,7 @@ fn record_branch_layer_smoke(
         "branch_created": branch_created,
         "layer_changed": layer_changed,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_history_space_transfer_smoke(
@@ -3219,15 +3195,7 @@ fn record_history_space_transfer_smoke(
         "copied_record_count": copied_records,
         "copied_relation_count": copied_relations,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_perspective_smoke(
@@ -3271,15 +3239,7 @@ fn record_perspective_smoke(
         "perspective_count": perspective_count,
         "epistemic_mode": mode,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_schema_smoke(
@@ -3346,15 +3306,7 @@ fn record_schema_smoke(
         "definition_count": definition_count,
         "definitions": definitions,
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn record_ipc_probe(window_label: &str) -> Result<(), IpcErrorV1> {

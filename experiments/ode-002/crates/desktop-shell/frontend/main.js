@@ -5182,6 +5182,7 @@ async function waitForFactPreview(expectedRevision = null) {
 }
 
 async function clickFactWrite(button, label) {
+  updateFactControls();
   if (button.disabled) throw new Error(`${label} form remained disabled with a complete valid fixture`);
   factsPreviewStatus.textContent = "";
   button.click();
@@ -5453,7 +5454,9 @@ async function runFactsSmoke(activeSessionId) {
 
   factsValueText.value = "Exact-Mask-Target";
   const staleCommitBaseRevision = factCatalog.revision;
+  await recordFactsSmokeStage("before-initial-assertion");
   const assertion = await clickFactWrite(factsCreateAssertion, "Assertion");
+  await recordFactsSmokeStage("after-initial-assertion");
   await waitForFactPreview();
   if (!factsPreviewResults.textContent.includes("Ergebnis: Known")
     || !factsPreviewResults.textContent.includes("Exact-Mask-Target")) {
