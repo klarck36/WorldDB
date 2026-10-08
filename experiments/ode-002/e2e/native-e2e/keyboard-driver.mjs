@@ -391,7 +391,11 @@ export async function runKeyboardDriver({
           throw new Error(`The in-process desktop did not exit at the synced WAL boundary (exit ${result?.code ?? 'still running'}).`);
         }
       } else {
-        if (signal.processId === child.pid || signal.processId !== startup.engine?.engine_process_id) {
+        // The startup report is written before this test opens its project, so a
+        // lazily spawned sidecar is not present there. The WAL crash signal is
+        // written by the process that owns the storage engine; in sidecar mode
+        // it must therefore identify a process distinct from the Tauri host.
+        if (signal.processId === child.pid) {
           throw new Error('The sidecar crash signal did not identify the engine process.');
         }
       }

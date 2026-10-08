@@ -26,7 +26,19 @@ guard let targetApplication = NSRunningApplication(processIdentifier: targetProc
 }
 if !targetApplication.isActive {
     _ = targetApplication.activate(options: [.activateAllWindows])
+}
+let activationDeadline = Date(timeIntervalSinceNow: 3)
+while Date() < activationDeadline {
+    if targetApplication.isActive,
+       NSWorkspace.shared.frontmostApplication?.processIdentifier == targetProcessID {
+        break
+    }
     _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
+}
+guard targetApplication.isActive,
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == targetProcessID else {
+    fputs("Could not make the target desktop application frontmost for native keyboard input.\n", stderr)
+    exit(6)
 }
 
 let keyCode: CGKeyCode
@@ -58,12 +70,8 @@ for isDown in [true, false] {
         exit(5)
     }
     event.flags = flags
-    if keyCode == 98 {
-        // Control-F7 is a system shortcut and must be posted to the global event stream.
-        event.post(tap: .cghidEventTap)
-    } else {
-        // Hosted runners may not grant the app foreground status; deliver ordinary keys to its PID.
-        event.postToPid(targetProcessID)
-    }
+    // Native focus traversal is handled by AppKit and WebKit only when the
+    // activated application receives the event through the normal event stream.
+    event.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.05)
 }

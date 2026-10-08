@@ -1801,7 +1801,7 @@ fn close_project(
 }
 
 #[tauri::command]
-fn manage_schema(
+async fn manage_schema(
     window: tauri::WebviewWindow,
     request: SchemaRequestV1,
     sessions: tauri::State<'_, HostSessionManager>,
@@ -1924,7 +1924,7 @@ fn manage_schema(
 }
 
 #[tauri::command]
-fn manage_entities(
+async fn manage_entities(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: EntityRequestV1,
@@ -1998,7 +1998,7 @@ fn manage_entities(
 }
 
 #[tauri::command]
-fn manage_branch_layers(
+async fn manage_branch_layers(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: BranchLayerRequestV1,
@@ -2036,7 +2036,7 @@ fn manage_branch_layers(
 }
 
 #[tauri::command]
-fn manage_history_space_transfer(
+async fn manage_history_space_transfer(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: HistorySpaceTransferRequestV1,
@@ -2074,7 +2074,7 @@ fn manage_history_space_transfer(
 }
 
 #[tauri::command]
-fn manage_facts(
+async fn manage_facts(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: FactRequestV1,
@@ -2183,7 +2183,7 @@ fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<
 }
 
 #[tauri::command]
-fn manage_perspectives(
+async fn manage_perspectives(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: PerspectiveRequestV1,
@@ -2221,7 +2221,7 @@ fn manage_perspectives(
 }
 
 #[tauri::command]
-fn manage_security_policy(
+async fn manage_security_policy(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     request: SecurityPolicyRequestV1,
