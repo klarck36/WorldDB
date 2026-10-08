@@ -462,7 +462,6 @@ let factBusy = false;
 let diagnosticExportBusy = false;
 let factsSmokeActive = false;
 let startupSmokeModeEnabled = false;
-let startupSmokeSecondaryProjectRefreshStarted = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
@@ -6613,8 +6612,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         await listen("project-state-changed", async () => {
           if (factBusy) return;
           if (startupSmokeModeEnabled) {
-            if (role !== "secondary" || startupSmokeSecondaryProjectRefreshStarted) return;
-            startupSmokeSecondaryProjectRefreshStarted = true;
+            if (role !== "secondary") return;
             try {
               await refreshProject(sessionId);
             } catch {

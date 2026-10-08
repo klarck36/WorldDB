@@ -13,12 +13,19 @@ const { remote } = require('webdriverio');
 
 const TAURI_WEBDRIVER_PORT = 'TAURI_WEBDRIVER_PORT';
 const META = '\uE03D';
-const CONTROL = '\uE009';
-const F7 = '\uE037';
 const BACKSPACE = '\uE003';
 const TAB = '\uE004';
 const ENTER = '\uE007';
 const PROJECT_NAME = 'KeyboardSuiteProject';
+
+function sendNativeMacKey(action) {
+  const driverPath = join(packageRoot, 'mac-keyboard-driver.swift');
+  const result = spawnSync('swift', [driverPath, action], { encoding: 'utf8', timeout: 15000 });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
+    throw new Error(`Could not send native macOS keyboard action '${action}': ${reason}`);
+  }
+}
 
 async function enableMacFullKeyboardAccess(homeDirs) {
   if (process.platform !== 'darwin') return null;
@@ -174,7 +181,8 @@ async function tabToCreateButton(browser, nameInput) {
   );
 
   await nameInput.click();
-  await browser.keys(TAB);
+  if (process.platform === 'darwin') sendNativeMacKey('tab');
+  else await browser.keys(TAB);
   try {
     await waitForCreateButtonFocus(2000);
     return { focusedId: await focusedElementId(), navigationMode: 'default' };
@@ -186,33 +194,24 @@ async function tabToCreateButton(browser, nameInput) {
       }));
       throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
     }
-    // macOS documents Control-Tab as moving to the next control from a text field.
-    try {
-      await browser.keys([CONTROL, TAB]);
-      await waitForCreateButtonFocus(2000);
-      return { focusedId: await focusedElementId(), navigationMode: 'control-tab' };
-    } catch {
-      // Continue with the system-wide Tab focus toggle below.
-    }
-    // Control-F7 toggles macOS keyboard focus between text-only and all
-    // controls. AppKit's Full Keyboard Access property reports a separate
-    // accessibility setting and cannot be used to verify this shortcut.
-    for (let toggle = 1; toggle <= 2; toggle += 1) {
-      await browser.keys([CONTROL, F7]);
+    // The WebDriver adapter dispatches synthetic DOM KeyboardEvents on macOS;
+    // use Quartz events so WebKit and the system can apply their native focus rules.
+    for (const action of ['control-tab', 'control-f7', 'fn-control-f7']) {
       await nameInput.click();
-      await browser.keys(TAB);
+      sendNativeMacKey(action);
+      if (action !== 'control-tab') sendNativeMacKey('tab');
       try {
         await waitForCreateButtonFocus(2500);
-        return { focusedId: await focusedElementId(), navigationMode: `control-f7-toggle-${toggle}` };
+        return { focusedId: await focusedElementId(), navigationMode: action };
       } catch {
-        // Try the other system focus mode once, based on observed focus.
+        // Try the next native macOS keyboard route.
       }
     }
     const activeElement = await browser.execute(() => ({
       id: document.activeElement?.id ?? '',
       tag: document.activeElement?.tagName ?? '',
     }));
-    throw new Error(`Tab and Control-Tab did not focus Neues Projekt after checking both Control-F7 modes; active element was ${JSON.stringify(activeElement)}.`);
+    throw new Error(`Native Tab, Control-Tab, and both Control-F7 modes did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
   }
 }
 
