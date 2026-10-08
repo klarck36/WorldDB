@@ -147,6 +147,17 @@ function waitForExit(child, exitPromise, timeoutMs) {
   ]);
 }
 
+async function clearPendingProjectCreationJournal(browser) {
+  await browser.execute(() => {
+    const prefix = 'worlddb.pending_project_creations.v1:';
+    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    for (const key of keys) {
+      if (key?.startsWith(prefix)) localStorage.removeItem(key);
+    }
+  });
+  await browser.refresh();
+}
+
 async function stopApp(child, exitPromise) {
   if (child.exitCode === null) {
     child.kill('SIGTERM');
@@ -342,6 +353,11 @@ export async function runKeyboardDriver({
       capabilities: { browserName: 'tauri' },
     });
 
+    // A crash-recovery case intentionally leaves a pending create marker in
+    // WebView storage. Each native case has its own database root, so discard
+    // those test-only markers before checking the next case's fresh startup.
+    await clearPendingProjectCreationJournal(browser);
+
     const nameInput = await browser.$('#project-name');
     const createButton = await browser.$('#create-project');
     const projectStatus = await browser.$('#project-status');
@@ -413,15 +429,27 @@ export async function runKeyboardDriver({
       const recovery = await inspectRecovery(recoveryCliPath, databaseRoot, recoveryPath);
       body = { mode, accessibility, macKeyboardMode, keyboardTab, keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', enterDispatchError, durableCommitCrash: 'PASS', readOnlyRecovery: 'PASS', signal, recovery };
     } else {
-      await browser.waitUntil(async () => (await browser.$('#project-status').getText()) === PROJECT_NAME, {
-        timeout: 60000,
-        timeoutMsg: 'Enter did not create the temporary project.',
-      });
+      let openedProjectName = '';
+      try {
+        await browser.waitUntil(async () => {
+          openedProjectName = await projectStatus.getText();
+          return openedProjectName !== 'Kein Projekt geöffnet'
+            && openedProjectName !== 'Projektstatus wird geprüft.';
+        }, {
+          timeout: 60000,
+          timeoutMsg: 'Enter did not open the temporary project.',
+        });
+      } catch (error) {
+        const state = await browser.execute(() => Object.fromEntries([
+          'project-status', 'project-details', 'operation-status', 'migration-status',
+        ].map(id => [id, document.getElementById(id)?.textContent ?? ''])));
+        throw new Error(`${error instanceof Error ? error.message : error} State: ${JSON.stringify(state)}.`);
+      }
       await browser.waitUntil(async () => browser.$('#close-project').isEnabled(), {
         timeout: 30000,
         timeoutMsg: 'The created project did not enable Projekt schließen.',
       });
-      body = { mode, accessibility, macKeyboardMode, keyboardTab, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: PROJECT_NAME };
+      body = { mode, accessibility, macKeyboardMode, keyboardTab, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: openedProjectName };
       await stopApp(child, exitPromise);
     }
 

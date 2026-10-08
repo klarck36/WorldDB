@@ -55,6 +55,7 @@ const STREAM_TEST_BYTES: u64 = 100 * 1024 * 1024;
 const STREAM_TEST_CHUNK_BYTES: u32 = 256 * 1024;
 const STREAM_CANCEL_AFTER_BYTES: u64 = 8 * 1024 * 1024;
 const STREAM_MEASUREMENT_RUNS: usize = 5;
+static FACTS_SMOKE_RESULT_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(feature = "sidecar")]
 const SIDECAR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1518,10 +1519,26 @@ async fn export_diagnostics(
     sessions: tauri::State<'_, HostSessionManager>,
     backend: tauri::State<'_, Backend>,
 ) -> Result<diagnostics::DiagnosticExportViewV1, IpcErrorV1> {
+    record_facts_smoke_diagnostic(
+        window.label(),
+        "facts-smoke:diagnostic-export:entered".to_owned(),
+    )?;
     // Decode the raw request into a strict DTO before authorization, native
     // dialogs, or filesystem access can begin.
-    let request: DiagnosticExportRequestV1 =
-        serde_json::from_value(request).map_err(|_| IpcErrorV1::new("invalid_request"))?;
+    let request: DiagnosticExportRequestV1 = match serde_json::from_value(request) {
+        Ok(request) => request,
+        Err(_) => {
+            record_facts_smoke_diagnostic(
+                window.label(),
+                "facts-smoke:diagnostic-export:renderer-request-rejected".to_owned(),
+            )?;
+            return Err(IpcErrorV1::new("invalid_request"));
+        }
+    };
+    record_facts_smoke_diagnostic(
+        window.label(),
+        "facts-smoke:diagnostic-export:request-accepted".to_owned(),
+    )?;
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
@@ -2190,16 +2207,26 @@ fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<
         "window": window_label,
         "succeeded": true,
     });
+    append_facts_smoke_jsonl(&result_path, &record, "ipc_diagnostic_unavailable")
+}
+
+fn append_facts_smoke_jsonl(
+    path: &Path,
+    record: &serde_json::Value,
+    error_code: &'static str,
+) -> Result<(), IpcErrorV1> {
+    let _guard = FACTS_SMOKE_RESULT_LOCK
+        .lock()
+        .map_err(|_| IpcErrorV1::new(error_code))?;
+    let mut encoded = serde_json::to_vec(record).map_err(|_| IpcErrorV1::new(error_code))?;
+    encoded.push(b'\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    serde_json::to_writer(&mut file, &record)
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    file.write_all(b"\n")
-        .map_err(|_| IpcErrorV1::new("ipc_diagnostic_unavailable"))?;
-    Ok(())
+        .open(path)
+        .map_err(|_| IpcErrorV1::new(error_code))?;
+    file.write_all(&encoded)
+        .map_err(|_| IpcErrorV1::new(error_code))
 }
 
 #[tauri::command]
@@ -2854,15 +2881,7 @@ fn record_facts_smoke(
             _ => None,
         }),
     });
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(result_path)
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    let encoded = serde_json::to_vec(&record).map_err(|_| IpcErrorV1::new("host_unavailable"))?;
-    file.write_all(&encoded)
-        .and_then(|()| file.write_all(b"\n"))
-        .map_err(|_| IpcErrorV1::new("host_unavailable"))
+    append_facts_smoke_jsonl(&result_path, &record, "host_unavailable")
 }
 
 fn resolution_outcome_kind(outcome: &ResolutionOutcomeView) -> &'static str {
