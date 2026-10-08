@@ -341,27 +341,46 @@ fn archive_crash_input(input: &[u8], index: u64) -> Result<Option<String>, Strin
     write_crash_input(&directory, input, index).map(Some)
 }
 
-fn run_one(
-    probe: fn(&str, &[u8]) -> Result<bool, String>,
-    target: String,
-    input: Vec<u8>,
-    timeout: Duration,
-) -> Result<bool, String> {
-    let (sender, receiver) = mpsc::sync_channel(1);
-    std::thread::spawn(move || {
-        let result = catch_unwind(AssertUnwindSafe(|| probe(&target, &input)));
-        let _ = sender.send(result);
-    });
-    match receiver.recv_timeout(timeout) {
-        Ok(Ok(Ok(accepted))) => Ok(accepted),
-        Ok(Ok(Err(error))) => Err(error),
-        Ok(Err(_)) => Err("parser panicked".to_owned()),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "parser exceeded {}s input timeout",
-            timeout.as_secs()
-        )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err("parser worker exited without a result".to_owned())
+type ProbeResult = Result<Result<bool, String>, Box<dyn std::any::Any + Send>>;
+
+struct ProbeWorker {
+    request_sender: mpsc::SyncSender<Vec<u8>>,
+    response_receiver: mpsc::Receiver<ProbeResult>,
+}
+
+impl ProbeWorker {
+    fn new(probe: fn(&str, &[u8]) -> Result<bool, String>, target: String) -> Self {
+        let (request_sender, request_receiver) = mpsc::sync_channel::<Vec<u8>>(1);
+        let (response_sender, response_receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            while let Ok(input) = request_receiver.recv() {
+                let result = catch_unwind(AssertUnwindSafe(|| probe(&target, &input)));
+                if response_sender.send(result).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            request_sender,
+            response_receiver,
+        }
+    }
+
+    fn run(&self, input: Vec<u8>, timeout: Duration) -> Result<bool, String> {
+        self.request_sender
+            .send(input)
+            .map_err(|_| "parser worker exited without a result".to_owned())?;
+        match self.response_receiver.recv_timeout(timeout) {
+            Ok(Ok(Ok(accepted))) => Ok(accepted),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err("parser panicked".to_owned()),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+                "parser exceeded {}s input timeout",
+                timeout.as_secs()
+            )),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("parser worker exited without a result".to_owned())
+            }
         }
     }
 }
@@ -403,13 +422,14 @@ pub fn run_campaign(
     let mut rejected = 0_u64;
     let mut crashes = Vec::new();
     let mut crash_corpus_files = Vec::new();
+    let worker = ProbeWorker::new(probe, target.clone());
     while started.elapsed() < duration {
         let index = (rng.next() as usize) % seeds.len();
         let Some(seed_input) = seeds.get(index) else {
             return Err("seed corpus unexpectedly became empty".to_owned());
         };
         let input = mutate(seed_input, rounds, &mut rng, max_bytes);
-        let result = run_one(probe, target.clone(), input.clone(), timeout);
+        let result = worker.run(input.clone(), timeout);
         rounds = rounds.saturating_add(1);
         match result {
             Ok(true) => accepted = accepted.saturating_add(1),

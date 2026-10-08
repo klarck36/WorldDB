@@ -140,3 +140,13 @@ One `cli_arguments` M9-04a retry is active on clean commit `00c41b0` with
 one-worker, 2-GiB temporary-disk cap and 87,000-second wall limit apply. No
 other local campaign was active at launch. This retry does not yet count as
 campaign evidence; retain its final manifest and coverage/corpus artifacts.
+
+## Latest `cli_arguments` result — 8 October 2026, 22:08 CEST
+
+Run `M9-04-cli_arguments-574f524c44444232-20261008T195913Z` ended `FAIL`
+after 515.091 seconds and 9,722,400 rounds with one 2-second parser timeout
+on a 40-byte mutated CLI input. The runner removed 980,132,090 bytes of its
+run-scoped Cargo target cache; current free space is 392.79 GiB on C: and
+231.69 GiB on D:. The harness previously created one OS thread for each input;
+it now reuses one worker thread per campaign. No replacement long campaign is
+active, and the failed run does not satisfy the 24-hour campaign requirement.

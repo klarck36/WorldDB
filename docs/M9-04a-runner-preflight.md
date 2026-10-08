@@ -370,3 +370,17 @@ worker. The manifest is `RUNNING`; the Cargo build cache is confined to this
 run's directory on D:. Between the preflight snapshots C: free space changed by
 about 4 MiB while D: decreased by about 166 MiB during initial dependency/build
 work. The next check is 9 October 2026, 22:15 CEST.
+
+## Result and runner adjustment — 8 October 2026, 22:08 CEST
+
+The retry ended `FAIL` after 515.091 seconds and 9,722,400 rounds. One mutated
+40-byte input, archived as `crash-09722400.bin`, exceeded the 2-second parser
+timeout. The report records 1,525,769 accepted inputs, 8,196,630 rejected
+inputs, and 1 crash. This is an inconclusive timeout rather than a confirmed
+CLI semantic defect; a focused replay and full-duration run are still needed.
+
+The run's peak temporary output was 980,241,040 bytes. Its cleanup log records
+980,132,090 bytes removed from the run-scoped Cargo target cache. After cleanup,
+C: had 392.79 GiB free and D: had 231.69 GiB free. The current runner change
+reuses one parser worker thread per campaign instead of creating a thread for
+every mutated input. No new fuzz campaign or local Cargo build has started.
