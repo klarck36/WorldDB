@@ -36,7 +36,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$WORLDDB_M4_15_ROOT"
-          diskutil info "$WORLDDB_M4_15_ROOT" > "$WORLDDB_M4_15_ROOT/diskutil-info.txt"
+          device=$(df -P "$WORLDDB_M4_15_ROOT" | awk 'END { print $1 }')
+          case "$device" in
+            /dev/*) ;;
+            *) printf 'Could not resolve the volume device for %s: %s\n' "$WORLDDB_M4_15_ROOT" "$device" >&2; exit 1 ;;
+          esac
+          diskutil info "$device" > "$WORLDDB_M4_15_ROOT/diskutil-info.txt"
           filesystem=$(awk -F: '/^[[:space:]]*File System Personality:/ { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit }' "$WORLDDB_M4_15_ROOT/diskutil-info.txt")
           if [ "$filesystem" != APFS ]; then
             printf 'Expected APFS at %s; diskutil reported: %s\n' "$WORLDDB_M4_15_ROOT" "${filesystem:-unavailable}" >&2
