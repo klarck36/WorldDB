@@ -233,7 +233,7 @@ impl MigrationRunJournalStore for MigrationRunJournalFileStore<'_> {
         let mut stage_guard = StagePathGuard::new(stage_path.clone());
         stage_file
             .write_all(&bytes)
-            .and_then(|()| stage_file.sync_all())
+            .and_then(|()| crate::platform_sync::sync_file(&stage_file))
             .map_err(|source| MigrationRunJournalFileStoreError::Io {
                 operation: "write and sync migration-run journal snapshot",
                 source,

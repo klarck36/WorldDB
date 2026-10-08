@@ -1310,7 +1310,7 @@ struct NativeIndexPublication;
 
 impl IndexPublication for NativeIndexPublication {
     fn sync_staged_file(&self, file: &File, _kind: IndexFileKind) -> io::Result<()> {
-        file.sync_all()
+        crate::platform_sync::sync_file(file)
     }
 
     fn publish_generation(&self, stage: &Path, target: &Path) -> io::Result<()> {

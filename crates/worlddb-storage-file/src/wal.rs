@@ -942,7 +942,7 @@ impl WalPrepareLog {
                     operation: "open WAL segment for checkpoint sync",
                     source,
                 })?;
-            file.sync_all().map_err(|source| WalError::Io {
+            crate::platform_sync::sync_file(&file).map_err(|source| WalError::Io {
                 operation: "sync WAL checkpoint segment",
                 source,
             })?;
@@ -968,7 +968,7 @@ impl WalPrepareLog {
                         operation: "publish next WAL segment at checkpoint",
                         source,
                     })?;
-                next_file.sync_all().map_err(|source| WalError::Io {
+                crate::platform_sync::sync_file(&next_file).map_err(|source| WalError::Io {
                     operation: "sync next WAL segment at checkpoint",
                     source,
                 })?;
@@ -1102,7 +1102,7 @@ impl WalPrepareLog {
                         operation: "open reconciled WAL segment for sync",
                         source,
                     })?;
-                file.sync_all().map_err(|source| WalError::Io {
+                crate::platform_sync::sync_file(&file).map_err(|source| WalError::Io {
                     operation: "sync reconciled WAL commit marker",
                     source,
                 })?;
@@ -1678,7 +1678,7 @@ impl WalPrepareLog {
                 );
                 if let Ok(mut signal_file) = File::create(signal_path) {
                     let _ = signal_file.write_all(signal.as_bytes());
-                    let _ = signal_file.sync_all();
+                    let _ = crate::platform_sync::sync_file(&signal_file);
                 }
             }
             std::process::exit(86);
@@ -3258,7 +3258,7 @@ mod tests {
             .map_err(|error| error.to_string())?;
         repaired_after_unknown
             .set_len(reference.byte_offset() + reference.frame_length())
-            .and_then(|()| repaired_after_unknown.sync_all())
+            .and_then(|()| crate::platform_sync::sync_file(&repaired_after_unknown))
             .map_err(|error| error.to_string())?;
         assert_eq!(
             log.operation_status(&lock, operation_id)
@@ -3302,7 +3302,7 @@ mod tests {
                     operation_id,
                     b"m5-22-uncommitted-prepare",
                     |file| {
-                        file.sync_all()?;
+                        crate::platform_sync::sync_file(file)?;
                         std::process::exit(86);
                     },
                 );
@@ -3314,7 +3314,7 @@ mod tests {
                     .append_prepare(&lock, operation_id, &payload)
                     .map_err(|error| error.to_string())?;
                 let _ = log.commit_prepared_with_sync(&lock, reference, |file| {
-                    file.sync_all()?;
+                    crate::platform_sync::sync_file(file)?;
                     std::process::exit(86);
                 });
             }

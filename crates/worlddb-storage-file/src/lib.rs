@@ -15,6 +15,7 @@ mod logical_import;
 mod manifest;
 mod migration_commit;
 mod migration_run_journal;
+mod platform_sync;
 mod purge;
 mod purge_rewrite;
 mod recovery;

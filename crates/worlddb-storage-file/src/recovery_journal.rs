@@ -160,7 +160,7 @@ impl RecoveryJournal {
                 })?;
             journal
                 .set_len(u64::try_from(reserve).unwrap_or(u64::MAX))
-                .and_then(|()| journal.sync_all())
+                .and_then(|()| crate::platform_sync::sync_file(&journal))
                 .map_err(|source| JournalError::Io {
                     operation: "durably remove an incomplete final recovery-journal record",
                     source,
@@ -244,7 +244,7 @@ impl RecoveryJournal {
             operation: "append recovery journal record",
             source,
         })?;
-        file.sync_all().map_err(|source| JournalError::Io {
+        crate::platform_sync::sync_file(&file).map_err(|source| JournalError::Io {
             operation: "sync recovery journal record",
             source,
         })?;

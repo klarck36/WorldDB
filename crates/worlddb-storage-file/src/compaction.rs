@@ -612,11 +612,10 @@ fn create_durable_backup_pin(
                 operation: "write durable backup-pin file",
                 source,
             })?;
-        file.sync_all()
-            .map_err(|source| CompactionError::BackupPinIo {
-                operation: "sync durable backup-pin file",
-                source,
-            })?;
+        crate::platform_sync::sync_file(&file).map_err(|source| CompactionError::BackupPinIo {
+            operation: "sync durable backup-pin file",
+            source,
+        })?;
         crate::manifest::sync_directory(&directory).map_err(|source| {
             CompactionError::BackupPinIo {
                 operation: "sync durable backup-pin directory",

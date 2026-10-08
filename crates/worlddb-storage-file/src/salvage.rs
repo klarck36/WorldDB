@@ -712,7 +712,10 @@ fn write_segment_copy(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .write(true)
         .open(path)
         .map_err(|error| format!("could not create archive copy: {error}"))?;
-    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    if let Err(error) = file
+        .write_all(bytes)
+        .and_then(|()| crate::platform_sync::sync_file(&file))
+    {
         drop(file);
         let _ = fs::remove_file(path);
         return Err(format!("could not durably write archive copy: {error}"));
@@ -732,8 +735,7 @@ fn write_new_synced(
         .map_err(|source| io_error(operation, source))?;
     file.write_all(bytes)
         .map_err(|source| io_error(operation, source))?;
-    file.sync_all()
-        .map_err(|source| io_error(operation, source))
+    crate::platform_sync::sync_file(&file).map_err(|source| io_error(operation, source))
 }
 
 fn sync_dir(path: &Path) -> Result<(), SalvageError> {

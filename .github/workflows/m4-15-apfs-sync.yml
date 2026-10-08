@@ -74,10 +74,23 @@ jobs:
             "$WORLDDB_M4_15_ROOT/samples.csv" \
             > "$WORLDDB_M4_15_ROOT/summary.json"
 
-      - name: Test storage backend sync failure behavior
+      - name: Test storage backend sync, directory, and injected failure behavior
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m4-15-target
-        run: cargo test --locked --package worlddb-storage-file --lib
+          WORLDDB_M4_15_ROOT: ${{ runner.temp }}/worlddb/m4-15-evidence
+        run: |
+          set -euo pipefail
+          cargo test --locked --package worlddb-storage-file --lib 2>&1 \
+            | tee "$WORLDDB_M4_15_ROOT/storage-library-tests.log"
+
+      - name: Test native writer-lock contract on APFS
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m4-15-target
+          WORLDDB_M4_15_ROOT: ${{ runner.temp }}/worlddb/m4-15-evidence
+        run: |
+          set -euo pipefail
+          cargo test --locked --package worlddb-storage-file --test m5_02_contract 2>&1 \
+            | tee "$WORLDDB_M4_15_ROOT/storage-writer-lock-tests.log"
 
       - name: Archive APFS measurement evidence
         if: always()

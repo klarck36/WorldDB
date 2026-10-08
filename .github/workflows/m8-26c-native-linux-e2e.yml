@@ -70,6 +70,18 @@ jobs:
       - name: Verify PowerShell runtime
         run: pwsh --version
 
+      - name: Test Linux ext4 storage adapter contracts
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26c-target
+          WORLDDB_M8_26C_EVIDENCE_ROOT: ${{ runner.temp }}/worlddb/m8-26c-evidence
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORLDDB_M8_26C_EVIDENCE_ROOT/adapter-tests"
+          cargo test --locked --package worlddb-storage-file --lib 2>&1 \
+            | tee "$WORLDDB_M8_26C_EVIDENCE_ROOT/adapter-tests/storage-library-tests.log"
+          cargo test --locked --package worlddb-storage-file --test m5_02_contract 2>&1 \
+            | tee "$WORLDDB_M8_26C_EVIDENCE_ROOT/adapter-tests/writer-lock-contract-tests.log"
+
       - name: Run Linux ext4 native suite
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26c-target
@@ -81,6 +93,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: m8-26c-native-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worlddb/m8-26c-evidence/m8-26c-*/
+          path: ${{ runner.temp }}/worlddb/m8-26c-evidence/
           if-no-files-found: warn
           retention-days: 30

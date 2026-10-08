@@ -1026,7 +1026,7 @@ fn write_report(layout: &DatabaseLayout, bytes: &[u8]) -> Result<(), PurgeRewrit
             operation: "write staged PurgeReport",
             source,
         })?;
-    file.sync_all().map_err(|source| PurgeRewriteError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| PurgeRewriteError::Io {
         operation: "sync staged PurgeReport",
         source,
     })?;

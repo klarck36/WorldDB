@@ -17,10 +17,26 @@ The earlier scheduling deferral for Linux and macOS work was superseded on 7 Oct
 |---|---|---|
 | M0-14 | External Linux/macOS CI artifacts and provider run | Run the full GitHub Actions matrix on the current product head after platform validation |
 | M4-15 | APFS fsync/F_FULLFSYNC measurements, injected sync failures, and ODE-006 decision | Complete: run 37772346504 and artifact 11548094744 record measurements, negative controls, storage failure tests, and the policy decision in `docs/M4-15-environment-blocker.md` |
-| M5-08 | Linux/ext4 lock, sync, rename, directory-sync, and fault behavior | Use an ext4 checkout after the active M8-26b run releases the single RUNNING slot |
-| M5-10 | macOS/APFS adapter behavior under the M4-15 policy | Implement the APFS full-sync path and test fail-closed behavior for unsupported/error results on macOS CI |
+| M5-08 | Linux/ext4 lock, sync, rename, directory-sync, and fault behavior | Run the storage library and M5-02 writer-lock contracts in the ext4-verified M8-26c hosted workflow |
+| M5-10 | macOS/APFS adapter behavior under the M4-15 policy | The F_FULLFSYNC path and focused APFS/error tests are implemented locally; run the APFS workflow on the updated head |
 | M5-21 through M5-22a | Windows/NTFS profile, crash matrix, and local M6-M8 pre-gate passed 2026-10-02 | The existing windows_ntfs_fixed_local_v1 profile permits local development; it makes no cross-platform durability or power-loss claim |
 | M5-23 | Full cross-platform storage gate | Complete after M4-15, M5-08, and M5-10 |
+
+## Latest native platform run — 8 October 2026
+
+GitHub Actions run `37830005391` used PR head `771ffa1cd4e126f727d3e4234cc78033a3c628b8`.
+Its clean merge checkout was `64ec5afd4b53d856b46323e98e4ab5859e630208`.
+
+- M8-26b succeeded on macOS 26.6.2 arm64/APFS: all 14 cases passed. Artifact
+  `11573963311`, SHA-256
+  `b1bd9f6615447796939751724397bd74d67cc2baa2ca47a793a0d329900e0a9a`.
+- M8-26c verified both the checkout and runner temp directory as ext4, then
+  failed before native cases because the in-process Tauri build selected no
+  `rfd` dialog backend. The manifest records 2 PASS, 1 FAIL, and 8 NOT_RUN.
+  Artifact `11573884041`, SHA-256
+  `ef92e6f9dfb4f4f7cfd2afca0019192abb5ec5e91d4380059bb83a5d059f465d`.
+  The desktop-shell manifest now explicitly enables the GTK3 backend; the next
+  M8-26c run also executes the storage and writer-lock contracts on ext4.
 
 ## Release rule
 

@@ -988,7 +988,7 @@ pub(crate) fn write_segment_file_with_checkpoint(
             source,
         })?;
     checkpoint(SegmentIoCheckpoint::ContentWritten);
-    file.sync_all().map_err(|source| SegmentError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| SegmentError::Io {
         operation: "sync immutable history segment",
         source,
     })?;

@@ -1463,7 +1463,7 @@ fn create_journal(path: &Path, binding: JournalBinding) -> Result<(), StorageUpg
             operation: "create storage-upgrade journal",
             source,
         })?;
-    file.sync_all().map_err(|source| StorageUpgradeError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| StorageUpgradeError::Io {
         operation: "sync new storage-upgrade journal",
         source,
     })?;
@@ -1512,7 +1512,7 @@ fn append_journal_record(
             operation: "append storage-upgrade journal state",
             source,
         })?;
-    file.sync_all().map_err(|source| StorageUpgradeError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| StorageUpgradeError::Io {
         operation: "sync storage-upgrade journal state",
         source,
     })
@@ -1697,7 +1697,7 @@ fn repair_torn_journal_tail(path: &Path, valid_length: usize) -> Result<(), Stor
                 operation: "truncate torn storage-upgrade journal tail",
                 source,
             })?;
-        file.sync_all().map_err(|source| StorageUpgradeError::Io {
+        crate::platform_sync::sync_file(&file).map_err(|source| StorageUpgradeError::Io {
             operation: "sync repaired storage-upgrade journal",
             source,
         })?;
@@ -1731,7 +1731,7 @@ fn ensure_staged_pointer(
             operation: "write staged CURRENT v2 pointer",
             source,
         })?;
-    file.sync_all().map_err(|source| StorageUpgradeError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| StorageUpgradeError::Io {
         operation: "sync staged CURRENT v2 pointer",
         source,
     })?;

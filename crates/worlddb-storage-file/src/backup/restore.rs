@@ -766,7 +766,7 @@ fn replace_database_id(root: &Path, database_id: DatabaseId) -> Result<(), Resto
         };
         if let Err(source) = file
             .write_all(&database_id.to_bytes())
-            .and_then(|()| file.sync_all())
+            .and_then(|()| crate::platform_sync::sync_file(&file))
         {
             drop(file);
             let _ = fs::remove_file(&stage);

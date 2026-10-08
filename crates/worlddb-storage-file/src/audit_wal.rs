@@ -1106,7 +1106,7 @@ fn persist_quarantined_tail(
             operation: "write staged raw-read audit quarantine copy",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync staged raw-read audit quarantine copy",
         source,
     })?;
@@ -1282,7 +1282,7 @@ fn truncate_wal_to(
         return Err(RawReadAuditError::CorruptWAL);
     }
     file.set_len(safe_length)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::platform_sync::sync_file(&file))
         .map_err(|source| RawReadAuditError::Io {
             operation: "truncate and sync raw-read audit WAL to verified commit prefix",
             source,
@@ -1373,7 +1373,7 @@ fn persist_immutable_marker(
             source,
         })?;
     file.write_all(expected)
-        .and_then(|()| file.sync_all())
+        .and_then(|()| crate::platform_sync::sync_file(&file))
         .map_err(|source| RawReadAuditError::Io {
             operation: "write and sync staged raw-read audit recovery marker",
             source,
@@ -1569,7 +1569,7 @@ fn append_attempt(
             operation: "append raw-read audit prepare",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync raw-read audit prepare",
         source,
     })?;
@@ -1578,7 +1578,7 @@ fn append_attempt(
             operation: "append raw-read audit commit marker",
             source,
         })?;
-    file.sync_all().map_err(|source| RawReadAuditError::Io {
+    crate::platform_sync::sync_file(&file).map_err(|source| RawReadAuditError::Io {
         operation: "sync raw-read audit commit marker",
         source,
     })?;
@@ -2038,7 +2038,7 @@ mod tests {
             .open(&wal_path)
             .map_err(|error| error.to_string())?;
         file.write_all(&tail).map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
+        crate::platform_sync::sync_file(&file).map_err(|error| error.to_string())?;
         drop(file);
 
         for (checkpoint, point_name) in [

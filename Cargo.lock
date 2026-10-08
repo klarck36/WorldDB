@@ -417,6 +417,7 @@ dependencies = [
  "blake3",
  "fs4",
  "getrandom",
+ "libc",
  "windows-sys",
  "worlddb-core",
 ]
