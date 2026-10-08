@@ -150,3 +150,10 @@ run-scoped Cargo target cache; current free space is 392.79 GiB on C: and
 231.69 GiB on D:. The harness previously created one OS thread for each input;
 it now reuses one worker thread per campaign. No replacement long campaign is
 active, and the failed run does not satisfy the 24-hour campaign requirement.
+
+Source review also found that the CLI fuzz entry point could dispatch accepted
+mutations into real file/process handlers using paths from the seed corpus.
+Because the campaign's temporary-disk cap covers only its D: run directory,
+that did not bound writes to other paths. Test-mode parser guards now stop all
+CLI execution entry points before I/O or process launch. No campaign was
+restarted; CI must verify this boundary before another full-duration run.

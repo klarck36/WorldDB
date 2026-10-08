@@ -1682,6 +1682,7 @@ fn parse_canonical_u64(value: &str) -> Result<u64, CliError> {
 }
 
 fn run_migration_command(request: MigrationCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let plan = load_migration_plan(&request.plan_path)?;
     if request.action == MigrationCommandAction::Plan && !request.steps.is_empty() {
         return Err(CliError::invalid_request());
@@ -2124,7 +2125,51 @@ fn load_policy_history(
 }
 
 #[cfg(test)]
+std::thread_local! {
+    static PARSER_ONLY_FUZZ_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+struct ParserOnlyFuzzGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl ParserOnlyFuzzGuard {
+    fn enter() -> Self {
+        let previous = PARSER_ONLY_FUZZ_MODE.with(|mode| mode.replace(true));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ParserOnlyFuzzGuard {
+    fn drop(&mut self) {
+        PARSER_ONLY_FUZZ_MODE.with(|mode| mode.set(self.previous));
+    }
+}
+
+#[cfg(test)]
+fn parser_only_fuzz_mode() -> bool {
+    PARSER_ONLY_FUZZ_MODE.with(|mode| mode.get())
+}
+
+#[cfg(not(test))]
+fn parser_only_fuzz_mode() -> bool {
+    false
+}
+
+fn reject_fuzz_side_effects() -> Result<(), CliError> {
+    if parser_only_fuzz_mode() {
+        Err(CliError::invalid_request())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn fuzz_arguments(bytes: &[u8]) -> bool {
+    let _parse_only = ParserOnlyFuzzGuard::enter();
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
     };
@@ -2511,6 +2556,7 @@ fn run_storage_upgrade(
     backup_path: &Path,
     restore_path: &Path,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(database_path)?;
     let layout = project.layout.clone();
@@ -2769,6 +2815,7 @@ fn run_backup_create(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let source = canonical_project_root(source)?;
     let layout = DatabaseLayout::open(&source).map_err(map_storage_file_error)?;
@@ -2829,6 +2876,7 @@ fn run_backup_verify(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let verification = match profile {
         BackupProfile::ExactDatabase => verify_exact_backup(backup, None),
         BackupProfile::AuditComplete => verify_audit_complete_backup(backup, None),
@@ -2852,6 +2900,7 @@ fn run_restore_clone(
     profile: BackupProfile,
     audit_scope: BackupAuditScope,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let authorization_project = open_current_policy_project(authorization_project)?;
     let policy_view = authorization_project
@@ -2932,6 +2981,7 @@ fn run_restore_clone(
 }
 
 fn run_export_command(request: ExportCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let logical_scope = LogicalExportScope::new(
         request.from_revision,
         request.through_revision,
@@ -3035,6 +3085,7 @@ fn run_import_plan(
     output_path: &Path,
     mappings: Vec<LogicalImportIdMapping>,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(destination_path)?;
     let policy = project
@@ -3077,6 +3128,7 @@ fn run_import_prepare(
     input_path: &Path,
     plan_path: &Path,
 ) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let principal = current_host_principal()?;
     let project = open_current_policy_project(destination_path)?;
     let destination_database_id = project
@@ -3148,6 +3200,7 @@ fn run_import_prepare(
 }
 
 fn run_purge_plan(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let report_path = request
         .report_path
         .as_deref()
@@ -3181,6 +3234,7 @@ fn run_purge_plan(request: PurgeCommandRequest) -> Result<Success, CliError> {
 }
 
 fn run_purge(request: PurgeCommandRequest) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let confirmation = request.confirmation.ok_or_else(CliError::invalid_request)?;
     validate_purge_destinations(
         &request.destination_path,
@@ -3681,6 +3735,7 @@ fn reject_restore_target_within_project(
 }
 
 fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
     let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
     let report = StorageVerifier::new(layout)
@@ -3695,6 +3750,7 @@ fn run_storage_check(path: &Path, kind: CheckKind) -> Result<Success, CliError> 
 }
 
 fn run_recovery(path: &Path) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(path).map_err(map_storage_file_error)?;
     let lock = layout.try_writer_lock().map_err(map_writer_lock_error)?;
     let outcome = RecoveryManager::new(layout.clone())
@@ -3714,6 +3770,7 @@ fn run_recovery(path: &Path) -> Result<Success, CliError> {
 }
 
 fn run_salvage(source: &Path, target: &Path) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let layout = DatabaseLayout::open(source).map_err(map_storage_file_error)?;
     let lock = layout.try_read_only_lock().map_err(map_writer_lock_error)?;
     let report = SalvageManager::new(layout)
@@ -3745,6 +3802,7 @@ fn is_version_namespace(value: &str) -> bool {
 }
 
 fn run_adapter(mut arguments: VecDeque<OsString>) -> Result<Success, CliError> {
+    reject_fuzz_side_effects()?;
     let mut manifest_path = None;
     let mut input_path = None;
     let mut output_path = None;

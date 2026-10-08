@@ -384,3 +384,17 @@ The run's peak temporary output was 980,241,040 bytes. Its cleanup log records
 C: had 392.79 GiB free and D: had 231.69 GiB free. The current runner change
 reuses one parser worker thread per campaign instead of creating a thread for
 every mutated input. No new fuzz campaign or local Cargo build has started.
+
+## Parser-only side-effect boundary — 8 October 2026
+
+Source review found that `cli_arguments` called the normal CLI dispatcher, so
+accepted mutations could reach real storage, backup, export, import, recovery,
+purge, or adapter-process handlers. The campaign's disk cap measures only its
+run directory on D: and cannot bound a handler writing to a command-line path
+outside that directory. The current code adds a test-only parser-mode guard at
+all CLI execution entry points; `fuzz_arguments` enables it around parsing, so
+these paths reject before storage access or process launch. The two literal
+seed destinations `C:\worlddb\synthetic` and
+`C:\worlddb\synthetic.wdbx` were absent when checked. No prior write to those
+paths is established by the run manifest. No campaign is active; a new one
+waits for the guard's CI verification.
