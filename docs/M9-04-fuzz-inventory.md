@@ -132,3 +132,11 @@ passing tests. No new long campaign or local Cargo build was started for this
 update. The accumulated fuzz build caches reached about 9.45 GiB; the user had
 to free system storage afterward. These campaigns must remain sequential and
 must use an explicitly selected output volume with adequate free space.
+
+## Safe retry started — 8 October 2026, 21:59 CEST
+
+One `cli_arguments` M9-04a retry is active on clean commit `00c41b0` with
+`D:\WorldDB\fuzz-results` and `CARGO_HOME` on the separate HDD. The runner's
+one-worker, 2-GiB temporary-disk cap and 87,000-second wall limit apply. No
+other local campaign was active at launch. This retry does not yet count as
+campaign evidence; retain its final manifest and coverage/corpus artifacts.

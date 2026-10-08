@@ -1,6 +1,6 @@
 # M9-04a – Rust parser runner preflight
 
-**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS INCOMPLETE; NO RUNS ACTIVE
+**Status:** PREFLIGHT COMPLETE; ONE LONG CAMPAIGN ACTIVE ON D:; REMAINING CAMPAIGNS INCOMPLETE
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -358,3 +358,15 @@ crashes, but its manifest is `TIMEOUT`, so it is not a passing campaign.
 no crashes. The `cli_arguments` retry failed after 1,517.037 seconds when a
 mutation exceeded the 2-second input timeout. No M9-04a process is active.
 These results supersede the 14:40 monitoring snapshot above.
+
+## Safe retry — 8 October 2026, 21:59 CEST
+
+`M9-04-cli_arguments-574f524c44444232-20261008T195913Z` is running from clean
+commit `00c41b0`. Its output root and `CARGO_HOME` are on `D:`; host inventory
+confirms `D:` is the separate WDC HDD while `C:` is the Samsung 970 EVO Plus
+SSD. The `small_text` profile requests 86,400 seconds, permits 87,000 seconds
+wall time, caps the run at 1 GiB RSS and 2 GiB temporary disk, and uses one
+worker. The manifest is `RUNNING`; the Cargo build cache is confined to this
+run's directory on D:. Between the preflight snapshots C: free space changed by
+about 4 MiB while D: decreased by about 166 MiB during initial dependency/build
+work. The next check is 9 October 2026, 22:15 CEST.
