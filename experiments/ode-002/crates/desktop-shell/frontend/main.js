@@ -461,6 +461,7 @@ let transferBusy = false;
 let factBusy = false;
 let diagnosticExportBusy = false;
 let factsSmokeActive = false;
+let startupSmokeModeEnabled = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
@@ -6609,7 +6610,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       const listen = window.__TAURI__?.event?.listen;
       if (listen) {
         await listen("project-state-changed", async () => {
-          if (factBusy) return;
+          if (factBusy || startupSmokeModeEnabled) return;
           try {
             await refreshProject(sessionId);
           } catch {
@@ -6651,6 +6652,7 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       if (securityMode.protocol_version !== 1 || projectMode.protocol_version !== 1) {
         throw new Error("unsupported_protocol");
       }
+      startupSmokeModeEnabled = projectMode.startup_smoke_enabled;
       if (securityMode.enabled) await runSecurityProbes(sessionId);
 
       await invoke("health", {
@@ -6710,8 +6712,8 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       }
 
       window.setInterval(() => {
-        if (!factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
-        if (!jobsBusy && projectOpen) refreshJobs(sessionId).catch(() => {});
+        if (!startupSmokeModeEnabled && !factBusy && !projectBusy) refreshProject(sessionId).catch(() => {});
+        if (!startupSmokeModeEnabled && !jobsBusy && projectOpen) refreshJobs(sessionId).catch(() => {});
       }, 1200);
     })
     .catch((error) => {

@@ -22,9 +22,16 @@ const PROJECT_NAME = 'KeyboardSuiteProject';
 
 async function enableMacFullKeyboardAccess(homeDir) {
   if (process.platform !== 'darwin') return null;
+  const version = spawnSync('sw_vers', ['-productVersion'], { encoding: 'utf8' });
+  const majorVersion = Number(version.stdout?.trim().split('.')[0]);
+  if (version.error || version.status !== 0 || !Number.isInteger(majorVersion)) {
+    throw new Error(`Could not determine macOS version for keyboard navigation: ${version.error?.message ?? version.stderr ?? `exit ${version.status}`}`);
+  }
+  // Sonoma changed AppleKeyboardUIMode's enabled value from 3 to 2.
+  const keyboardMode = majorVersion >= 14 ? 2 : 3;
   await mkdir(join(homeDir, 'Library', 'Preferences'), { recursive: true });
   const preferenceEnv = { ...process.env, HOME: homeDir };
-  const written = spawnSync('defaults', ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', '3'], {
+  const written = spawnSync('defaults', ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', String(keyboardMode)], {
     encoding: 'utf8',
     env: preferenceEnv,
   });
@@ -35,10 +42,10 @@ async function enableMacFullKeyboardAccess(homeDir) {
     encoding: 'utf8',
     env: preferenceEnv,
   });
-  if (read.error || read.status !== 0 || read.stdout.trim() !== '3') {
-    throw new Error(`macOS full keyboard access did not verify: ${read.error?.message ?? read.stdout ?? read.stderr ?? `exit ${read.status}`}`);
+  if (read.error || read.status !== 0 || read.stdout.trim() !== String(keyboardMode)) {
+    throw new Error(`macOS full keyboard access did not verify mode ${keyboardMode}: ${read.error?.message ?? read.stdout ?? read.stderr ?? `exit ${read.status}`}`);
   }
-  return 3;
+  return keyboardMode;
 }
 
 function unsetTestEnvironment(env) {

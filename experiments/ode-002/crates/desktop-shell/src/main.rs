@@ -1810,6 +1810,14 @@ fn manage_schema(
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
+    let trace_facts_smoke_schema = window.label() == "primary"
+        && std::env::var_os("WORLDDB_ODE_FACTS_SMOKE_RESULT").is_some();
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:schema-ipc:entered".to_owned(),
+        )?;
+    }
     sessions
         .authorize(
             window.label(),
@@ -1817,6 +1825,12 @@ fn manage_schema(
             HostCapability::ProjectOpen,
         )
         .map_err(map_session_error)?;
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:schema-ipc:authorized".to_owned(),
+        )?;
+    }
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
     let facts_smoke_predicate = matches!(
@@ -1846,7 +1860,22 @@ fn manage_schema(
             "facts-smoke:entity-type-deprecation:entered".to_owned(),
         )?;
     }
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:schema-ipc:dispatching".to_owned(),
+        )?;
+    }
     let result = backend.schema_with_operation_id(request.command, operation_id);
+    if trace_facts_smoke_schema {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            format!(
+                "facts-smoke:schema-ipc:engine-returned:{}",
+                if result.is_ok() { "ok" } else { "rejected" }
+            ),
+        )?;
+    }
     if facts_smoke_predicate {
         record_facts_smoke_diagnostic(
             window.label(),
@@ -1876,6 +1905,12 @@ fn manage_schema(
     match result {
         Ok(result) => {
             record_schema_smoke(window.label(), operation, true, Some(&result), &backend)?;
+            if trace_facts_smoke_schema {
+                record_facts_smoke_diagnostic(
+                    window.label(),
+                    "facts-smoke:schema-ipc:recorded".to_owned(),
+                )?;
+            }
             Ok(SchemaResponseV1 {
                 protocol_version: IPC_PROTOCOL_VERSION,
                 result,

@@ -74,6 +74,36 @@ function Get-ListeningTcpConnections([int]$ProcessId) {
     return @($rows | Select-Object -Skip 1 | Where-Object { $_.Trim() })
 }
 
+function Stop-SmokeSidecarChild {
+    if ($Mode -ne 'sidecar' -or [string]::IsNullOrWhiteSpace($EngineExecutablePath)) { return }
+    if (-not (Test-Path -LiteralPath $primaryProjectPath -PathType Leaf)) { return }
+    try {
+        $project = Get-Content -LiteralPath $primaryProjectPath -Raw | ConvertFrom-Json
+        $engineProcessId = [int]$project.engine.engine_process_id
+    } catch {
+        return
+    }
+    if ($engineProcessId -le 0 -or ($null -ne $process -and $engineProcessId -eq $process.Id)) { return }
+    try {
+        $engine = [System.Diagnostics.Process]::GetProcessById($engineProcessId)
+        if ($engine.HasExited) { return }
+        $actualPath = $engine.MainModule.FileName
+        $expectedPath = [System.IO.Path]::GetFullPath($EngineExecutablePath)
+        if (-not [string]::Equals([System.IO.Path]::GetFullPath($actualPath), $expectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Warning "Refusing to stop process $engineProcessId because it is not the configured smoke-test sidecar."
+            return
+        }
+        $engine.Kill()
+        if (-not $engine.WaitForExit(5000)) {
+            Write-Warning "The smoke-test sidecar process $engineProcessId did not stop within five seconds."
+        }
+    } catch [System.ArgumentException] {
+        # The sidecar already exited and released its database lock.
+    } catch {
+        Write-Warning "Could not confirm sidecar cleanup for process $engineProcessId: $_"
+    }
+}
+
 function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     while (@($Paths | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) }).Count -gt 0) {
@@ -661,6 +691,7 @@ finally {
             $process.WaitForExit()
         }
     }
+    Stop-SmokeSidecarChild
     $resolvedRoot = [System.IO.Path]::GetFullPath($testRoot)
     $tempPrefix = $tempBase.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
     if (-not $resolvedRoot.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
