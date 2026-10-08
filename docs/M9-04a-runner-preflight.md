@@ -298,3 +298,35 @@ Both active M9-04a processes were alive at 12:53 CEST. Samples were refreshed th
 | `typescript.json_envelope` | 18840 | 79,776.2 s | 78,625.8 s | 220.6 MiB | 90,310 B |
 
 C: had 367.43 GiB free and D: 215.81 GiB free. The fresh `cli_arguments` retry remains queued until these campaigns finish. Next process and sample check: 13:10 CEST.
+## Monitoring update — 8 October 2026, 13:10 CEST
+
+Both active M9-04a campaigns were still alive at 13:10 CEST. Their latest samples were written at 13:10:08; neither active run has a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 81,000.2 s | 92,875.4 s | 63.3 MiB | 1,210,786,739 B |
+| `typescript.json_envelope` | 18840 | 80,626.4 s | 79,464.6 s | 220.6 MiB | 91,270 B |
+
+C: remained at 367.43 GiB free and D: at 215.81 GiB free. `cli_arguments` stays queued until the active campaigns finish. Next check: 13:25 CEST.
+
+## Monitoring update — 8 October 2026, 13:55 CEST
+
+Both M9-04a campaigns remain active. Their resource samples were written at 13:55:12–13:55:25; neither run folder contains `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 83,717.4 s | 95,993.0 s | 63.3 MiB | 1,210,790,157 B |
+| `typescript.json_envelope` | 18840 | 83,330.5 s | 82,136.7 s | 220.5 MiB | 94,342 B |
+
+C: remains at 367.45 GiB free and D: at 215.81 GiB free. The sample files are about 91–102 KiB each; the queued `cli_arguments` retry remains unchanged. Next check: 14:10 CEST.
+
+## Monitoring update — 8 October 2026, 14:17 CEST
+
+Both M9-04a campaigns were still alive at 14:17 CEST. Their resource samples were refreshed at 14:17:00 and 14:16:40; neither run has `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 85,012.2 s | 97,481.9 s | 63.3 MiB | 1,210,791,787 B |
+| `typescript.json_envelope` | 18840 | 84,650.4 s | 83,441.0 s | 220.6 MiB | 95,843 B |
+
+C: had 367.43 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains queued pending completion and evidence collection. Next process and sample check: 14:32 CEST.

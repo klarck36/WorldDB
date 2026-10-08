@@ -1,34 +1,47 @@
-name: M8-26b Native macOS E2E
+name: M8-26c Native Linux E2E
 
 on:
-  pull_request:
-    branches:
-      - codex/worlddb-project-integration
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "experiments/ode-002/**"
-      - "crates/**"
-      - "tools/check_native_e2e_suite.py"
-      - "tools/test_native_e2e_suite.py"
-      - "docs/schemas/native-e2e-evidence.schema.json"
-      - ".github/workflows/m8-26b-native-macos-e2e.yml"
-      - ".github/workflows/m8-26c-native-linux-e2e.yml"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
-  native-macos-e2e:
-    name: Native macOS APFS end-to-end
-    runs-on: macos-latest
+  native-linux-e2e:
+    name: Native Linux ext4 end-to-end
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - name: Check out clean commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Assert native ext4 work and evidence filesystems
+        run: |
+          set -euo pipefail
+          for path in "$GITHUB_WORKSPACE" "$RUNNER_TEMP"; do
+            filesystem="$(findmnt -n -T "$path" -o FSTYPE)"
+            printf '%s: %s\n' "$path" "$filesystem"
+            test "$filesystem" = ext4
+          done
+
+      - name: Install Tauri and native smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            curl \
+            dbus-x11 \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            libssl-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            lsof \
+            xvfb
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -57,22 +70,17 @@ jobs:
       - name: Verify PowerShell runtime
         run: pwsh --version
 
-      - name: Run macOS APFS native suite
+      - name: Run Linux ext4 native suite
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26b-target
-          WORLDDB_M8_26B_EVIDENCE_ROOT: ${{ runner.temp }}/worlddb/m8-26b-evidence
-        run: node experiments/ode-002/scripts/run-native-e2e-macos.mjs --evidence-root "$WORLDDB_M8_26B_EVIDENCE_ROOT"
+          CARGO_TARGET_DIR: ${{ runner.temp }}/worlddb/m8-26c-target
+          WORLDDB_M8_26C_EVIDENCE_ROOT: ${{ runner.temp }}/worlddb/m8-26c-evidence
+        run: dbus-run-session -- xvfb-run -a node experiments/ode-002/scripts/run-native-e2e-linux.mjs --evidence-root "$WORLDDB_M8_26C_EVIDENCE_ROOT"
 
       - name: Archive native E2E evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: m8-26b-native-macos-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/worlddb/m8-26b-evidence/m8-26b-*/
+          name: m8-26c-native-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worlddb/m8-26c-evidence/m8-26c-*/
           if-no-files-found: warn
           retention-days: 30
-
-  native-linux-e2e:
-    name: Native Linux ext4 end-to-end
-    needs: native-macos-e2e
-    uses: ./.github/workflows/m8-26c-native-linux-e2e.yml

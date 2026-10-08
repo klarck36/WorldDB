@@ -20,6 +20,27 @@ const TAB = '\uE004';
 const ENTER = '\uE007';
 const PROJECT_NAME = 'KeyboardSuiteProject';
 
+async function enableMacFullKeyboardAccess(homeDir) {
+  if (process.platform !== 'darwin') return null;
+  await mkdir(join(homeDir, 'Library', 'Preferences'), { recursive: true });
+  const preferenceEnv = { ...process.env, HOME: homeDir };
+  const written = spawnSync('defaults', ['write', 'NSGlobalDomain', 'AppleKeyboardUIMode', '-int', '3'], {
+    encoding: 'utf8',
+    env: preferenceEnv,
+  });
+  if (written.error || written.status !== 0) {
+    throw new Error(`Could not enable macOS full keyboard access: ${written.error?.message ?? written.stderr ?? `exit ${written.status}`}`);
+  }
+  const read = spawnSync('defaults', ['read', 'NSGlobalDomain', 'AppleKeyboardUIMode'], {
+    encoding: 'utf8',
+    env: preferenceEnv,
+  });
+  if (read.error || read.status !== 0 || read.stdout.trim() !== '3') {
+    throw new Error(`macOS full keyboard access did not verify: ${read.error?.message ?? read.stdout ?? read.stderr ?? `exit ${read.status}`}`);
+  }
+  return 3;
+}
+
 function unsetTestEnvironment(env) {
   for (const key of Object.keys(env)) {
     if (key.startsWith('WORLDDB_ODE_') || key.startsWith('WORLDDB_M8_26_')) delete env[key];
@@ -130,6 +151,13 @@ async function tabToCreateButton(browser, nameInput) {
     await waitForCreateButtonFocus(2000);
     return { focusedId: await focusedElementId(), navigationMode: 'default' };
   } catch {
+    if (process.platform !== 'darwin') {
+      const activeElement = await browser.execute(() => ({
+        id: document.activeElement?.id ?? '',
+        tag: document.activeElement?.tagName ?? '',
+      }));
+      throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
+    }
     // Control-F7 toggles macOS keyboard focus between text-only and all
     // controls. AppKit's Full Keyboard Access property reports a separate
     // accessibility setting and cannot be used to verify this shortcut.
@@ -196,6 +224,7 @@ export async function runKeyboardDriver({
   await mkdir(tmpRoot, { recursive: true });
   const isolatedHome = join(tmpRoot, 'home');
   await mkdir(isolatedHome, { recursive: true });
+  const macKeyboardMode = await enableMacFullKeyboardAccess(isolatedHome);
   const port = await unusedLoopbackPort();
   const reportPath = join(caseRoot, 'app-startup.json');
   const crashSignalPath = join(caseRoot, 'crash-signal.txt');
@@ -311,7 +340,7 @@ export async function runKeyboardDriver({
       }
       await stopApp(child, exitPromise);
       const recovery = await inspectRecovery(recoveryCliPath, databaseRoot, recoveryPath);
-      body = { mode, accessibility, keyboardTab, keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', enterDispatchError, durableCommitCrash: 'PASS', readOnlyRecovery: 'PASS', signal, recovery };
+      body = { mode, accessibility, macKeyboardMode, keyboardTab, keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', enterDispatchError, durableCommitCrash: 'PASS', readOnlyRecovery: 'PASS', signal, recovery };
     } else {
       await browser.waitUntil(async () => (await browser.$('#project-status').getText()) === PROJECT_NAME, {
         timeout: 60000,
@@ -321,7 +350,7 @@ export async function runKeyboardDriver({
         timeout: 30000,
         timeoutMsg: 'The created project did not enable Projekt schließen.',
       });
-      body = { mode, accessibility, keyboardTab, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: PROJECT_NAME };
+      body = { mode, accessibility, macKeyboardMode, keyboardTab, keyboardTextEntry: 'PASS', keyboardTabToCreate: 'PASS', enterActivatedCreate: 'PASS', projectName: PROJECT_NAME };
       await stopApp(child, exitPromise);
     }
 

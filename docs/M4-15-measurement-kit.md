@@ -34,10 +34,12 @@ The summarizer reports the median and nearest-rank p95/p99 latency for successfu
 
 ## Required error-injection evidence
 
-The probe's closed-descriptor cases must return `-1` with `EBADF`; retain their actual values. Before closing M4-15, also exercise the selected storage-backend sync abstraction with injected sync failures, including an I/O failure, and show that a failed required sync never reports Machine durability or a committed receipt. Keep injected failures clearly separated from errors observed on APFS hardware. The backend-level injection is still pending because the persistent storage backend is implemented in M5.
+The probe's closed-descriptor cases must return `-1` with `EBADF`; retain their actual values. Run 37772346504 completed the storage crate's sync-failure test suite successfully, providing injected storage-abstraction evidence separately from the APFS measurements. The Mac-specific adapter still needs to implement the chosen full-sync policy and cover unsupported-operation behavior in M5-10; these measurements do not establish that adapter behavior.
 
 ## Decision record
 
-Use the measured API returns and latency distribution together with the device/OS metadata to decide the `Durability::Machine` behavior. The working recommendation remains: require the stronger full-sync operation where supported; reject writable Machine-durability mode if that guarantee cannot be established. Do not mark ODE-006 resolved from this probe alone: power-loss claims and backend failure handling need their own evidence.
+On the macOS 26.6.2 arm64 hosted APFS runner, all 1,000 `fsync` and all 1,000 `F_FULLFSYNC` calls succeeded. Median latency was 0.126 ms for `fsync` and 0.977 ms for `F_FULLFSYNC`; p95 was 0.387 ms and 2.963 ms; p99 was 11.594 ms and 11.234 ms. Both closed-descriptor controls returned `-1`/`EBADF`. The storage crate sync-failure tests also passed in run 37772346504.
+
+Decision for ODE-006: use the stronger full-sync operation for `Durability::Machine` on APFS when supported; reject writable Machine-durability mode if that guarantee cannot be established. M4-15's measurement and policy decision are complete. M5-10 must implement and test this policy in the macOS adapter. This hosted probe does not prove survival after power loss or generalize to all Macs.
 
 References: [Apple `fcntl(2)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fcntl.2.html), [Apple `fsync(2)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html), [Apple's disk-write guidance](https://developer.apple.com/documentation/xcode/reducing-disk-writes).

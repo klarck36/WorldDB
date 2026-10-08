@@ -4765,6 +4765,7 @@ async function runSchemaSmoke(activeSessionId) {
   await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_available");
   const deprecatedType = await createSmokeEntityType(activeSessionId, "ipc_smoke_entity_deprecated");
   const current = await invokeSchemaFor(activeSessionId, { mode: "current" });
+  await recordFactsSmokeStage("schema-smoke:before-final-entity-type-deprecation");
   await manageSchema({
     command: "set_lifecycle",
     expected_base_revision: current.revision,
@@ -4772,6 +4773,7 @@ async function runSchemaSmoke(activeSessionId) {
     identity: deprecatedType.identity,
     lifecycle: "deprecated",
   });
+  await recordFactsSmokeStage("schema-smoke:after-final-entity-type-deprecation");
 }
 
 async function createSmokeEntityType(activeSessionId, symbol) {
@@ -5272,6 +5274,7 @@ async function runFactsSmoke(activeSessionId) {
   }
   await recordFactsSmokeStage("diagnostic-canary:rejected");
 
+  await recordFactsSmokeStage("before-diagnostic-renderer-paths");
   let rendererDiagnosticPathRejected = false;
   try {
     await invoke("export_diagnostics", {

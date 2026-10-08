@@ -19,8 +19,8 @@ use worlddb_ode_engine::{
     HistorySpaceTransferCommand, HistorySpaceTransferResponse, JobListView, JobShutdownView,
     MaskSelectorInput, PerspectiveCommand, PerspectiveResponse, RecoveryApplyView,
     RecoveryReportView, RecoverySalvageView, ResolutionOutcomeView, ResolutionResultView, Response,
-    SchemaCommand, SchemaDefinitionDraft, SchemaResponse, SecurityPolicyCommand,
-    SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
+    SchemaCommand, SchemaDefinitionDraft, SchemaFamily, SchemaLifecycle, SchemaResponse,
+    SecurityPolicyCommand, SecurityPolicyResponse, SecurityPolicySnapshotView, StreamPlan,
 };
 #[cfg(feature = "sidecar")]
 use worlddb_ode_engine::{MAX_STREAM_BYTES, MAX_STREAM_CHUNK_BYTES, fill_deterministic_chunk};
@@ -1513,10 +1513,14 @@ async fn export_diagnostics(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
     session_id: String,
-    request: DiagnosticExportRequestV1,
+    request: serde_json::Value,
     sessions: tauri::State<'_, HostSessionManager>,
     backend: tauri::State<'_, Backend>,
 ) -> Result<diagnostics::DiagnosticExportViewV1, IpcErrorV1> {
+    // Decode the raw request into a strict DTO before authorization, native
+    // dialogs, or filesystem access can begin.
+    let request: DiagnosticExportRequestV1 =
+        serde_json::from_value(request).map_err(|_| IpcErrorV1::new("invalid_request"))?;
     if request.protocol_version != IPC_PROTOCOL_VERSION {
         return Err(IpcErrorV1::new("unsupported_protocol"));
     }
@@ -1822,10 +1826,24 @@ fn manage_schema(
             ..
         } if symbol == "ipc_smoke_facts"
     );
+    let facts_smoke_entity_type_deprecation = matches!(
+        &request.command,
+        SchemaCommand::SetLifecycle {
+            family: SchemaFamily::EntityType,
+            lifecycle: SchemaLifecycle::Deprecated,
+            ..
+        }
+    );
     if facts_smoke_predicate {
         record_facts_smoke_diagnostic(
             window.label(),
             "facts-smoke:predicate-schema-command:entered".to_owned(),
+        )?;
+    }
+    if facts_smoke_entity_type_deprecation {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            "facts-smoke:entity-type-deprecation:entered".to_owned(),
         )?;
     }
     let result = backend.schema_with_operation_id(request.command, operation_id);
@@ -1834,7 +1852,24 @@ fn manage_schema(
             window.label(),
             format!(
                 "facts-smoke:predicate-schema-command:{}",
-                if result.is_ok() { "returned" } else { "rejected" }
+                if result.is_ok() {
+                    "returned"
+                } else {
+                    "rejected"
+                }
+            ),
+        )?;
+    }
+    if facts_smoke_entity_type_deprecation {
+        record_facts_smoke_diagnostic(
+            window.label(),
+            format!(
+                "facts-smoke:entity-type-deprecation:{}",
+                if result.is_ok() {
+                    "returned"
+                } else {
+                    "rejected"
+                }
             ),
         )?;
     }

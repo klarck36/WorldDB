@@ -22,7 +22,7 @@ A fresh repeat of the 100,000-point campaign was started during this review and 
 
 ## Platform and durability boundary
 
-This pre-gate does not complete M5-23. M4-15 (APFS measurements), M5-08 (Linux/ext4), and M5-10 (macOS/APFS) remain blocked for the later platform hosts requested by the Product Owner. No Linux/macOS evidence, hardware power-loss result, device-cache-loss result, Machine-durability claim, or production file-backend approval is granted here. The current file-storage crate does not implement StorageBackend; ProductionStorage::try_new continues to require Machine durability.
+This pre-gate does not complete M5-23. At the time of this pre-gate, M4-15 (APFS measurements), M5-08 (Linux/ext4), and M5-10 (macOS/APFS) remained open. M4-15 later completed on 8 October 2026 with APFS runner measurements and the ODE-006 policy; M5-08 and M5-10 still require their adapter evidence. No hardware power-loss result, device-cache-loss result, or production file-backend approval is granted here. The current file-storage crate does not implement StorageBackend; ProductionStorage::try_new continues to require Machine durability.
 
 ## Gate decision
 

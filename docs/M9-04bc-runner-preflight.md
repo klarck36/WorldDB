@@ -313,3 +313,38 @@ The active M9-04b/c processes were alive at 12:53 CEST. Samples were refreshed t
 | `storage_wal_payloads` | 7348 | 79,640.6 s | 88,381.3 s | 64.7 MiB | 926,477,853 B |
 
 `storage_wal_recovery_prefix` remains invalid as campaign evidence after its 20:28 CEST fixture-write failure. Its full retry remains queued on D: until these campaigns finish. C: had 367.43 GiB free and D: 215.81 GiB free. Next process and sample check: 13:10 CEST.
+## Monitoring update — 8 October 2026, 13:10 CEST
+
+The active M9-04b/c campaigns were still alive at 13:10 CEST. Their latest samples were written from 13:10:13 to 13:10:16; none has a completion manifest:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 81,019.9 s | 93,957.6 s | 45.2 MiB | 980,541,067 B |
+| `cli_migration_plan_json` | 31928 | 80,521.4 s | 35,452.7 s | 45.1 MiB | 980,541,192 B |
+| `storage_wal_payloads` | 7348 | 80,491.5 s | 89,326.8 s | 64.7 MiB | 926,478,904 B |
+
+`storage_wal_recovery_prefix` remains queued for a full retry on D: after the active runs. C: remained at 367.43 GiB free and D: at 215.81 GiB free. Next check: 13:25 CEST.
+
+## Monitoring update — 8 October 2026, 13:55 CEST
+
+All three expected M9-04b/c campaigns remain active. Samples were written at 13:55:21–13:55:23; none of the run folders contains `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 83,728.8 s | 97,097.9 s | 45.2 MiB | 980,544,393 B |
+| `cli_migration_plan_json` | 31928 | 83,229.0 s | 36,744.7 s | 45.1 MiB | 980,544,529 B |
+| `storage_wal_payloads` | 7348 | 83,198.9 s | 92,325.6 s | 64.7 MiB | 926,482,248 B |
+
+`storage_wal_recovery_prefix` remains queued for a full retry on D: after the active runs. The five resource-sample files remain near 100 KiB each; C: has 367.45 GiB free and D: 215.81 GiB free. Next check: 14:10 CEST.
+
+## Monitoring update — 8 October 2026, 14:17 CEST
+
+All three M9-04b/c campaigns were alive at 14:17 CEST. Their resource samples were refreshed between 14:16:51 and 14:16:54; none has `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 85,051.0 s | 98,642.6 s | 45.1 MiB | 980,546,026 B |
+| `cli_migration_plan_json` | 31928 | 84,551.4 s | 37,365.9 s | 45.1 MiB | 980,546,144 B |
+| `storage_wal_payloads` | 7348 | 84,520.6 s | 93,799.3 s | 64.7 MiB | 926,483,876 B |
+
+`storage_wal_recovery_prefix` remains queued for a full retry on D: after these runs complete. C: had 367.43 GiB free and D: 215.81 GiB free. Next process and sample check: 14:32 CEST.
