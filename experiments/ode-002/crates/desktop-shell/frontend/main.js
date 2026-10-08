@@ -5322,7 +5322,10 @@ async function runFactsSmoke(activeSessionId) {
   timelineCalendarProfile.value = "none";
   updateSchemaFormVisibility();
   await recordFactsSmokeStage("before-timeline-definition");
-  await publishDefinition({ propagateErrors: true });
+  await publishDefinition({
+    propagateErrors: true,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`timeline-definition:${stage}`),
+  });
   await recordFactsSmokeStage("timeline-definition-published");
   const timeline = selectedSchema?.definitions.find((item) => item.family === "timeline" && item.symbol === "ipc_smoke_facts_timeline");
   if (timeline?.lifecycle !== "active") throw new Error("the smoke Timeline was not active after publication");
@@ -6672,7 +6675,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
         await runProjectSmoke(sessionId);
         if (role === "primary") {
           operationStatus.textContent = "Schema-, Entitäts-, Perspektiven-, Rechte-, Branch- und Layerprüfung läuft …";
-          await runSchemaSmoke(sessionId);
+          try {
+            await runSchemaSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `schema-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
           try {
             await runEntitySmoke(sessionId);
           } catch (error) {

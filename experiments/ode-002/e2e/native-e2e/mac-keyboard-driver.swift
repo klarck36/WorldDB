@@ -36,6 +36,9 @@ switch CommandLine.arguments[2] {
 case "tab":
     keyCode = 48
     flags = []
+case "enter":
+    keyCode = 36
+    flags = []
 case "control-tab":
     keyCode = 48
     flags = .maskControl
@@ -56,11 +59,7 @@ for isDown in [true, false] {
         exit(5)
     }
     event.flags = flags
-    if keyCode == 98 {
-        // Control-F7 changes macOS's system-wide Full Keyboard Access mode.
-        event.post(tap: .cghidEventTap)
-    } else {
-        event.postToPid(targetProcessID)
-    }
+    // Posting to the active event stream lets AppKit, WebKit, and system shortcuts handle keys normally.
+    event.post(tap: .cghidEventTap)
     Thread.sleep(forTimeInterval: 0.05)
 }

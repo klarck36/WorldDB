@@ -125,9 +125,15 @@ function Wait-ForFiles([System.Diagnostics.Process]$Process, [string[]]$Paths) {
     }
 }
 
-function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+function Wait-ForSchemaOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
+        $smokeError = @((Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json }) | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -like 'schema-smoke:error:*'
+        } | Select-Object -Last 1)
+        if ($smokeError.Count -gt 0) {
+            throw "Schema IPC smoke failed in the renderer: $($smokeError[0].details)"
+        }
         if ((Test-Path -LiteralPath $PrimaryPath -PathType Leaf) -and (Test-Path -LiteralPath $SecondaryPath -PathType Leaf)) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
             $secondary = @(Get-Content -LiteralPath $SecondaryPath | ForEach-Object { $_ | ConvertFrom-Json })
@@ -424,7 +430,7 @@ try {
     if ($isWindowsPlatform) { $processHandle = $process.Handle }
 
     Wait-ForFiles $process @($reportPath, $primaryPath, $secondaryPath, $primaryProjectPath, $secondaryProjectPath, $primarySchemaPath, $secondarySchemaPath)
-    Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath
+    Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath $primaryFactsPath
     Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath $primaryFactsPath
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
     Wait-ForTransferOperations $process $primaryTransferPath

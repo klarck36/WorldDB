@@ -17,10 +17,23 @@ const BACKSPACE = '\uE003';
 const TAB = '\uE004';
 const ENTER = '\uE007';
 const PROJECT_NAME = 'KeyboardSuiteProject';
+let nativeMacKeyboardDriverPath = null;
 
-function sendNativeMacKey(action, appProcessId) {
-  const driverPath = join(packageRoot, 'mac-keyboard-driver.swift');
-  const result = spawnSync('swift', [driverPath, String(appProcessId), action], { encoding: 'utf8', timeout: 15000 });
+function compileNativeMacKeyboardDriver(tmpRoot) {
+  if (nativeMacKeyboardDriverPath) return nativeMacKeyboardDriverPath;
+  const sourcePath = join(packageRoot, 'mac-keyboard-driver.swift');
+  const outputPath = join(dirname(tmpRoot), 'mac-keyboard-driver');
+  const result = spawnSync('swiftc', [sourcePath, '-o', outputPath], { encoding: 'utf8', timeout: 120000 });
+  if (result.error || result.status !== 0) {
+    const reason = result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
+    throw new Error(`Could not compile the native macOS keyboard helper: ${reason}`);
+  }
+  nativeMacKeyboardDriverPath = outputPath;
+  return outputPath;
+}
+
+function sendNativeMacKey(action, appProcessId, driverPath) {
+  const result = spawnSync(driverPath, [String(appProcessId), action], { encoding: 'utf8', timeout: 15000 });
   if (result.error || result.status !== 0) {
     const reason = result.error?.message ?? result.stderr?.trim() ?? `exit ${result.status}`;
     throw new Error(`Could not send native macOS keyboard action '${action}': ${reason}`);
@@ -170,7 +183,7 @@ async function appReport(reportPath) {
   return JSON.parse(await readFile(reportPath, 'utf8'));
 }
 
-async function tabToCreateButton(browser, nameInput, appProcessId) {
+async function tabToCreateButton(browser, nameInput, appProcessId, driverPath) {
   const focusedElementId = () => browser.execute(() => document.activeElement?.id ?? '');
   const waitForCreateButtonFocus = timeout => browser.waitUntil(
     async () => (await focusedElementId()) === 'create-project',
@@ -181,7 +194,7 @@ async function tabToCreateButton(browser, nameInput, appProcessId) {
   );
 
   await nameInput.click();
-  if (process.platform === 'darwin') sendNativeMacKey('tab', appProcessId);
+  if (process.platform === 'darwin') sendNativeMacKey('tab', appProcessId, driverPath);
   else await browser.keys(TAB);
   try {
     await waitForCreateButtonFocus(2000);
@@ -198,8 +211,8 @@ async function tabToCreateButton(browser, nameInput, appProcessId) {
     // use Quartz events so WebKit and the system can apply their native focus rules.
     for (const action of ['control-tab', 'control-f7', 'fn-control-f7']) {
       await nameInput.click();
-      sendNativeMacKey(action, appProcessId);
-      if (action !== 'control-tab') sendNativeMacKey('tab', appProcessId);
+      sendNativeMacKey(action, appProcessId, driverPath);
+      if (action !== 'control-tab') sendNativeMacKey('tab', appProcessId, driverPath);
       try {
         await waitForCreateButtonFocus(2500);
         return { focusedId: await focusedElementId(), navigationMode: action };
@@ -257,6 +270,7 @@ export async function runKeyboardDriver({
 }) {
   await mkdir(caseRoot, { recursive: false });
   await mkdir(tmpRoot, { recursive: true });
+  const macKeyboardDriverPath = process.platform === 'darwin' ? compileNativeMacKeyboardDriver(tmpRoot) : null;
   const isolatedHome = join(tmpRoot, 'home');
   await mkdir(isolatedHome, { recursive: true });
   const macKeyboard = await enableMacFullKeyboardAccess([process.env.HOME, isolatedHome]);
@@ -352,10 +366,11 @@ export async function runKeyboardDriver({
       throw new Error(`Native keyboard input mismatch (cleared=${JSON.stringify(clearedValue)}, entered=${JSON.stringify(enteredValue)}).`);
     }
 
-    const keyboardTab = await tabToCreateButton(browser, nameInput, child.pid);
+    const keyboardTab = await tabToCreateButton(browser, nameInput, child.pid, macKeyboardDriverPath);
     let enterDispatchError = null;
     try {
-      await browser.keys(ENTER);
+      if (process.platform === 'darwin') sendNativeMacKey('enter', child.pid, macKeyboardDriverPath);
+      else await browser.keys(ENTER);
     } catch (error) {
       if (!crashDuringCommit) throw error;
       enterDispatchError = error instanceof Error ? error.message : String(error);
