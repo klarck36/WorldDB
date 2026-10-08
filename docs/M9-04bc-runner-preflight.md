@@ -1,6 +1,6 @@
 # M9-04b/c – Import and recovery runner preflight
 
-**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE
+**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS INCOMPLETE; NO RUNS ACTIVE
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -368,3 +368,15 @@ All three active M9-04b/c campaigns remained alive. Samples were refreshed throu
 `cli_import_mapping` completed its 24-hour campaign. Its `fuzzer-report.json` records 86,400.000 s, 833,258,174 rounds, 104,704,529 accepted inputs, 728,553,645 rejected inputs, four corpus inputs, and no crashes; `run.stdout.log` reports the test as `ok`. `cli_migration_plan_json` remains active; its latest sample at 14:40:32 records 85,937.5 s elapsed, 37,992.8 s CPU, 45.1 MiB RSS, and 980,547,847 B output, with no report yet.
 
 `storage_wal_payloads` also remains active; its latest sample at 14:40:27 records 85,905.0 s elapsed, 95,322.5 s CPU, 64.7 MiB RSS, and 926,485,583 B output, with no report yet. `storage_wal_recovery_prefix` remains queued for a full retry on D: after current campaigns finish. C: had 366.34 GiB free and D: 215.81 GiB free. Next process and sample check: 14:50 CEST.
+
+## Follow-up — 8 October 2026, 21:44 CEST
+
+`cli_import_mapping`, `cli_migration_plan_json`, and `storage_wal_payloads`
+each recorded an 86,400-second report with zero crashes, but each manifest is
+`TIMEOUT`; none counts as a passing campaign. `storage_wal_recovery_prefix`
+stopped during fixture creation with OS error 112 (not enough space), leaving
+an incomplete run rather than a product crash. No M9-04b/c process is active.
+These outcomes supersede the 14:40 monitoring snapshot above. The runner fixes
+now serialize Rust campaigns and clean up each campaign's verified build cache
+after report finalization; a retry still needs an explicit output volume and
+adequate free space.

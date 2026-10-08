@@ -67,6 +67,12 @@ class FuzzTargetInventoryTests(unittest.TestCase):
         profile["campaign_duration_seconds"] = "86399"
         self.assert_tables_rejected(tables, "each campaign must request 24 hours")
 
+    def test_campaign_wall_limit_includes_shutdown_grace(self) -> None:
+        tables = copy.deepcopy(self.load_tables())
+        profile = next(row for row in tables[3] if row["profile_id"] == "small_text")
+        profile["job_wall_seconds"] = "86400"
+        self.assert_tables_rejected(tables, "10-minute campaign shutdown/reporting grace")
+
     def test_import_targets_cannot_be_routed_to_the_decoder_followup(self) -> None:
         tables = copy.deepcopy(self.load_tables())
         target = next(row for row in tables[0] if row["target_id"] == "storage_sharing_export")

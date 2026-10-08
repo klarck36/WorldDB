@@ -1,6 +1,6 @@
 # M9-04a – Rust parser runner preflight
 
-**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS ACTIVE; ONE TIMEOUT NOT REPRODUCED
+**Status:** PREFLIGHT COMPLETE; LONG CAMPAIGNS INCOMPLETE; NO RUNS ACTIVE
 **Date:** 7 October 2026
 **Platform:** Windows
 
@@ -349,3 +349,12 @@ C: had 366.34 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains
 `engine_ipc_request` completed its 24-hour campaign. Its `fuzzer-report.json` records 86,400.000 s, 798,789,612 rounds, 205,597,273 accepted inputs, 593,192,339 rejected inputs, and no crashes; `run.stdout.log` reports the test as `ok`. `typescript.json_envelope` remains active; the latest sample at 14:40:16 records 86,034.7 s elapsed, 84,799.0 s CPU, 199.1 MiB RSS, and 97,421 B output, with no report yet.
 
 C: had 366.34 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains queued. Next process and sample check: 14:50 CEST.
+
+## Follow-up — 8 October 2026, 21:44 CEST
+
+`engine_ipc_request` produced a 24-hour report with 798,789,612 rounds and no
+crashes, but its manifest is `TIMEOUT`, so it is not a passing campaign.
+`typescript.json_envelope` completed as `PASS_LOCAL` with 20,549,633 rounds and
+no crashes. The `cli_arguments` retry failed after 1,517.037 seconds when a
+mutation exceeded the 2-second input timeout. No M9-04a process is active.
+These results supersede the 14:40 monitoring snapshot above.

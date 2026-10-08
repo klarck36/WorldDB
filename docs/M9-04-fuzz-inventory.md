@@ -1,6 +1,6 @@
 # M9-04 – Long-running fuzz target inventory
 
-**Status:** DONE
+**Status:** INVENTORY COMPLETE; CAMPAIGNS INCOMPLETE
 **Review:** 7 October 2026, Windows
 
 ## Inventory
@@ -75,7 +75,7 @@ and [M9-04b/c runner preflight](M9-04bc-runner-preflight.md).
 
 - `python -B tools/check_fuzz_targets.py`: 92 decoder targets and 54 additional
   parser targets accepted.
-- `python -B tools/test_fuzz_targets.py`: 9 tests passed, including missing
+- `python -B tools/test_fuzz_targets.py`: 10 tests passed, including missing
   target, duplicate target, malformed/oversized seed, shortened campaign, and
   wrong follow-up mutations.
 - `cargo test --locked -p worlddb-core --test decoder_fuzz`: inventory and
@@ -112,3 +112,23 @@ The M9-04 full-verify failure above is historical: it used the unchanged
 conservative fingerprint rule is now satisfied by the separate immutable
 `1.0.0-rc.2` snapshot; the current public-contract check and its 12
 classification tests pass. The macOS M9-06 verify still needs a clean rerun.
+
+## Follow-up — 8 October 2026, 21:44 CEST
+
+The long-run campaigns did not close as a clean pass set. `typescript.json_envelope`
+is `PASS_LOCAL` (20,549,633 rounds, no crashes). The Rust reports for
+`cli_import_mapping`, `cli_migration_plan_json`, `engine_ipc_request`, and
+`storage_wal_payloads` recorded 86,400 seconds and zero crashes, but their
+manifests are `TIMEOUT`; they do not count as PASS. The second
+`cli_arguments` attempt failed after 1,517 seconds on a 2-second input timeout.
+`storage_wal_recovery_prefix` stopped on OS error 112 while writing a fixture,
+so it is incomplete campaign evidence, not a product crash. No fuzz process is
+currently active.
+
+The runner now serializes long Rust campaigns and removes only its own verified
+build cache after report finalization. The profiles include a ten-minute
+shutdown/reporting grace. Python runner checks were previously run with 10
+passing tests. No new long campaign or local Cargo build was started for this
+update. The accumulated fuzz build caches reached about 9.45 GiB; the user had
+to free system storage afterward. These campaigns must remain sequential and
+must use an explicitly selected output volume with adequate free space.

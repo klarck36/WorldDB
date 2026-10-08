@@ -347,6 +347,17 @@ $crashCorpusDirectory = Join-Path $runDirectory 'crash-corpus'
 New-Item -ItemType Directory -Force -Path $coverageDirectory | Out-Null
 New-Item -ItemType Directory -Force -Path $crashCorpusDirectory | Out-Null
 [System.IO.File]::WriteAllText($samplesPath, "elapsed_seconds`tcpu_seconds`ttree_rss_bytes`trun_directory_bytes`n", [System.Text.UTF8Encoding]::new($false))
+$campaignMutex = [System.Threading.Mutex]::new($false, 'Local\WorldDB-LongFuzzCampaign')
+$ownsCampaignMutex = $false
+try {
+    $ownsCampaignMutex = $campaignMutex.WaitOne(0)
+} catch [System.Threading.AbandonedMutexException] {
+    $ownsCampaignMutex = $true
+}
+if (-not $ownsCampaignMutex) {
+    $campaignMutex.Dispose()
+    throw 'Another local long fuzz campaign is active; this campaign was not started.'
+}
 
 $result = 'BUILD_FAILED'
 $exitCode = $null
@@ -416,6 +427,8 @@ try {
         $limitExceeded = $false
         while (-not $run.process.HasExited) {
             Start-Sleep -Seconds 5
+            $run.process.Refresh()
+            if ($run.process.HasExited) { break }
             $stats = Get-ProcessTreeStats $run.process.Id
             $elapsed = ([DateTimeOffset]::UtcNow - $runStart).TotalSeconds
             $directoryBytes = Get-DirectoryBytes $runDirectory
@@ -498,9 +511,39 @@ try {
         $crashCorpusErrorPath = Join-Path $runDirectory 'crash-corpus-error.txt'
         [System.IO.File]::WriteAllText($crashCorpusErrorPath, "$($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
     }
+    $buildCachePath = Join-Path $runDirectory 'cargo-target'
+    if (Test-Path -LiteralPath $buildCachePath -PathType Container) {
+        try {
+            $fullRunDirectory = [System.IO.Path]::GetFullPath($runDirectory)
+            $fullBuildCachePath = [System.IO.Path]::GetFullPath($buildCachePath)
+            $runDirectoryPrefix = $fullRunDirectory + [System.IO.Path]::DirectorySeparatorChar
+            if (-not $fullBuildCachePath.StartsWith($runDirectoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'The Cargo build-cache path is outside the run directory'
+            }
+            $buildCacheItem = Get-Item -LiteralPath $fullBuildCachePath
+            if ($buildCacheItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                throw 'The Cargo build-cache path is a reparse point'
+            }
+            $buildCacheBytes = Get-DirectoryBytes $fullBuildCachePath
+            Remove-Item -LiteralPath $fullBuildCachePath -Recurse -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $fullBuildCachePath) {
+                throw 'The Cargo build cache remained after cleanup'
+            }
+            $buildCacheCleanupPath = Join-Path $runDirectory 'build-cache-cleanup.txt'
+            [System.IO.File]::WriteAllText($buildCacheCleanupPath, "removed_bytes=$buildCacheBytes`n", [System.Text.UTF8Encoding]::new($false))
+        } catch {
+            $result = 'FAIL'
+            $manifest.result = 'FAIL'
+            $buildCacheErrorPath = Join-Path $runDirectory 'build-cache-cleanup-error.txt'
+            [System.IO.File]::WriteAllText($buildCacheErrorPath, "$($_.Exception.Message)`n", [System.Text.UTF8Encoding]::new($false))
+        }
+    }
     if ($null -ne $exitCode) { $manifest.exit_code = $exitCode }
     $manifest.result = $result
     if (Test-Path -LiteralPath $manifestPath) { Write-Manifest $manifest $manifestPath }
+    if ($ownsCampaignMutex) {
+        try { $campaignMutex.ReleaseMutex() } finally { $campaignMutex.Dispose() }
+    }
 }
 
 Write-Output "FUZZ RUN $result : $runId"

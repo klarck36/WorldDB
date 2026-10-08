@@ -216,8 +216,10 @@ def _validate_resource_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, s
                 raise FuzzInventoryError(f"{profile_id}: {field} must be positive")
         if int(row["campaign_duration_seconds"]) != 86_400:
             raise FuzzInventoryError(f"{profile_id}: each campaign must request 24 hours")
-        if int(row["job_wall_seconds"]) < int(row["campaign_duration_seconds"]):
-            raise FuzzInventoryError(f"{profile_id}: wall limit is shorter than campaign duration")
+        if int(row["job_wall_seconds"]) < int(row["campaign_duration_seconds"]) + 600:
+            raise FuzzInventoryError(
+                f"{profile_id}: wall limit must include a 10-minute campaign shutdown/reporting grace"
+            )
         if int(row["workers"]) != 1:
             raise FuzzInventoryError(f"{profile_id}: independent jobs must use one worker")
     return resources
