@@ -214,19 +214,30 @@ function Wait-ForBranchLayerOperations([System.Diagnostics.Process]$Process, [st
     throw "Timed out waiting for complete branch/layer IPC workflows. Primary: $primaryEvents Secondary: $secondaryEvents"
 }
 
-function Wait-ForTransferOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+function Wait-ForTransferOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$FactsPath) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
     while ([DateTime]::UtcNow -lt $deadline) {
+        $factsEvents = @(Get-Content -LiteralPath $FactsPath -ErrorAction SilentlyContinue | ForEach-Object { $_ | ConvertFrom-Json })
+        $smokeError = @($factsEvents | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -like 'branch-layer-smoke:error:*'
+        } | Select-Object -Last 1)
+        $branchLayerSmokeComplete = @($factsEvents | Where-Object {
+            $_.operation -eq 'diagnostic' -and $_.details -eq 'facts-smoke:branch-layer-smoke:complete'
+        }).Count -ge 1
+        if ($smokeError.Count -gt 0) {
+            throw "Branch/layer IPC smoke failed in the renderer: $($smokeError[0].details)"
+        }
         if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) {
             $primary = @(Get-Content -LiteralPath $PrimaryPath | ForEach-Object { $_ | ConvertFrom-Json })
-            if (@($primary | Where-Object { $_.operation -eq 'list' -and $_.succeeded }).Count -ge 1) { return }
+            if (@($primary | Where-Object { $_.operation -eq 'list' -and $_.succeeded }).Count -ge 1 -and $branchLayerSmokeComplete) { return }
         }
         $Process.Refresh()
         if ($Process.HasExited) { break }
         Start-Sleep -Milliseconds 100
     }
     $primaryEvents = if (Test-Path -LiteralPath $PrimaryPath -PathType Leaf) { Get-Content -LiteralPath $PrimaryPath -Raw } else { '<missing>' }
-    throw "Timed out waiting for the authenticated HistorySpace transfer catalog call. Primary: $primaryEvents"
+    $lastStages = @($factsEvents | Where-Object { $_.operation -eq 'diagnostic' } | Select-Object -Last 20 | ForEach-Object { $_.details }) -join ' | '
+    throw "Timed out waiting for the complete branch/layer and HistorySpace transfer workflow. Primary: $primaryEvents Stages: $lastStages"
 }
 
 function Wait-ForPerspectiveOperations([System.Diagnostics.Process]$Process, [string]$PrimaryPath, [string]$SecondaryPath, [string]$FactsPath) {
@@ -445,7 +456,7 @@ try {
     Wait-ForSchemaOperations $process $primarySchemaPath $secondarySchemaPath $primaryFactsPath
     Wait-ForEntityOperations $process $primaryEntityPath $secondaryEntityPath $primaryFactsPath
     Wait-ForBranchLayerOperations $process $primaryBranchLayerPath $secondaryBranchLayerPath
-    Wait-ForTransferOperations $process $primaryTransferPath
+    Wait-ForTransferOperations $process $primaryTransferPath $primaryFactsPath
     Wait-ForPerspectiveOperations $process $primaryPerspectivePath $secondaryPerspectivePath $primaryFactsPath
     Wait-ForSecurityPolicyOperations $process $primarySecurityPolicyPath
     Wait-ForFactsOperations $process $primaryFactsPath

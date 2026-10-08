@@ -4968,6 +4968,7 @@ async function runBranchLayerSmoke(activeSessionId) {
     || !Number.isSafeInteger(transferCatalog.current_revision)) {
     throw new Error("HistorySpace transfer catalog did not return a pinned typed inventory");
   }
+  await recordFactsSmokeStage("branch-layer-smoke:complete");
 }
 
 async function runPerspectiveSmoke(activeSessionId) {
@@ -6737,7 +6738,14 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
             }).catch(() => {});
             throw error;
           }
-          await runBranchLayerSmoke(sessionId);
+          try {
+            await runBranchLayerSmoke(sessionId);
+          } catch (error) {
+            await invoke("facts_smoke_diagnostic", {
+              details: `branch-layer-smoke:error:${String(error?.stack ?? error)}`,
+            }).catch(() => {});
+            throw error;
+          }
           try {
             await runPerspectiveSmoke(sessionId);
           } catch (error) {
