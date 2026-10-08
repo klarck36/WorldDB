@@ -6490,10 +6490,12 @@ async function publishDefinition({ propagateErrors = false, diagnosticStage = nu
       await refreshSchema(sessionId);
       await diagnosticStage?.("after-refresh");
     } else {
+      const mergedDefinitions = new Map(latest.definitions.map((definition) => [definition.identity, definition]));
+      for (const definition of published.definitions ?? []) mergedDefinitions.set(definition.identity, definition);
       selectedSchema = {
         kind: "snapshot",
         revision: published.revision,
-        definitions: published.definitions,
+        definitions: [...mergedDefinitions.values()],
       };
       currentSchema = selectedSchema;
       renderSchema(selectedSchema);

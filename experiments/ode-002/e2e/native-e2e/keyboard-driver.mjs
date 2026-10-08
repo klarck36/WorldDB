@@ -208,6 +208,16 @@ async function tabToCreateButton(browser, nameInput, appProcessId, driverPath) {
     }));
     throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
   }
+  const focusRequested = await browser.executeAsync(done => {
+    const invoke = window.__TAURI__?.core?.invoke;
+    if (!invoke) {
+      done(false);
+      return;
+    }
+    invoke('focus_native_window').then(() => done(true), () => done(false));
+  });
+  if (!focusRequested) throw new Error('The native app did not accept the window-focus request.');
+  await nameInput.click();
   sendNativeMacKey('tab', appProcessId, driverPath);
   try {
     await waitForCreateButtonFocus(2000);

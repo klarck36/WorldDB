@@ -219,6 +219,7 @@ fn run() -> Result<(), String> {
             manage_history_space_transfer,
             manage_facts,
             facts_smoke_diagnostic,
+            focus_native_window,
             diagnostic_smoke_canary,
             manage_perspectives,
             manage_security_policy
@@ -1831,6 +1832,8 @@ async fn manage_schema(
             "facts-smoke:schema-ipc:authorized".to_owned(),
         )?;
     }
+    let compact_create_response =
+        matches!(&request.command, &SchemaCommand::Create { .. });
     let operation_id = parse_client_operation_id(request.operation_id.as_deref())?;
     let operation = schema_smoke_operation(&request.command);
     let facts_smoke_predicate = matches!(
@@ -1903,13 +1906,23 @@ async fn manage_schema(
         )?;
     }
     match result {
-        Ok(result) => {
+        Ok(mut result) => {
             record_schema_smoke(window.label(), operation, true, Some(&result), &backend)?;
             if trace_facts_smoke_schema {
                 record_facts_smoke_diagnostic(
                     window.label(),
                     "facts-smoke:schema-ipc:recorded".to_owned(),
                 )?;
+            }
+            if compact_create_response {
+                if let SchemaResponse::Published(publication) = &mut result {
+                    // The renderer already has the preceding snapshot. Return
+                    // only the new definition instead of the entire catalogue.
+                    let revision = publication.revision;
+                    publication
+                        .definitions
+                        .retain(|definition| definition.created_revision == revision);
+                }
             }
             Ok(SchemaResponseV1 {
                 protocol_version: IPC_PROTOCOL_VERSION,
@@ -2148,6 +2161,13 @@ fn facts_smoke_diagnostic(window: tauri::WebviewWindow, details: String) -> Resu
         });
     }
     Ok(())
+}
+
+#[tauri::command]
+fn focus_native_window(window: tauri::WebviewWindow) -> Result<(), IpcErrorV1> {
+    window
+        .set_focus()
+        .map_err(|_| IpcErrorV1::new("window_focus_failed"))
 }
 
 fn record_facts_smoke_diagnostic(window_label: &str, details: String) -> Result<(), IpcErrorV1> {
