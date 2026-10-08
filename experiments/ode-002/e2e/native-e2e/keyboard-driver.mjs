@@ -186,6 +186,14 @@ async function tabToCreateButton(browser, nameInput) {
       }));
       throw new Error(`Tab did not focus Neues Projekt; active element was ${JSON.stringify(activeElement)}.`);
     }
+    // macOS documents Control-Tab as moving to the next control from a text field.
+    try {
+      await browser.keys([CONTROL, TAB]);
+      await waitForCreateButtonFocus(2000);
+      return { focusedId: await focusedElementId(), navigationMode: 'control-tab' };
+    } catch {
+      // Continue with the system-wide Tab focus toggle below.
+    }
     // Control-F7 toggles macOS keyboard focus between text-only and all
     // controls. AppKit's Full Keyboard Access property reports a separate
     // accessibility setting and cannot be used to verify this shortcut.
@@ -204,7 +212,7 @@ async function tabToCreateButton(browser, nameInput) {
       id: document.activeElement?.id ?? '',
       tag: document.activeElement?.tagName ?? '',
     }));
-    throw new Error(`Tab did not focus Neues Projekt after checking both Control-F7 modes; active element was ${JSON.stringify(activeElement)}.`);
+    throw new Error(`Tab and Control-Tab did not focus Neues Projekt after checking both Control-F7 modes; active element was ${JSON.stringify(activeElement)}.`);
   }
 }
 

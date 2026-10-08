@@ -462,6 +462,7 @@ let factBusy = false;
 let diagnosticExportBusy = false;
 let factsSmokeActive = false;
 let startupSmokeModeEnabled = false;
+let startupSmokeSecondaryProjectRefreshStarted = false;
 let schemaCurrentMode = true;
 let entityCurrentMode = true;
 let selectedSchema = null;
@@ -6610,7 +6611,17 @@ if (!invoke || !["primary", "secondary"].includes(role)) {
       const listen = window.__TAURI__?.event?.listen;
       if (listen) {
         await listen("project-state-changed", async () => {
-          if (factBusy || startupSmokeModeEnabled) return;
+          if (factBusy) return;
+          if (startupSmokeModeEnabled) {
+            if (role !== "secondary" || startupSmokeSecondaryProjectRefreshStarted) return;
+            startupSmokeSecondaryProjectRefreshStarted = true;
+            try {
+              await refreshProject(sessionId);
+            } catch {
+              return;
+            }
+            return;
+          }
           try {
             await refreshProject(sessionId);
           } catch {
