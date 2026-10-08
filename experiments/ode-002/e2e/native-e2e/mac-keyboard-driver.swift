@@ -26,17 +26,8 @@ guard let targetApplication = NSRunningApplication(processIdentifier: targetProc
 }
 if !targetApplication.isActive {
     _ = targetApplication.activate(options: [.activateAllWindows])
-    let activationDeadline = Date().addingTimeInterval(2)
-    while !targetApplication.isActive && Date() < activationDeadline {
-        _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
-    }
+    _ = RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.1))
 }
-guard targetApplication.isActive else {
-    let frontmostProcessID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
-    fputs("The target desktop application is not frontmost (target_pid=\(targetProcessID), frontmost_pid=\(frontmostProcessID)).\n", stderr)
-    exit(6)
-}
-Thread.sleep(forTimeInterval: 0.05)
 
 let keyCode: CGKeyCode
 let flags: CGEventFlags
@@ -67,7 +58,12 @@ for isDown in [true, false] {
         exit(5)
     }
     event.flags = flags
-    // Posting to the active event stream lets AppKit, WebKit, and system shortcuts handle keys normally.
-    event.post(tap: .cghidEventTap)
+    if keyCode == 98 {
+        // Control-F7 is a system shortcut and must be posted to the global event stream.
+        event.post(tap: .cghidEventTap)
+    } else {
+        // Hosted runners may not grant the app foreground status; deliver ordinary keys to its PID.
+        event.postToPid(targetProcessID)
+    }
     Thread.sleep(forTimeInterval: 0.05)
 }

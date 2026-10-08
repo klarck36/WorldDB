@@ -5345,16 +5345,23 @@ async function runFactsSmoke(activeSessionId) {
   entityViewMode.value = "current";
   entityCurrentMode = true;
   await refreshEntities(activeSessionId);
-  const subjectType = selectedEntities.entity_types.find((item) => item.symbol === "ipc_smoke_entity_available" && item.lifecycle === "active");
+  const entitySnapshot = selectedEntities;
+  const subjectType = entitySnapshot.entity_types.find((item) => item.symbol === "ipc_smoke_entity_available" && item.lifecycle === "active");
   if (!subjectType) throw new Error("the smoke EntityType was not active");
   entityTypeSelect.value = subjectType.entity_type_id;
   entityAcceptDeprecated.checked = false;
   updateEntityTypeSelectionState();
   await recordFactsSmokeStage("facts-smoke:before-subject-entity");
-  const createdEntity = await createEntity({ propagateErrors: true });
+  const createdEntity = await manageEntities({
+    command: "create",
+    expected_base_revision: entitySnapshot.revision,
+    entity_type_id: subjectType.entity_type_id,
+    accept_deprecated_type: false,
+  }, activeSessionId);
   await recordFactsSmokeStage("facts-smoke:subject-entity-published");
   if (createdEntity?.kind !== "published" || !createdEntity.entity_id) throw new Error("the smoke subject Entity was not persisted");
 
+  await recordFactsSmokeStage("before-event-kind-definition");
   schemaFamily.value = "event_kind";
   schemaSymbol.value = "ipc_smoke_event";
   stagedEventRoles = [{
@@ -5373,7 +5380,12 @@ async function runFactsSmoke(activeSessionId) {
   }];
   eventTimeForm.value = "open_span_allowed";
   updateSchemaFormVisibility();
-  await publishDefinition();
+  await publishDefinition({
+    propagateErrors: true,
+    refreshAfterPublish: false,
+    diagnosticStage: (stage) => recordFactsSmokeStage(`event-kind-definition:${stage}`),
+  });
+  await recordFactsSmokeStage("event-kind-definition-published");
   const eventKind = selectedSchema?.definitions.find((item) => item.family === "event_kind" && item.symbol === "ipc_smoke_event");
   const eventRole = eventKind?.details.roles?.[0];
   const eventAttribute = eventKind?.details.attributes?.[0];
