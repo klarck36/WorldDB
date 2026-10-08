@@ -348,3 +348,23 @@ All three M9-04b/c campaigns were alive at 14:17 CEST. Their resource samples we
 | `storage_wal_payloads` | 7348 | 84,520.6 s | 93,799.3 s | 64.7 MiB | 926,483,876 B |
 
 `storage_wal_recovery_prefix` remains queued for a full retry on D: after these runs complete. C: had 367.43 GiB free and D: 215.81 GiB free. Next process and sample check: 14:32 CEST.
+
+
+## Monitoring update — 8 October 2026, 14:36 CEST
+
+All three active M9-04b/c campaigns remained alive. Samples were refreshed through 14:35:44–14:35:49; none has `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `cli_import_mapping` | 27628 | 86,153.9 s | 99,906.2 s | 45.1 MiB | 980,547,381 B |
+| `cli_migration_plan_json` | 31928 | 85,654.6 s | 37,862.0 s | 45.1 MiB | 980,547,496 B |
+| `storage_wal_payloads` | 7348 | 85,622.4 s | 95,006.6 s | 64.7 MiB | 926,485,235 B |
+
+`storage_wal_recovery_prefix` remains queued for a full retry on D: after these runs finish. C: had 366.34 GiB free and D: 215.81 GiB free. Next process and sample check: 14:50 CEST.
+
+
+## Monitoring update — 8 October 2026, 14:40 CEST
+
+`cli_import_mapping` completed its 24-hour campaign. Its `fuzzer-report.json` records 86,400.000 s, 833,258,174 rounds, 104,704,529 accepted inputs, 728,553,645 rejected inputs, four corpus inputs, and no crashes; `run.stdout.log` reports the test as `ok`. `cli_migration_plan_json` remains active; its latest sample at 14:40:32 records 85,937.5 s elapsed, 37,992.8 s CPU, 45.1 MiB RSS, and 980,547,847 B output, with no report yet.
+
+`storage_wal_payloads` also remains active; its latest sample at 14:40:27 records 85,905.0 s elapsed, 95,322.5 s CPU, 64.7 MiB RSS, and 926,485,583 B output, with no report yet. `storage_wal_recovery_prefix` remains queued for a full retry on D: after current campaigns finish. C: had 366.34 GiB free and D: 215.81 GiB free. Next process and sample check: 14:50 CEST.

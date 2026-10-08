@@ -42,4 +42,8 @@ On the macOS 26.6.2 arm64 hosted APFS runner, all 1,000 `fsync` and all 1,000 `F
 
 Decision for ODE-006: use the stronger full-sync operation for `Durability::Machine` on APFS when supported; reject writable Machine-durability mode if that guarantee cannot be established. M4-15's measurement and policy decision are complete. M5-10 must implement and test this policy in the macOS adapter. This hosted probe does not prove survival after power loss or generalize to all Macs.
 
+## Repeat on the corrected PR head
+
+Run `37776375333` on PR head `ab1bdf2` also passed, including the storage sync-failure tests. Artifact `11550735391` is 13,375 bytes with SHA-256 `873b07754518a8981187bdde36549042feb4200b56d2977b67a5844c4fd72fa3`. It again identifies macOS 26.6.2 build 25G83, arm64 `VirtualMac2,1`, and APFS. All 1,000 `fsync` and 1,000 `F_FULLFSYNC` calls succeeded; median/p95/p99 were 0.067/0.195/0.337 ms for `fsync` and 0.615/1.188/1.857 ms for `F_FULLFSYNC`. Both negative controls returned `-1`/`EBADF`. The repeat confirms the earlier APFS measurement on this hosted runner; the ODE-006/M5-10 boundary remains unchanged.
+
 References: [Apple `fcntl(2)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fcntl.2.html), [Apple `fsync(2)`](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html), [Apple's disk-write guidance](https://developer.apple.com/documentation/xcode/reducing-disk-writes).

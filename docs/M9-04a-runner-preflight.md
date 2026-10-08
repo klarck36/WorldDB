@@ -330,3 +330,22 @@ Both M9-04a campaigns were still alive at 14:17 CEST. Their resource samples wer
 | `typescript.json_envelope` | 18840 | 84,650.4 s | 83,441.0 s | 220.6 MiB | 95,843 B |
 
 C: had 367.43 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains queued pending completion and evidence collection. Next process and sample check: 14:32 CEST.
+
+
+## Monitoring update — 8 October 2026, 14:36 CEST
+
+Both M9-04a campaigns remained active. Samples were refreshed through 14:35:58 and 14:36:05; neither run has `completion.json`:
+
+| Run | PID | Elapsed | CPU | RSS | Run output |
+|---|---:|---:|---:|---:|---:|
+| `engine_ipc_request` | 30620 | 86,150.1 s | 98,767.9 s | 63.3 MiB | 1,210,793,216 B |
+| `typescript.json_envelope` | 18840 | 85,783.6 s | 84,551.2 s | 241.9 MiB | 97,133 B |
+
+C: had 366.34 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains queued until current runs finish. Next process and sample check: 14:50 CEST.
+
+
+## Monitoring update — 8 October 2026, 14:40 CEST
+
+`engine_ipc_request` completed its 24-hour campaign. Its `fuzzer-report.json` records 86,400.000 s, 798,789,612 rounds, 205,597,273 accepted inputs, 593,192,339 rejected inputs, and no crashes; `run.stdout.log` reports the test as `ok`. `typescript.json_envelope` remains active; the latest sample at 14:40:16 records 86,034.7 s elapsed, 84,799.0 s CPU, 199.1 MiB RSS, and 97,421 B output, with no report yet.
+
+C: had 366.34 GiB free and D: 215.81 GiB free. The `cli_arguments` retry remains queued. Next process and sample check: 14:50 CEST.

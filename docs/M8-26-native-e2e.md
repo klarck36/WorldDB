@@ -75,6 +75,8 @@ Sidecar erreicht die Faktenprüfung und zeichnet `facts-smoke:diagnostic-canary:
 
 Die verschobene Linux-Ausführung ist hier kein Auslöser: M8-26c hängt als wiederverwendbarer Job mit `needs: native-macos-e2e` hinter dem APFS-Gate. Linux startet erst, wenn macOS besteht. Der aktuelle Fehler entsteht bereits innerhalb des Mac-Laufs.
 
+Die gezielten Korrekturen und der abhängige Linux-Workflow sind mit Commit `ab1bdf2` auf PR #1. APFS-Rerun `37776375601` startete am 8. Oktober um 12:22 UTC; Checkout ist bestanden und Node-Setup läuft. Linux/ext4 bleibt bis zum Ergebnis dieses APFS-Gates ausstehend.
+
 ## Linux/ext4-Runnerentwurf für M8-26c
 
 Der lokale Arbeitsentwurf `experiments/ode-002/scripts/run-native-e2e-linux.mjs` übernimmt den gemeinsamen W3C-WebDriver-Keyboard-/Recovery-Treiber und die IPC-/Writer-Lock-Smokes für Linux. Vor jedem Lauf prüft er Linux als Host und ext4 als Dateisystem des Evidenzpfads. `.github/workflows/m8-26c-native-linux-e2e.yml` nutzt einen festgelegten Ubuntu-24.04-Hosted-Runner, installiert Tauri/WebKitGTK sowie Xvfb- und DBus-Laufzeitabhängigkeiten, bindet Cargo-Ziele und Belege an den Runner-Temp-Pfad und archiviert das Manifest. Der aufrufende M8-26b-Workflow startet M8-26c jetzt als wiederverwendbaren Job mit `needs: native-macos`; Linux beginnt also nur nach erfolgreichem APFS-Lauf. Der Workflow erzwingt ext4 für Checkout und Runner-Temp. Katalog, neun Mutationsprüfungen, Node-Syntax und beide Workflow-YAML-Dateien bestanden lokal vor der Workflow-Gate-Ergänzung. M8-26c bleibt READY; ein echter Linux/ext4-Profillauf steht noch aus.

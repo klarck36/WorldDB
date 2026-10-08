@@ -11,8 +11,11 @@ on:
       - "experiments/ode-002/**"
       - "contracts/**"
       - "docs/contracts/**"
+      - "docs/source/**"
       - "tools/**"
       - "policy/**"
+      - "WorldDB_1.0_*"
+      - "WorldDB_vNext_Lossless_Consolidation_Audit.zip"
       - ".github/workflows/**"
   workflow_dispatch:
 
